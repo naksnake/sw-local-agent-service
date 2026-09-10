@@ -1,0 +1,1299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SW Local Agent Service — UI demo</title>
+<style>
+:root{
+  --bench:#E9ECEF; --panel:#FFFFFF; --ink:#171B21; --ink-2:#5B6470; --ink-3:#8A929D;
+  --rule:#D5DAE0; --rule-2:#EDF0F3;
+  --accent:#2B4C7E; --accent-ink:#FFFFFF; --accent-soft:#E3EAF5; --accent-hover:#234070;
+  --pass:#1E8E5A; --pass-soft:#E4F3EB;
+  --warn:#B8760A; --warn-soft:#FBF1DD;
+  --fail:#B3261E; --fail-soft:#FBE6E4;
+  --console:#14181D; --console-ink:#C9D1D9; --console-dim:#6B7684;
+  --sans:"IBM Plex Sans","Source Sans 3","Segoe UI",system-ui,-apple-system,sans-serif;
+  --mono:"IBM Plex Mono","SF Mono",Menlo,Consolas,monospace;
+  --r-panel:6px; --r-ctl:4px; --r-led:2px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bench);color:var(--ink);font:13.5px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:var(--accent)}
+button{font:inherit;color:inherit}
+h1,h2,h3{margin:0;font-weight:600;letter-spacing:-0.01em}
+h1{font-size:20px} h2{font-size:15px} h3{font-size:16px}
+p{margin:0}
+.muted{color:var(--ink-2)} .faint{color:var(--ink-3)}
+.mono{font-family:var(--mono);font-size:12.5px}
+.sentence{font-size:14.5px;line-height:1.55}
+.nowrap{white-space:nowrap}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ── Layout ── */
+.app{display:grid;grid-template-columns:200px 1fr;min-height:100vh}
+.rail{background:var(--panel);border-right:1px solid var(--rule);padding:18px 12px;display:flex;flex-direction:column;gap:2px;position:sticky;top:0;height:100vh}
+.brand{padding:4px 10px 16px;border-bottom:1px solid var(--rule-2);margin-bottom:10px}
+.brand strong{display:block;font-size:14px;letter-spacing:-0.01em}
+.brand span{display:block;font-size:12px;color:var(--ink-3);margin-top:2px}
+.rail a{display:block;padding:8px 10px;border-radius:var(--r-ctl);color:var(--ink-2);text-decoration:none}
+.rail a:hover{background:var(--rule-2);color:var(--ink)}
+.rail a.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.rail .spacer{flex:1}
+.rail .foot{padding:10px;font-size:12px;color:var(--ink-3);border-top:1px solid var(--rule-2)}
+.main{min-width:0}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 28px;border-bottom:1px solid var(--rule);background:var(--panel);position:sticky;top:0;z-index:5}
+.topbar .health{display:flex;align-items:center;gap:8px;color:var(--ink-2);font-size:13px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--pass);display:inline-block;flex:none}
+.dot.warn{background:var(--warn)} .dot.fail{background:var(--fail)} .dot.idle{background:var(--ink-3)}
+#view{padding:24px 28px 48px;max-width:1220px}
+.page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}
+.page-head .lede{margin-top:4px;color:var(--ink-2);font-size:14px}
+.cols{display:grid;gap:16px}
+.cols-2{grid-template-columns:1fr 1fr} .cols-3{grid-template-columns:repeat(3,1fr)}
+.cols-main{grid-template-columns:minmax(0,1.15fr) minmax(0,1fr)}
+.stack{display:flex;flex-direction:column;gap:16px}
+
+/* ── Panels ── */
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:var(--r-panel);padding:16px 18px}
+.panel > h2{margin-bottom:10px}
+.panel.tight{padding:0}
+.panel.tight > h2{padding:14px 18px 10px}
+.row{display:flex;align-items:center;gap:10px}
+.row.between{justify-content:space-between}
+.row.wrap{flex-wrap:wrap}
+.hr{height:1px;background:var(--rule-2);margin:12px 0}
+
+/* ── Controls ── */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--rule);border-radius:var(--r-ctl);background:var(--panel);cursor:pointer;line-height:1.2;white-space:nowrap}
+.btn:hover{background:var(--rule-2)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover{background:var(--accent-hover)}
+.btn.danger{color:var(--fail);border-color:#E4B9B6}
+.btn.danger:hover{background:var(--fail-soft)}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn.ghost:hover{background:var(--rule-2)}
+.btn.small{padding:4px 9px;font-size:12.5px}
+.btn:disabled{opacity:.5;cursor:default}
+.btn:disabled:hover{background:var(--panel)}
+.btn.primary:disabled:hover{background:var(--accent)}
+input,select,textarea{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--rule);border-radius:var(--r-ctl);padding:7px 10px}
+textarea{width:100%;min-height:220px;font-family:var(--mono);font-size:12.5px;line-height:1.5;resize:vertical}
+label.field{display:block;font-size:12.5px;color:var(--ink-2);margin-bottom:4px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;font-size:12px;background:var(--rule-2);color:var(--ink-2);white-space:nowrap}
+.pill.pass{background:var(--pass-soft);color:var(--pass)}
+.pill.warn{background:var(--warn-soft);color:var(--warn)}
+.pill.fail{background:var(--fail-soft);color:var(--fail)}
+.pill.info{background:var(--accent-soft);color:var(--accent)}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border:1px solid var(--rule);border-radius:999px;font-size:12.5px;cursor:pointer;background:var(--panel);user-select:none}
+.chip.on{background:var(--accent-soft);border-color:var(--accent-soft);color:var(--accent);font-weight:600}
+.menu{position:relative;display:inline-block}
+.menu-list{position:absolute;top:calc(100% + 4px);left:0;background:var(--panel);border:1px solid var(--rule);border-radius:var(--r-ctl);min-width:180px;box-shadow:0 6px 18px rgba(23,27,33,.08);z-index:20;display:none;padding:4px}
+.menu.open .menu-list{display:block}
+.menu-list button{display:block;width:100%;text-align:left;padding:7px 10px;border:0;background:none;border-radius:3px;cursor:pointer}
+.menu-list button:hover{background:var(--rule-2)}
+.menu-list .hint{padding:6px 10px 4px;font-size:11.5px;color:var(--ink-3)}
+
+/* ── Lists & tables ── */
+table.list{width:100%;border-collapse:collapse}
+table.list th{text-align:left;font-weight:500;color:var(--ink-2);font-size:12.5px;padding:8px 18px;border-bottom:1px solid var(--rule)}
+table.list td{padding:10px 18px;border-bottom:1px solid var(--rule-2);vertical-align:top}
+table.list tr:last-child td{border-bottom:0}
+table.list tr.click{cursor:pointer}
+table.list tr.click:hover td{background:#FAFBFC}
+ul.plain{list-style:none;margin:0;padding:0}
+.check li{display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--rule-2)}
+.check li:last-child{border-bottom:0}
+.check .box{width:16px;height:16px;border-radius:3px;border:1.5px solid var(--rule);flex:none;margin-top:2px;display:grid;place-items:center;font-size:11px}
+.check .box.done{background:var(--pass);border-color:var(--pass);color:#fff}
+.check .box.now{border-color:var(--warn);background:var(--warn-soft)}
+.feed li{display:grid;grid-template-columns:64px 1fr;gap:10px;padding:6px 0;border-bottom:1px solid var(--rule-2)}
+.feed li:last-child{border-bottom:0}
+.feed time{color:var(--ink-3);font-family:var(--mono);font-size:12px;padding-top:2px}
+.jobs li{display:grid;grid-template-columns:1fr auto;gap:12px;padding:12px 18px;border-bottom:1px solid var(--rule-2);align-items:center}
+.jobs li:last-child{border-bottom:0}
+.jobs .title{font-weight:600}
+.jobs .sub{color:var(--ink-2);margin-top:2px}
+.bar{height:6px;background:var(--rule-2);border-radius:3px;overflow:hidden;width:180px}
+.bar > i{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .4s ease}
+
+/* ── Three-part error ── */
+.notice{border:1px solid #E4B9B6;background:var(--fail-soft);border-radius:var(--r-panel);padding:14px 16px}
+.notice.warn{border-color:#EAD3A2;background:var(--warn-soft)}
+.notice dl{display:grid;grid-template-columns:110px 1fr;gap:4px 12px;margin:8px 0 0}
+.notice dt{color:var(--ink-2)} .notice dd{margin:0}
+
+/* ── LED cycle map (the hero) ── */
+.leds{display:flex;flex-wrap:wrap;gap:5px;margin:14px 0 10px}
+.led{width:38px;height:26px;border-radius:var(--r-led);border:1px solid var(--rule);display:grid;place-items:center;font-size:11.5px;font-family:var(--mono);color:var(--ink-3);background:var(--panel)}
+.led.pass{background:var(--pass);border-color:var(--pass);color:#fff}
+.led.fail{background:var(--fail);border-color:var(--fail);color:#fff}
+.led.now{background:var(--warn);border-color:var(--warn);color:#fff;animation:pulse 1.6s ease-in-out infinite}
+.led.paused{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+@media (prefers-reduced-motion:reduce){.led.now{animation:none}}
+.progress{height:8px;background:var(--rule-2);border-radius:4px;overflow:hidden}
+.progress > i{display:block;height:100%;background:var(--accent);transition:width .6s ease}
+
+/* ── Console ── */
+.console{background:var(--console);color:var(--console-ink);border-radius:var(--r-panel);padding:12px 14px;font-family:var(--mono);font-size:12px;line-height:1.55;height:420px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.console .t{color:var(--console-dim)}
+.console .bad{color:#F2A49E}
+.console .ok{color:#8FD3A9}
+.console-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+
+/* ── Consensus ── */
+.votes{display:flex;flex-direction:column;gap:6px}
+.vote{display:grid;grid-template-columns:150px 92px 1fr;gap:10px;align-items:baseline;padding:8px 10px;border:1px solid var(--rule-2);border-radius:var(--r-ctl)}
+.vote .who{font-weight:600}
+.vote .v{font-weight:600}
+.vote .v.ok{color:var(--pass)} .vote .v.no{color:var(--warn)}
+
+/* ── Tabs ── */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--rule);margin-bottom:12px}
+.tab{padding:8px 12px;border:0;background:none;color:var(--ink-2);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.active{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+.sop{white-space:pre-wrap;line-height:1.65;font-size:13.5px}
+.sop.zh{font-size:14px;line-height:1.8}
+
+/* ── Model cards ── */
+.mcard{border:1px solid var(--rule);border-radius:var(--r-panel);padding:14px 16px;display:grid;grid-template-columns:1fr auto;gap:8px 16px}
+.mcard .name{font-weight:600;font-size:14.5px}
+.mcard .meta{color:var(--ink-2);margin-top:2px}
+.mcard .fit{margin-top:8px}
+.roles{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.role{border:1px solid var(--rule);border-radius:var(--r-panel);padding:10px 12px}
+.role .k{color:var(--ink-2);font-size:12.5px}
+.role .v{font-weight:600;margin-top:2px}
+.role .v.none{color:var(--ink-3);font-weight:400}
+.steps li{display:grid;grid-template-columns:20px 1fr auto;gap:10px;padding:6px 0;align-items:center}
+.steps .s{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--rule)}
+.steps .s.done{background:var(--pass);border-color:var(--pass)}
+.steps .s.now{border-color:var(--warn);background:var(--warn-soft)}
+
+/* ── Dialogs & toasts ── */
+.scrim{position:fixed;inset:0;background:rgba(23,27,33,.35);display:grid;place-items:center;z-index:50;padding:20px}
+.dialog{background:var(--panel);border-radius:8px;width:min(620px,100%);max-height:90vh;overflow:auto;padding:22px 24px;border:1px solid var(--rule)}
+.dialog.wide{width:min(820px,100%)}
+.dialog h3{margin-bottom:8px}
+.dialog .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 16px;border-radius:6px;font-size:13px;z-index:60;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+
+@media (max-width:900px){
+  .app{grid-template-columns:1fr}
+  .rail{position:static;height:auto;flex-direction:row;flex-wrap:wrap;gap:4px;padding:10px}
+  .brand{border:0;margin:0;padding:6px 10px;width:100%}
+  .rail .spacer,.rail .foot{display:none}
+  .cols-2,.cols-3,.cols-main{grid-template-columns:1fr}
+  .roles{grid-template-columns:1fr 1fr}
+  #view{padding:16px}
+  .topbar{padding:12px 16px}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="rail" id="rail"></nav>
+  <div class="main">
+    <header class="topbar">
+      <div class="health" id="health"></div>
+      <div class="row">
+        <span class="pill" id="clock"></span>
+        <button class="btn small ghost" onclick="toast('Signed in as a validation engineer. Roles and permissions are managed under Admin.')">Signed in</button>
+      </div>
+    </header>
+    <main id="view"></main>
+  </div>
+</div>
+<div id="dialog-root"></div>
+<div id="toast-root"></div>
+
+<script>
+/* ────────────────────────────────────────────────────────────────────────
+   SW Local Agent Service — clickable UI demo.
+   Everything here is simulated in the browser. Change PRODUCT_NAME to rename.
+   ──────────────────────────────────────────────────────────────────────── */
+const PRODUCT_NAME = "SW Local Agent Service";
+
+const PAGES = [
+  ["home","Home"],["coding","Coding"],["validation","Validation"],["factory","Factory"],
+  ["runs","Runs"],["models","Models"],["skills","Skills"],["settings","Settings"],["admin","Admin"]
+];
+
+/* ── State ─────────────────────────────────────────────────────────────── */
+const S = {
+  page: "home",
+  clock: 14*3600 + 2*60 + 11,               // 14:02:11, advances with the simulation
+  run: {
+    id: 418, total: 25, cycle: 12, step: 2,  // step: 0 quiesce, 1 off/on, 2 boot, 3 verify
+    status: "running",                       // running | pausing | paused | aborted | done
+    passed: [], failed: [], findings: [], lines: [],
+    startedMin: 64,
+  },
+  coding: {
+    ticket:"C-1187", title:"Add event-log export to the BMC tool", iteration:4, status:"running", fresh:false, toolchain:["Python 3.12","Shell (bash 5.2)"],
+    plan:[
+      {t:"Add a “sel export” command with target and output-file arguments", s:"done"},
+      {t:"Fetch the event log over Redfish and map entries to JSON", s:"done"},
+      {t:"Add a request timeout so a slow BMC can't hang the tool", s:"done"},
+      {t:"Handle truncated responses without crashing", s:"now", note:"fixing one failing test"},
+      {t:"Update the README with a usage example", s:""},
+    ],
+    feed:[
+      ["14:01:02","Read the plan and the 3 files it names. Found the Redfish client has no timeout."],
+      ["14:01:40","Wrote the new command and 3 tests. Ran the suite in the sandbox: 44 passed, 1 failed."],
+      ["14:02:05","Looked up “Redfish LogService truncated response” in the knowledge base. Found the vendor note on 4 KB chunking."],
+      ["14:02:11","Failing test: <span class=\"mono\">test_sel_parse_truncated</span>. Cause: the parser assumes the JSON closes. Adding a partial-read path."],
+      ["now","<span class=\"muted\">Re-running lint, type check and tests…</span>"],
+    ],
+  },
+  factory: {
+    ticket:"F-2291", station:7, sn:"7K2-00418", test:6, total:9, template:"Final test", fresh:false,
+    steps:["Power on and reach the login screen","Log in through the station GUI","Read serial numbers and match the label","Check every fan and temperature sensor","Run burn-in for 10 minutes","Check burn-in result in the BurnIn window","Read event log — must be empty","Power off and confirm standby current","Back up the station's system state"],
+    feed:[
+      ["13:48:10","Focused the window “Login”. Typed the station account and pressed Enter."],
+      ["13:48:22","Waited for “BurnIn v3.2” to appear (took 9 s). Clicked “Start test”."],
+      ["13:48:40","Read the serial number field: 7K2-00418. Matches the label scanned at intake."],
+      ["13:49:02","Ran <span class=\"mono\">sensors --json</span> over SSH. 12 fans and 18 sensors reporting, all in range."],
+      ["now","<span class=\"muted\">Watching the BurnIn progress bar. Screenshot every 60 s is saved to the ticket.</span>"],
+    ],
+  },
+  queue: [],          // validation runs approved and waiting for a free server
+  wiz: null,          // the open "New …" wizard, if any
+  codingTab: "agent", // agent | git | terminal
+  gitTab: "status",   // status | commit | history | push | bundle
+  git: {
+    branch:"agent/C-1187-sel-export", base:"main", ahead:4, pushed:false, pushedTo:null, mr:null, remote:"gitlab-firmware",
+    changes:[ {f:"bmc_tool/commands/sel.py", s:"M", by:"you, in the terminal"}, {f:"README.md", s:"M", by:"the agent"} ],
+    history:[
+      {sha:"a41f9c2", msg:"Handle truncated SEL responses with a partial-read path", who:"Coding agent", agent:true, ticket:"C-1187", when:"14:02"},
+      {sha:"7be03d1", msg:"Add a 30 s timeout to every Redfish GET",               who:"Coding agent", agent:true, ticket:"C-1187", when:"14:01"},
+      {sha:"c0de55a", msg:"Map SEL entries to JSON",                                who:"Coding agent", agent:true, ticket:"C-1187", when:"14:01"},
+      {sha:"e19b7f0", msg:"Add sel export command with target and output arguments", who:"Coding agent", agent:true, ticket:"C-1187", when:"14:01"},
+      {sha:"3d2a9b8", msg:"Bump version to 0.6.0",                                   who:"You", agent:false, when:"Yesterday"},
+    ],
+  },
+  remotes: [
+    { id:"gitlab-firmware", name:"gitlab-firmware", uri:"https://gitlab.internal/firmware/bmc-tool.git", host:"gitlab.internal", auth:"pat", fp:"token ending 7f2a", ops:"clone, pull, push to branches", lastUsed:"Yesterday, 16:02" },
+    { id:"gitea-docs",      name:"gitea-docs",      uri:"git@gitea.internal:validation/sops.git",        host:"gitea.internal",  auth:"ssh", fp:"SHA256:4KqZ…nR8w",  ops:"push to branches",            lastUsed:"Today, 09:41" },
+  ],
+  gitHosts: [
+    { host:"gitlab.internal", allowed:true,  auth:"Token or SSH key", note:"Internal GitLab. Merge requests are opened automatically." },
+    { host:"gitea.internal",  allowed:true,  auth:"SSH key",          note:"Docs and SOP repositories." },
+    { host:"github.com",      allowed:false, auth:"",                 note:"Blocked. This installation has no route to it; allowing it needs an ADR." },
+  ],
+  term: { lines: [] },
+  gpus: { count: 4, eachGB: 80 },
+  models: [
+    { id:"qwen-coder-32b-fp8",   name:"Qwen Coder 32B",     quant:"FP8", vram:40, ctx:"65k context",  task:"generate", votes:true,  note:"Strong tool calling. Good default for code." },
+    { id:"deepseek-coder-v2-fp8",name:"DeepSeek Coder V2",  quant:"FP8", vram:34, ctx:"128k context", task:"generate", votes:true,  note:"Longer context. Slightly slower first token." },
+    { id:"kimi-dev-72b-awq",     name:"Kimi Dev 72B",       quant:"AWQ", vram:42, ctx:"128k context", task:"generate", votes:true,  note:"Best on large test suites and long plans." },
+    { id:"qwen-7b-awq",          name:"Qwen 7B Instruct",   quant:"AWQ", vram:8,  ctx:"32k context",  task:"generate", votes:false, note:"Fast. Used for high-volume log triage." },
+    { id:"bge-m3",               name:"BGE-M3",             quant:"—",   vram:3,  ctx:"8k input",     task:"embed",    votes:false, note:"Embeddings for search. Multilingual." },
+  ],
+  roles: { coder:"qwen-coder-32b-fp8", planner:"qwen-coder-32b-fp8", triage:"qwen-7b-awq", embed:"bge-m3", rerank:null },
+  lastSwap: null,
+  skills: [
+    { id:"sel-collect",   name:"Collect and clear BMC event log",        kind:"Commands",          steps:4, agents:{coding:false,validation:true, factory:true },  by:"Validation team" },
+    { id:"station-login", name:"Log in to test station and start BurnIn",kind:"Screen actions",    steps:9, agents:{coding:false,validation:false,factory:true },  by:"Factory team" },
+    { id:"lint-test",     name:"Lint, type-check and run tests",          kind:"Commands",          steps:3, agents:{coding:true, validation:false,factory:false}, by:"Firmware team" },
+    { id:"shot-cycle",    name:"Screenshot the console after each power cycle", kind:"Screen actions + commands", steps:2, agents:{coding:false,validation:true, factory:false}, by:"Validation team" },
+  ],
+};
+
+/* ── Utilities ─────────────────────────────────────────────────────────── */
+const $ = (sel, root=document) => root.querySelector(sel);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function hhmmss(t){ const h=Math.floor(t/3600)%24, m=Math.floor(t/60)%60, s=t%60; return [h,m,s].map(n=>String(n).padStart(2,"0")).join(":"); }
+function dur(min){ if(min<1) return "under a minute"; if(min<60) return `${Math.round(min)} min`; const h=Math.floor(min/60), m=Math.round(min%60); return m? `${h} h ${m} min` : `${h} h`; }
+function toast(msg){ const r=$("#toast-root"); r.innerHTML=`<div class="toast">${esc(msg)}</div>`; clearTimeout(toast._t); toast._t=setTimeout(()=>r.innerHTML="",3200); }
+function dialog(html, {wide=false}={}){ $("#dialog-root").innerHTML=`<div class="scrim" onclick="if(event.target===this)closeDialog()"><div class="dialog${wide?" wide":""}" role="dialog" aria-modal="true">${html}</div></div>`; const f=$("#dialog-root .dialog button, #dialog-root .dialog [tabindex]"); if(f) f.focus(); }
+function closeDialog(){ $("#dialog-root").innerHTML=""; }
+document.addEventListener("keydown", e=>{ if(e.key==="Escape") closeDialog(); });
+document.addEventListener("click", e=>{ if(!e.target.closest(".menu")) document.querySelectorAll(".menu.open").forEach(m=>m.classList.remove("open")); });
+function toggleMenu(btn){ const m=btn.closest(".menu"); const open=m.classList.contains("open"); document.querySelectorAll(".menu.open").forEach(x=>x.classList.remove("open")); if(!open) m.classList.add("open"); }
+const modelById = id => S.models.find(m=>m.id===id);
+const modelName = id => id ? modelById(id).name : "None";
+function servingIds(){ return [...new Set(Object.values(S.roles).filter(Boolean))]; }
+function usedGB(){ return servingIds().reduce((a,id)=>a+modelById(id).vram,0); }
+function totalGB(){ return S.gpus.count*S.gpus.eachGB; }
+
+/* ── Navigation ────────────────────────────────────────────────────────── */
+function setPage(p){ S.page=p; render(); window.scrollTo(0,0); }
+function renderRail(){
+  $("#rail").innerHTML = `
+    <div class="brand"><strong>${esc(PRODUCT_NAME)}</strong><span>Self-hosted, no cloud</span></div>
+    ${PAGES.map(([k,l])=>`<a href="#${k}" class="${S.page===k?"active":""}" onclick="setPage('${k}');return false">${l}</a>`).join("")}
+    <div class="spacer"></div>
+    <div class="foot">Version 2.0<br>Air-gapped mode is on</div>`;
+}
+function renderHealth(){
+  const running = (S.run.status==="running"||S.run.status==="pausing"?1:0) + 1 + 1;
+  const util = Math.round(usedGB()/totalGB()*100);
+  $("#health").innerHTML = `<span class="dot"></span> Everything is healthy. ${S.gpus.count} GPUs at ${util}% memory, ${servingIds().length} models serving, ${running} jobs running.`;
+  $("#clock").textContent = hhmmss(S.clock);
+}
+function render(){ renderRail(); renderHealth(); const v=$("#view"); const fn={home:renderHome,coding:renderCoding,validation:renderValidation,factory:renderFactory,runs:renderRuns,models:renderModels,skills:renderSkills,settings:renderSettings,admin:renderAdmin}[S.page]; v.innerHTML=fn(); afterRender(); }
+function afterRender(){ const c=$("#sol"); if(c) c.scrollTop=c.scrollHeight; const t=$("#term"); if(t) t.scrollTop=t.scrollHeight; const ti=$("#term-in"); if(ti) ti.focus(); }
+
+/* ── Shared fragments ─────────────────────────────────────────────────── */
+function consensus(rows, summary){
+  return `<p class="sentence" style="margin-bottom:10px">${summary}</p>
+  <div class="votes">${rows.map(r=>`<div class="vote"><span class="who">${esc(r.who)}</span><span class="v ${r.ok?"ok":"no"}">${r.ok?"Approves":"Has a concern"}</span><span class="muted">${esc(r.why)}</span></div>`).join("")}</div>`;
+}
+function sopTabs(id, en, zh){
+  return `<div class="tabs" role="tablist">
+      <button class="tab active" role="tab" onclick="switchSop('${id}','en',this)">English</button>
+      <button class="tab" role="tab" onclick="switchSop('${id}','zh',this)">中文</button>
+    </div>
+    <div id="${id}-en" class="sop">${esc(en)}</div>
+    <div id="${id}-zh" class="sop zh" style="display:none">${esc(zh)}</div>`;
+}
+function switchSop(id, lang, btn){ btn.parentElement.querySelectorAll(".tab").forEach(t=>t.classList.remove("active")); btn.classList.add("active"); $("#"+id+"-en").style.display = lang==="en"?"":"none"; $("#"+id+"-zh").style.display = lang==="zh"?"":"none"; }
+
+/* ── Home ──────────────────────────────────────────────────────────────── */
+function renderHome(){
+  const r=S.run, pct=Math.round(((r.cycle-1)+r.step/4)/r.total*100);
+  const runLine = r.status==="done" ? "Finished. 1 finding routed to EE." : r.status==="aborted" ? "Aborted by you. Logs and completed cycles are kept." : r.status==="paused" ? `Paused after cycle ${r.cycle-1}.` : `Cycle ${r.cycle} of ${r.total}, ${stepName(r.step)}. About ${dur(remainingMin())} remaining.`;
+  return `
+  <div class="page-head">
+    <div><h1>Home</h1><p class="lede">What is running now, and what needs you.</p></div>
+    <div class="row">
+      <button class="btn" onclick="openWizard('coding')">New coding task</button>
+      <button class="btn" onclick="openWizard('factory')">New factory job</button>
+      <button class="btn primary" onclick="openWizard('validation')">New validation run</button>
+    </div>
+  </div>
+  <div class="stack">
+    <div class="notice">
+      <strong>Coding task “Fan curve table update” stopped.</strong>
+      <dl>
+        <dt>What happened</dt><dd>The agent made no progress for 3 iterations and stopped, as designed.</dd>
+        <dt>Likely cause</dt><dd>The plan asks for a register table the repository doesn't contain. The agent can't invent it.</dd>
+        <dt>What to do</dt><dd>Attach the register map, or edit the plan to point at the right file.</dd>
+      </dl>
+      <div class="row" style="margin-top:10px"><button class="btn small" onclick="toast('Opens the task with the plan editor focused.')">Open task</button><button class="btn small ghost" onclick="toast('Upload the register map and the agent resumes from iteration 3.')">Attach register map</button></div>
+    </div>
+
+    <div class="panel tight">
+      <h2>Running now</h2>
+      <ul class="plain jobs">
+        <li onclick="setPage('validation')" style="cursor:pointer">
+          <div><div class="title">Validation run 418 — DC power cycle, 25 iterations, rack3-slot07</div><div class="sub">${runLine}</div></div>
+          <div class="row"><div class="bar"><i style="width:${pct}%"></i></div><span class="pill ${r.status==="running"?"warn":r.status==="done"?"pass":""}">${statusWord(r.status)}</span></div>
+        </li>
+        ${S.queue.map(q=>`<li onclick="setPage('validation')" style="cursor:pointer">
+          <div><div class="title">Validation run ${q.id} — ${esc(q.summary)}, ${esc(q.target)}</div><div class="sub">Approved. Starts when ${esc(q.target)} is free. About ${esc(q.eta)} once it starts.</div></div>
+          <div class="row"><div class="bar"><i style="width:0%"></i></div><span class="pill info">Queued</span></div>
+        </li>`).join("")}
+        <li onclick="setPage('coding')" style="cursor:pointer">
+          <div><div class="title">Coding task ${S.coding.ticket} — ${esc(S.coding.title)}</div><div class="sub">${S.coding.fresh?"Starting. The sandbox is being created and the plan is being read.":`Iteration ${S.coding.iteration}. Fixing one failing test, then re-running. About 6 min remaining.`}</div></div>
+          <div class="row"><div class="bar"><i style="width:${S.coding.fresh?4:70}%"></i></div><span class="pill warn">${S.coding.fresh?"Starting":"Running"}</span></div>
+        </li>
+        <li onclick="setPage('factory')" style="cursor:pointer">
+          <div><div class="title">Factory ticket ${S.factory.ticket} — Station ${S.factory.station}, ${esc(S.factory.template.toLowerCase())} loop</div><div class="sub">${S.factory.fresh?`Test 1 of ${S.factory.total}, powering on the unit.`:`Test ${S.factory.test} of ${S.factory.total}, burn-in in progress. About 14 min remaining.`}</div></div>
+          <div class="row"><div class="bar"><i style="width:${Math.round((S.factory.test-1)/S.factory.total*100)+4}%"></i></div><span class="pill warn">${S.factory.fresh?"Starting":"Running"}</span></div>
+        </li>
+      </ul>
+    </div>
+
+    <div class="panel tight">
+      <h2>Recent results</h2>
+      <table class="list">
+        <thead><tr><th>Run</th><th>Result</th><th>Finished</th></tr></thead>
+        <tbody>
+          <tr class="click" onclick="setPage('runs')"><td>417 — AC power cycle, 10 iterations, rack3-slot06</td><td>Passed. Every check matched the baseline.</td><td class="muted nowrap">Today, 09:40</td></tr>
+          <tr class="click" onclick="setPage('runs')"><td>416 — Storage stress (fio), 8 NVMe, rack2-slot01</td><td>Passed with a note: NVMe 5 ran 4% below spec write bandwidth.</td><td class="muted nowrap">Yesterday, 22:15</td></tr>
+          <tr class="click" onclick="setPage('runs')"><td>Coding — Redfish task-service polling</td><td>Merged. Pull request 88 accepted by the reviewer.</td><td class="muted nowrap">Yesterday, 16:02</td></tr>
+          <tr class="click" onclick="setPage('runs')"><td>F-2290 — Station 7, final test loop</td><td>Passed. 3 models agreed. Production line SOP exported (EN, 中文).</td><td class="muted nowrap">Yesterday, 11:48</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+function statusWord(s){ return {running:"Running",pausing:"Pausing",paused:"Paused",aborted:"Aborted",done:"Finished"}[s]; }
+function stepName(i){ return ["saving logs","power cycling","booting","checking against baseline"][i]; }
+function remainingMin(){ const r=S.run; const left=(r.total-r.cycle)+ (1-r.step/4); return left*5.6; }
+
+/* ── Coding ────────────────────────────────────────────────────────────── */
+function renderCoding(){
+  const c=S.coding;
+  const enWalk = `Code walkthrough — Add event-log export to the BMC tool
+
+What changed
+A new command, "bmc-tool sel export", reads the BMC event log over Redfish and writes it as JSON. Truncated responses are now handled instead of crashing.
+
+Files touched
+  bmc_tool/commands/sel.py       new command and argument parsing
+  bmc_tool/redfish/client.py     added a 30 s timeout on every GET
+  tests/test_sel_parse.py        3 new cases, including a truncated log
+
+How to verify
+  1. bmc-tool sel export --target rack3-slot07 --dry-run
+  2. Confirm the output has one JSON object per event.
+  3. Run the test suite: 45 tests should pass.`;
+  const zhWalk = `程式碼說明 — 為 BMC 工具新增事件記錄匯出功能
+
+變更內容
+新增「bmc-tool sel export」指令，透過 Redfish 讀取 BMC 事件記錄並以 JSON 格式輸出。現在會正確處理被截斷的回應，而不會當機。
+
+修改的檔案
+  bmc_tool/commands/sel.py       新增指令與參數解析
+  bmc_tool/redfish/client.py     每個 GET 請求加上 30 秒逾時
+  tests/test_sel_parse.py        新增 3 個測試案例，包含截斷的記錄
+
+如何驗證
+  1. bmc-tool sel export --target rack3-slot07 --dry-run
+  2. 確認輸出中每個事件對應一個 JSON 物件。
+  3. 執行測試套件：應有 45 個測試通過。`;
+  const tabs=`<div class="tabs" role="tablist" style="margin-bottom:16px">${[["agent","Agent"],["git","Git"],["terminal","Terminal"]].map(([k,l])=>`<button class="tab ${S.codingTab===k?"active":""}" role="tab" onclick="S.codingTab='${k}';render()">${l}</button>`).join("")}</div>`;
+  const body = S.codingTab==="git" ? renderGitPanel() : S.codingTab==="terminal" ? renderTerminal() : renderCodingAgent(c, enWalk, zhWalk);
+  return `
+  <div class="page-head">
+    <div><h1>Coding</h1><p class="lede">${esc(c.title)}. Ticket ${c.ticket} was created when you uploaded the plan.</p></div>
+    <div class="row"><span class="pill" title="Toolchain the agent chose from the offline bundle">${c.toolchain.map(esc).join(", ")}</span><span class="pill warn">${c.fresh?"Starting":`Iteration ${c.iteration}, running`}</span><button class="btn" onclick="toast('The agent finishes the current test run, then waits for you.')">Pause after this iteration</button><button class="btn primary" onclick="openWizard('coding')">New coding task</button></div>
+  </div>
+  ${tabs}${body}`;
+}
+function renderCodingAgent(c, enWalk, zhWalk){
+  return `
+  <div class="cols cols-main">
+    <div class="stack">
+      <div class="panel">
+        <h2>Plan</h2>
+        <p class="muted" style="margin-bottom:8px">From plan.md. You approved this breakdown before the agent started.</p>
+        <ul class="plain check">
+          ${c.plan.map(p=>`<li><span class="box ${p.s==="done"?"done":p.s==="now"?"now":""}">${p.s==="done"?"✓":""}</span><span class="${p.s===""?"muted":""}">${esc(p.t)}${p.note?` <span class="muted">— ${esc(p.note)}</span>`:""}</span></li>`).join("")}
+        </ul>
+      </div>
+      <div class="panel">
+        <h2>What the agent is doing</h2>
+        <ul class="plain feed">
+          ${c.feed.map(([t,h])=>`<li><time>${esc(t)}</time><span>${h}</span></li>`).join("")}
+        </ul>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="panel">
+        <h2>Cross-check of the final change</h2>
+        ${c.fresh ? `<p class="muted">Runs when the agent finishes. Three models review the final change independently; you see every concern before exporting.</p>` : consensus([
+          {who:"Qwen Coder 32B",    ok:true,  why:"Change matches the plan. Tests cover the new path."},
+          {who:"DeepSeek Coder V2", ok:true,  why:"Correct. Suggests a log line when a response is truncated."},
+          {who:"Kimi Dev 72B",      ok:false, why:"The retry after a timeout has no upper bound. Recommends max 3 attempts."},
+        ], "2 of 3 models approve the change as it stands. One raised a concern you should look at before exporting.") + `
+        <div class="row" style="margin-top:10px"><button class="btn small" onclick="toast('The agent adds a 3-attempt cap and re-runs the cross-check.')">Ask the agent to address the concern</button><button class="btn small ghost" onclick="toast('Concern recorded as reviewed by you in ticket ${c.ticket}.')">Dismiss with a note</button></div>`}
+      </div>
+      <div class="panel">
+        <h2>Export</h2>
+        ${c.fresh ? `<p class="muted">Available when the task finishes: ZIP download, pull request, and the code walkthrough in English and 中文.</p>` : `
+        <div class="row wrap" style="margin-bottom:12px">
+          <button class="btn" onclick="toast('Downloading bmc-tool-${c.ticket}.zip (2.1 MB).')">Download ZIP</button>
+          <button class="btn primary" onclick="openGitPush()">Push to Git and open a merge request</button>
+        </div>
+        <div class="hr"></div>
+        <h2 style="font-size:13.5px">Code walkthrough</h2>
+        <p class="muted" style="margin-bottom:8px">Generated when the task finishes. Both languages are exported together.</p>
+        ${sopTabs("walk", enWalk, zhWalk)}
+        <div class="row" style="margin-top:10px"><button class="btn small" onclick="toast('Exported walkthrough-${c.ticket}-en.md and walkthrough-${c.ticket}-zh.md.')">Export both</button></div>`}
+      </div>
+    </div>
+  </div>`;
+}
+/* ── Git: broker-side (Method 1) ───────────────────────────────────────── */
+const remoteById = id => S.remotes.find(r=>r.id===id);
+function shortSha(){ return Math.floor(Math.random()*0xfffffff).toString(16).padStart(7,"0"); }
+function hostOf(uri){ let m=uri.match(/^https?:\/\/([^\/:]+)/i); if(m) return m[1].toLowerCase(); m=uri.match(/^[\w.-]+@([^:]+):/); if(m) return m[1].toLowerCase(); m=uri.match(/^ssh:\/\/(?:[^@]+@)?([^\/:]+)/i); if(m) return m[1].toLowerCase(); return null; }
+
+function openGitPush(){
+  const g=S.git; if(!S.remotes.length){ toast("Add a remote under Settings first."); return; }
+  const r=remoteById(g.remote)||S.remotes[0];
+  dialog(`<h3>Push and open a merge request</h3>
+  <label class="field">Remote</label><select id="push-remote" style="width:100%;margin-bottom:10px" onchange="S.git.remote=this.value">${S.remotes.map(x=>`<option value="${x.id}" ${x.id===r.id?"selected":""}>${esc(x.name)} — ${esc(x.host)}</option>`).join("")}</select>
+  <p class="sentence">This sends the <strong>${g.ahead} commits</strong> on <span class="mono">${esc(g.branch)}</span> to <strong>${esc(r.name)}</strong> as a new branch and opens a merge request against <span class="mono">${g.base}</span>. Nothing is merged automatically. The credential is used inside the broker only; the sandbox never sees it.</p>
+  <div class="hr"></div>
+  <p class="muted">Checks before pushing</p>
+  <ul class="plain check" style="margin-top:6px">
+    <li><span class="box done">✓</span><span>Changes stay inside the project folder</span></li>
+    <li><span class="box done">✓</span><span>No secrets found in the diff</span></li>
+    <li><span class="box done">✓</span><span>No Git hooks, submodules or escaping symlinks added</span></li>
+    <li><span class="box now"></span><span>1 cross-check concern still open <span class="muted">— it will be noted in the merge request</span></span></li>
+  </ul>
+  ${g.changes.length?`<div class="notice warn" style="margin-top:10px"><strong>${g.changes.length} files have changes that aren't committed.</strong> They won't be pushed. Commit them in the Git tab first, or push the ${g.ahead} commits as they are.</div>`:""}
+  <div class="actions"><button class="btn" onclick="closeDialog()">Not yet</button><button class="btn primary" onclick="runPush($('#push-remote').value)">Push and open merge request</button></div>`);
+}
+function runPush(remoteId){
+  const r=remoteById(remoteId); const g=S.git;
+  const steps=["Checking the changes: project scope, secrets, hooks","Cross-check of the agent's changes by 3 models",`Pushing ${g.ahead} commits to ${r.name}`,`Opening a merge request on ${r.host}`];
+  let i=0; const paint=()=>dialog(`<h3>Pushing to ${esc(r.name)}</h3><ul class="plain steps">${steps.map((s,k)=>`<li><span class="s ${k<i?"done":k===i?"now":""}"></span><span class="${k>i?"muted":""}">${esc(s)}</span><span class="faint">${k<i?"done":k===i?"running":""}</span></li>`).join("")}</ul><div class="progress" style="margin-top:12px"><i style="width:${Math.round(i/steps.length*100)}%"></i></div><p class="faint" style="margin-top:10px">The credential is decrypted inside the broker for this operation only and discarded afterwards. Repository hooks are not run.</p>`);
+  paint();
+  const iv=setInterval(()=>{ i++; if(i>=steps.length){ clearInterval(iv); g.pushed=true; g.pushedTo=r.name; g.mr=91; g.remote=r.id; r.lastUsed="Just now"; closeDialog(); render(); toast(`Merge request 91 opened on ${r.host}. Nothing was merged. The reviewer has been notified.`); } else paint(); }, 900);
+}
+function commitLocal(msg, sha, who="You"){ const g=S.git; g.history.unshift({sha, msg, who, agent:false, when:"Just now"}); g.changes=[]; g.ahead++; g.pushed=false; }
+function doCommit(){ const el=$("#commit-msg"); const msg=(el&&el.value.trim())||"Update"; const sha=shortSha(); commitLocal(msg, sha); S.gitTab="history"; render(); toast(`Committed as ${sha}. ${S.git.ahead} commits now ahead of main, not yet pushed.`); }
+function discardChange(f){ S.git.changes=S.git.changes.filter(c=>c.f!==f); render(); toast(`Discarded changes to ${f}.`); }
+
+function renderGitPanel(){
+  const g=S.git; const sub=S.gitTab; const r=remoteById(g.remote)||S.remotes[0];
+  const subtabs=`<div class="tabs" role="tablist">${[["status","Status"],["commit","Commit"],["history","History"],["push","Push and pull"],["bundle","Bundle"]].map(([k,l])=>`<button class="tab ${sub===k?"active":""}" role="tab" onclick="S.gitTab='${k}';render()">${l}</button>`).join("")}</div>`;
+  let body="";
+  if(sub==="status"){
+    body=`<p class="sentence">On branch <span class="mono">${esc(g.branch)}</span>, ${g.ahead} commits ahead of <span class="mono">${g.base}</span>${g.pushed?`, all on ${esc(g.pushedTo)} with merge request ${g.mr} open`:", not yet pushed anywhere"}. ${g.changes.length?`${g.changes.length} files have changes not yet committed.`:"Nothing left to commit."}</p>
+    ${g.changes.length?`<table class="list" style="margin-top:12px;border:1px solid var(--rule);border-radius:var(--r-panel);overflow:hidden"><thead><tr><th>File</th><th>Change</th><th></th></tr></thead><tbody>${g.changes.map(ch=>`<tr><td class="mono">${esc(ch.f)}</td><td>${ch.s==="M"?"Modified":ch.s==="A"?"Added":"Deleted"}${ch.by?` <span class="muted">by ${esc(ch.by)}</span>`:""}</td><td class="nowrap"><button class="btn small ghost" onclick="S.codingTab='terminal';termRun('git diff')">Diff</button> <button class="btn small ghost" onclick="discardChange('${esc(ch.f)}')">Discard</button></td></tr>`).join("")}</tbody></table>`:""}
+    <div class="row" style="margin-top:12px">${g.changes.length?`<button class="btn" onclick="S.gitTab='commit';render()">Commit changes</button>`:""}<button class="btn primary" onclick="openGitPush()">Push and open merge request</button><button class="btn ghost" onclick="S.codingTab='terminal';render()">Open terminal</button></div>
+    <p class="faint" style="margin-top:12px">This repository lives in Projects/${esc(S.coding.title.toLowerCase().includes("fan")?"bmc-tool":"bmc-tool")} on the server and is mounted into the sandbox. The sandbox can commit but has no route to any remote; pushing always goes through the broker with your saved remote.</p>`;
+  }
+  if(sub==="commit"){
+    body = g.changes.length ? `<p class="muted" style="margin-bottom:8px">Committing ${g.changes.length} files: ${g.changes.map(c=>`<span class="mono">${esc(c.f)}</span>`).join(", ")}.</p>
+      <label class="field">Commit message</label><textarea id="commit-msg" style="min-height:80px;font-family:var(--sans)">Update README usage example and tidy sel.py imports</textarea>
+      <p class="faint" style="margin:6px 0 12px">Committed as you (engineer@slas.local). Agent commits are marked separately in the history.</p>
+      <div class="row"><button class="btn primary" onclick="doCommit()">Commit ${g.changes.length} files</button><button class="btn ghost" onclick="S.gitTab='status';render()">Back to status</button></div>`
+      : `<p class="muted">Nothing to commit. Edit files in the terminal, or let the agent continue, then come back here.</p>`;
+  }
+  if(sub==="history"){
+    body=`<ul class="plain feed">${g.history.map(h=>`<li><time>${esc(h.when)}</time><span><span class="mono">${h.sha}</span> ${esc(h.msg)} <span class="muted">— ${esc(h.who)}</span>${h.agent?` <span class="pill info">Agent, ${esc(h.ticket)}</span>`:""}</span></li>`).join("")}</ul>
+    <p class="faint" style="margin-top:10px">Agent commits carry Slas-Agent and Slas-Ticket trailers, so anyone reading the history can tell what the agent did and which ticket asked for it.</p>`;
+  }
+  if(sub==="push"){
+    body=`<div class="cols cols-2">
+      <div class="panel"><h2>Push</h2>
+        <label class="field">Remote</label><select style="width:100%;margin-bottom:10px" onchange="S.git.remote=this.value">${S.remotes.map(x=>`<option value="${x.id}" ${x.id===(r&&r.id)?"selected":""}>${esc(x.name)} — ${esc(x.host)}</option>`).join("")}</select>
+        <p class="sentence">${g.pushed?`Everything on <span class="mono">${esc(g.branch)}</span> is already on ${esc(g.pushedTo)}. Merge request ${g.mr} is open.`:`${g.ahead} commits on <span class="mono">${esc(g.branch)}</span> are not on any remote yet.`}</p>
+        <div class="row" style="margin-top:10px"><button class="btn primary" onclick="openGitPush()" ${g.pushed?"disabled":""}>Push and open merge request</button></div>
+        <p class="faint" style="margin-top:10px">Pushes go to a new branch. Pushing straight to a protected branch is off for your role.</p>
+      </div>
+      <div class="panel"><h2>Pull</h2>
+        <p class="sentence">Bring <span class="mono">${g.base}</span> from ${esc(r?r.name:"a remote")} into this repository.</p>
+        <div class="row" style="margin-top:10px"><button class="btn" onclick="toast('Already up to date with ${r?esc(r.name):"remote"}/main.')">Pull ${g.base}</button><button class="btn ghost" onclick="toast('Fetched. 2 new branches on ${r?esc(r.name):"remote"}: review/qa-notes, hotfix/redfish-retry.')">Fetch only</button></div>
+        <p class="faint" style="margin-top:10px">Pull runs in the broker, then the sandbox sees the updated files. Repository hooks are never executed there.</p>
+      </div></div>
+      <p class="muted" style="margin-top:12px">Remotes and credentials are managed under <a href="#settings" onclick="setPage('settings');return false">Settings → Git remotes</a>.</p>`;
+  }
+  if(sub==="bundle"){
+    body=`<p class="sentence">A bundle is a single file that carries this repository's history. Use it to move work between sites that have no network path, on a USB drive.</p>
+    <div class="cols cols-2" style="margin-top:12px">
+      <div class="panel"><h2>Export</h2><p class="muted">Creates <span class="mono">${esc(S.coding.ticket)}.bundle</span> with all branches, about 1.4 MB.</p><div class="row" style="margin-top:10px"><button class="btn primary" onclick="toast('Downloading ${esc(S.coding.ticket)}.bundle (1.4 MB). Verified with git bundle verify.')">Export bundle</button></div></div>
+      <div class="panel"><h2>Import</h2><p class="muted">Choose a bundle from another site. Its commits land on a new branch for you to review.</p><div class="row" style="margin-top:10px"><button class="btn" onclick="toast('Imported 3 commits from partner-site.bundle onto branch partner/fixes. Nothing merged.')">Choose a bundle</button></div></div>
+    </div>`;
+  }
+  return `<div class="panel">${subtabs}${body}</div>`;
+}
+
+/* ── Terminal inside the sandbox (Method 2) ────────────────────────────── */
+function termPrompt(){ return `engineer@sandbox-${S.coding.ticket.toLowerCase()}:~/src$`; }
+function termBanner(){ return `<span class="t">Connected to the sandbox for ${esc(S.coding.ticket)} (gVisor, no network). You are the workspace user. This session is recorded to the ticket; secrets you type are redacted.</span>`; }
+function termLine(h){ S.term.lines.push(h); if(S.term.lines.length>300) S.term.lines.shift(); }
+function termRun(raw){
+  const cmd=String(raw||"").trim(); if(!cmd) return;
+  termLine(`<span class="t">${esc(termPrompt())}</span> ${esc(cmd)}`);
+  const out=termExec(cmd); if(out) termLine(out);
+  render();
+}
+function termExec(cmd){
+  const g=S.git; const parts=cmd.split(/\s+/); const c=parts[0]; const a=parts.slice(1); const args=a.join(" ");
+  if(c==="clear"){ S.term.lines=[]; return ""; }
+  if(c==="help") return esc("Commands that work in this demo:\n  git status | git log [--oneline] | git diff | git branch | git remote -v\n  git commit -m \"message\" | git push | git pull\n  ls | pwd | whoami | cat .git/config | env | python --version | curl <url> | clear");
+  if(c==="pwd") return "/workspace/src";
+  if(c==="whoami") return "engineer";
+  if(c==="ls") return esc("README.md  bmc_tool/  pyproject.toml  tests/  uv.lock");
+  if(c==="python"||c==="python3") return "Python 3.12.4";
+  if(["curl","wget","pip","apt","apt-get","ssh","nc"].includes(c)) return `<span class="bad">${esc(c)}: could not resolve host.</span> This sandbox has no network. Packages come from the internal mirror the platform configures.`;
+  if(c==="sudo"||c==="su") return `<span class="bad">bash: ${esc(c)}: command not found</span>`;
+  if(c==="env") return esc("HOME=/home/engineer\nPATH=/usr/local/bin:/usr/bin:/bin\nGIT_CONFIG_GLOBAL=/etc/slas/gitconfig\nSLAS_TICKET="+S.coding.ticket+"\nSLAS_SANDBOX=gvisor")+`\n<span class="t"># no tokens, no keys, no remote credentials here — by construction</span>`;
+  if(c==="cat"&&args===".git/config") return esc(`[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n[remote "origin"]\n\turl = https://gitlab.internal/firmware/bmc-tool.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "${g.branch}"]\n\tremote = origin\n\tmerge = refs/heads/${g.branch}`)+`\n<span class="t"># the URL is not a secret; the credential is not in this container</span>`;
+  if(c==="cat") return `<span class="bad">cat: ${esc(args)}: No such file in this demo</span>`;
+  if(c==="git"){
+    const sub=a[0];
+    if(sub==="status") return esc(`On branch ${g.branch}\nYour branch is ahead of '${g.base}' by ${g.ahead} commit${g.ahead===1?"":"s"}.`)+(g.changes.length?esc(`\n\nChanges not staged for commit:\n`)+g.changes.map(ch=>esc(`\tmodified:   ${ch.f}`)).join("\n"):esc("\n\nnothing to commit, working tree clean"));
+    if(sub==="log"){ const one=a.includes("--oneline"); return g.history.map(h=> one ? `<span class="ok">${h.sha}</span> ${esc(h.msg)}` : esc(`commit ${h.sha}\nAuthor: ${h.who==="You"?"engineer <engineer@slas.local>":"Coding agent <coding-agent@slas.local>"}\nDate:   ${h.when}\n\n    ${h.msg}`)+(h.agent?esc(`\n\n    Slas-Agent: coding\n    Slas-Ticket: ${h.ticket}`):"")+"\n").join("\n"); }
+    if(sub==="remote") return esc("origin\thttps://gitlab.internal/firmware/bmc-tool.git (fetch)\norigin\thttps://gitlab.internal/firmware/bmc-tool.git (push)");
+    if(["push","pull","fetch","clone"].includes(sub)) return `<span class="bad">fatal: unable to access 'https://gitlab.internal/firmware/bmc-tool.git/': Could not resolve host: gitlab.internal</span>\n\nThis sandbox has no network and holds no credentials. Push from the <b>Git</b> tab: it uses your saved remote through the broker.`;
+    if(sub==="diff") return g.changes.length ? esc(`diff --git a/${g.changes[0].f} b/${g.changes[0].f}\n--- a/${g.changes[0].f}\n+++ b/${g.changes[0].f}\n@@ -1,4 +1,5 @@`)+`\n<span class="bad">-import sys, json</span>\n<span class="ok">+import json</span>\n<span class="ok">+import sys</span>\n<span class="ok">+from bmc_tool.redfish import DEFAULT_TIMEOUT</span>` : "";
+    if(sub==="add") return "";
+    if(sub==="branch") return `* <span class="ok">${esc(g.branch)}</span>\n  ${esc(g.base)}`;
+    if(sub==="commit"){ const m=cmd.match(/-m\s+(?:"([^"]+)"|'([^']+)')/); if(!m) return `<span class="bad">error: switch 'm' requires a value</span>`; if(!g.changes.length) return esc("nothing to commit, working tree clean"); const n=g.changes.length; const sha=shortSha(); commitLocal(m[1]||m[2], sha); return esc(`[${g.branch} ${sha}] ${m[1]||m[2]}\n ${n} file${n===1?"":"s"} changed, 9 insertions(+), 3 deletions(-)`); }
+    return `<span class="bad">git: '${esc(sub||"")}' is not a git command in this demo.</span> Try: git status, git log --oneline, git diff, git remote -v, git push, git commit -m "message".`;
+  }
+  return `<span class="bad">bash: ${esc(c)}: command not found</span>`;
+}
+function renderTerminal(){
+  if(!S.term.lines.length){ termLine(termBanner()); termLine(`<span class="t">${esc(termPrompt())}</span> git status`); termLine(termExec("git status")); }
+  return `<div class="panel">
+    <div class="console-head"><h2>Terminal, inside the sandbox for ${esc(S.coding.ticket)}</h2><div class="row"><span class="pill">gVisor, no network</span><span class="pill">Recorded to the ticket</span><button class="btn small ghost" onclick="S.term.lines=[];render()">Clear</button></div></div>
+    <div class="console" id="term" style="height:380px" onclick="const i=document.getElementById('term-in'); if(i) i.focus()">${S.term.lines.join("\n")}</div>
+    <div class="row" style="margin-top:8px"><span class="mono muted nowrap">${esc(termPrompt())}</span><input id="term-in" class="mono" style="flex:1" placeholder="Type a command. Try: git status, git log --oneline, git push, help" onkeydown="if(event.key==='Enter'){termRun(this.value);this.value='';}" autocomplete="off" spellcheck="false"></div>
+    <p class="faint" style="margin-top:8px">Same isolated container the agent uses, same user. Commit here and push from the Git tab.</p>
+  </div>`;
+}
+
+/* ── Settings: Git remotes (Method 1 credentials) ──────────────────────── */
+function renderSettings(){
+  return `
+  <div class="page-head"><div><h1>Settings</h1><p class="lede">Your Git remotes and report preferences. People, servers and Git hosts are under Admin.</p></div></div>
+  <div class="stack">
+    <div class="panel tight">
+      <div class="row between" style="padding:14px 18px 0"><h2>Git remotes</h2><button class="btn primary small" onclick="openAddRemote()">Add remote</button></div>
+      <p class="muted" style="padding:6px 18px 10px">Repositories the platform may clone from and push to on your behalf. The credential is stored encrypted and used only by the Git broker; after saving you see a fingerprint, never the secret.</p>
+      ${S.remotes.length?`<table class="list"><thead><tr><th>Remote</th><th>Credential</th><th>Allowed</th><th>Last used</th><th></th></tr></thead><tbody>
+      ${S.remotes.map(r=>`<tr><td><div style="font-weight:600">${esc(r.name)}</div><div class="muted mono">${esc(r.uri)}</div></td><td>${r.auth==="pat"?"Access token":"SSH key"}<div class="muted mono">${esc(r.fp)}</div></td><td class="muted">${esc(r.ops)}</td><td class="muted nowrap">${esc(r.lastUsed)}</td><td class="nowrap"><button class="btn small" onclick="testRemote('${r.id}')">Test connection</button> <button class="btn small ghost" onclick="toast('Paste a new token or key. The old one is discarded the moment you save.')">Rotate</button> <button class="btn small ghost" onclick="removeRemote('${r.id}')">Remove</button></td></tr>`).join("")}
+      </tbody></table>`:`<div style="padding:0 18px 16px"><p class="muted">No remotes yet. Add one to push from the Coding page.</p></div>`}
+    </div>
+    <div class="panel"><h2>Reports and SOPs</h2>
+      <div class="row wrap" style="gap:6px;margin-top:4px"><span class="chip on">English</span><span class="chip on">中文（繁體）</span></div>
+      <p class="faint" style="margin-top:8px">Both are always produced together. Simplified Chinese can be enabled by an admin.</p>
+    </div>
+  </div>`;
+}
+function openAddRemote(){
+  dialog(`<h3>Add a Git remote</h3>
+  <label class="field">Name</label><input id="r-name" style="width:100%;margin-bottom:10px" placeholder="For example: gitlab-bmc-tool">
+  <label class="field">Repository address</label><input id="r-uri" style="width:100%;margin-bottom:10px" placeholder="https://gitlab.internal/group/repo.git  or  git@gitea.internal:group/repo.git">
+  <label class="field">Credential</label>
+  <div class="row" style="gap:14px;margin-bottom:8px"><label class="row" style="gap:6px"><input type="radio" name="r-auth" value="pat" checked onchange="$('#r-pat').style.display='';$('#r-ssh').style.display='none'"> Access token</label><label class="row" style="gap:6px"><input type="radio" name="r-auth" value="ssh" onchange="$('#r-pat').style.display='none';$('#r-ssh').style.display=''"> SSH private key</label></div>
+  <div id="r-pat"><input id="r-token" type="password" style="width:100%" placeholder="Paste the token" autocomplete="off"></div>
+  <div id="r-ssh" style="display:none"><textarea id="r-key" style="min-height:110px" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false"></textarea></div>
+  <p class="faint" style="margin-top:8px">Paste only. This field is never shown again; after saving you'll see a fingerprint. Prefer a deploy key or a project token with the least access needed, not a personal one.</p>
+  <div id="r-err" style="margin-top:10px"></div>
+  <div class="actions"><button class="btn" onclick="closeDialog()">Cancel</button><button class="btn primary" onclick="saveRemote()">Save remote</button></div>`);
+}
+function saveRemote(){
+  const name=$("#r-name").value.trim(), uri=$("#r-uri").value.trim(); const auth=document.querySelector('input[name="r-auth"]:checked').value;
+  const secret = auth==="pat" ? $("#r-token").value : $("#r-key").value; const err=$("#r-err");
+  if(!name||!uri){ err.innerHTML=`<div class="notice warn">Give the remote a name and a repository address.</div>`; return; }
+  const host=hostOf(uri);
+  if(!host){ err.innerHTML=`<div class="notice"><strong>That address doesn't look like a Git repository.</strong><dl><dt>What happened</dt><dd>No host could be read from it.</dd><dt>What to do</dt><dd>Use https://host/group/repo.git or git@host:group/repo.git.</dd></dl></div>`; return; }
+  const h=S.gitHosts.find(x=>x.host===host);
+  if(!h||!h.allowed){ const allowed=S.gitHosts.filter(x=>x.allowed).map(x=>x.host).join(", ");
+    err.innerHTML=`<div class="notice"><strong>${esc(host)} is not an allowed Git host.</strong><dl><dt>What happened</dt><dd>The remote was not saved. Nothing was sent anywhere.</dd><dt>Likely cause</dt><dd>This installation is air-gapped and has no route to ${esc(host)}.</dd><dt>What to do</dt><dd>Use one of the allowed hosts (${esc(allowed)}), or ask an admin to allow ${esc(host)} under Admin → Git hosts. Allowing an outside host needs an ADR.</dd></dl></div>`; return; }
+  if(!secret.trim()){ err.innerHTML=`<div class="notice warn">Paste the ${auth==="pat"?"token":"private key"} first.</div>`; return; }
+  if(auth==="ssh" && !/BEGIN [A-Z ]*PRIVATE KEY/.test(secret)){ err.innerHTML=`<div class="notice warn">That doesn't look like a private key. It should start with -----BEGIN OPENSSH PRIVATE KEY-----.</div>`; return; }
+  const fp = auth==="pat" ? `token ending ${secret.trim().slice(-4).replace(/./g,(ch,i,s)=>s.length<4?"•":ch)}` : `SHA256:${shortSha().toUpperCase().slice(0,4)}…${shortSha().slice(0,4)}`;
+  const id=name.toLowerCase().replace(/[^a-z0-9]+/g,"-");
+  S.remotes.push({ id, name, uri, host, auth, fp, ops:"clone, pull, push to branches", lastUsed:"Never" });
+  closeDialog(); render(); toast(`Remote ${name} saved. Only the fingerprint stays visible; the ${auth==="pat"?"token":"key"} is encrypted in the broker's store.`);
+}
+function testRemote(id){
+  const r=remoteById(id); let i=0; const steps=[`Connecting to ${r.host} through the broker`,"Authenticating with the saved credential","Listing branches"];
+  const paint=()=>dialog(`<h3>Testing ${esc(r.name)}</h3><ul class="plain steps">${steps.map((s,k)=>`<li><span class="s ${k<i?"done":k===i?"now":""}"></span><span class="${k>i?"muted":""}">${esc(s)}</span><span class="faint">${k<i?"done":k===i?"running":""}</span></li>`).join("")}</ul>${i>=steps.length?`<p class="sentence" style="margin-top:12px">Connected. 14 branches, default <span class="mono">main</span>. You can clone, pull and push to branches.</p><div class="actions"><button class="btn primary" onclick="closeDialog()">Close</button></div>`:""}`);
+  paint(); const iv=setInterval(()=>{ i++; paint(); if(i>=steps.length){ clearInterval(iv); r.lastUsed="Just now"; } }, 700);
+}
+function removeRemote(id){
+  const r=remoteById(id);
+  dialog(`<h3>Remove ${esc(r.name)}?</h3><p class="sentence">The saved credential is deleted from the broker's store. Repositories already cloned into your workspace are untouched; you just can't push or pull from them until you add a remote again.</p><div class="actions"><button class="btn" onclick="closeDialog()">Keep it</button><button class="btn danger" onclick="S.remotes=S.remotes.filter(x=>x.id!=='${id}');if(S.git.remote==='${id}')S.git.remote=S.remotes[0]?S.remotes[0].id:null;closeDialog();render();toast('Remote removed and its credential deleted.')">Remove remote</button></div>`);
+}
+
+/* ── Validation (the hero) ─────────────────────────────────────────────── */
+function renderValidation(){
+  const r=S.run;
+  const leds = Array.from({length:r.total},(_,i)=>{ const n=i+1; let c=""; if(r.failed.includes(n)) c="fail"; else if(r.passed.includes(n)) c="pass"; else if(n===r.cycle && (r.status==="running"||r.status==="pausing")) c="now"; else if(n===r.cycle && r.status==="paused") c="paused"; return `<div class="led ${c}" title="Cycle ${n}">${n}</div>`; }).join("");
+  const pct=Math.round(((r.cycle-1)+ (r.status==="done"?4:r.step)/4)/r.total*100);
+  let line;
+  if(r.status==="done") line=`Finished all ${r.total} cycles in ${dur(r.startedMin)}. ${r.findings.length? `${r.findings.length} finding routed to EE; draft ticket ready.`:"Every check matched the baseline."}`;
+  else if(r.status==="aborted") line=`Aborted after cycle ${r.cycle-1}. The target is powered on. Logs and completed cycles are kept.`;
+  else if(r.status==="paused") line=`Paused after cycle ${r.cycle-1}. The target is powered on and idle. Resume when you're ready.`;
+  else if(r.status==="pausing") line=`Finishing cycle ${r.cycle}, then pausing. About ${dur((1-r.step/4)*5.6)} until it holds.`;
+  else line=`Cycle ${r.cycle} of ${r.total}, ${stepName(r.step)}. Started ${dur(r.startedMin)} ago. About ${dur(remainingMin())} remaining.`;
+  const checks = r.step===3 || r.status!=="running" ? [
+    ["Device counts","2 CPUs, 32 DIMMs, 8 NVMe, 8 GPUs — matches baseline",true],
+    ["PCIe links", r.failed.includes(r.cycle-1)||r.failed.includes(r.cycle) ? "GPU3 is x8 Gen4, baseline was x16 Gen5" : "All 12 links at baseline width and speed", !(r.failed.includes(r.cycle-1)||r.failed.includes(r.cycle))],
+    ["Firmware versions","BIOS 1.24, BMC 3.11, CPLD 0x0C — unchanged",true],
+    ["Error counters","0 memory errors, 0 machine checks, 0 GPU errors",true],
+  ] : null;
+  return `
+  <div class="page-head">
+    <div><h1>Validation run ${r.id}</h1><p class="lede">DC power cycle, ${r.total} iterations, on rack3-slot07 (MGX platform, BIOS 1.24). Approved by you at 12:58.</p></div>
+    <div class="row"><span class="pill ${r.status==="running"||r.status==="pausing"?"warn":r.status==="done"?"pass":r.status==="aborted"?"fail":""}">${statusWord(r.status)}</span><button class="btn primary" onclick="openWizard('validation')">New validation run</button></div>
+  </div>
+  ${S.queue.length ? `<div class="panel" style="margin-bottom:16px;background:var(--accent-soft);border-color:var(--accent-soft)"><p class="sentence">${S.queue.map(q=>`Run ${q.id} is approved and queued for ${esc(q.target)}: ${esc(q.summary)}. It starts when the server is free, about ${esc(q.eta)}.`).join(" ")}</p><div class="row" style="margin-top:8px"><button class="btn small" onclick="S.queue=[];render();toast('Queued runs cancelled. Nothing was started.')">Cancel queued</button></div></div>` : ""}
+  <div class="panel" style="margin-bottom:16px">
+    <p class="sentence">${line}</p>
+    <div class="leds">${leds}</div>
+    <div class="progress"><i style="width:${pct}%"></i></div>
+    <div class="row between" style="margin-top:12px">
+      <div class="row">
+        ${r.status==="running" ? `<button class="btn" onclick="pauseRun()">Pause after this cycle</button>`:""}
+        ${r.status==="pausing" ? `<button class="btn" onclick="S.run.status='running';render();toast('Pause cancelled. The run continues.')">Cancel pause</button>`:""}
+        ${r.status==="paused" ? `<button class="btn primary" onclick="resumeRun()">Resume</button>`:""}
+        ${["running","pausing","paused"].includes(r.status) ? `<button class="btn danger" onclick="confirmAbort()">Abort run</button>`:""}
+        ${r.status==="done"||r.status==="aborted" ? `<button class="btn primary" onclick="openReport()">Open report</button>`:""}
+      </div>
+      <button class="btn ghost small" onclick="toast('Shows the compiled plan, guardrail policy, and raw journal for this run.')">Show details</button>
+    </div>
+  </div>
+  <div class="cols cols-main">
+    <div class="stack">
+      <div class="panel">
+        <h2>${r.status==="running"&&r.step<3 ? "Checks after this cycle" : "Checks on the latest cycle"}</h2>
+        ${checks ? `<ul class="plain check">${checks.map(([k,v,ok])=>`<li><span class="box ${ok?"done":""}" style="${ok?"":"background:var(--fail);border-color:var(--fail);color:#fff"}">${ok?"✓":"!"}</span><span><strong>${k}.</strong> ${v}</span></li>`).join("")}</ul>` :
+          `<p class="muted">Runs when the target is back on the network. It compares device counts, PCIe link width and speed, firmware versions, and error counters against the baseline taken before cycle 1.</p>`}
+      </div>
+      <div class="panel">
+        <h2>Findings so far (${r.findings.length})</h2>
+        ${r.findings.length ? r.findings.map(f=>`<div class="notice" style="margin-bottom:8px"><strong>Cycle ${f.cycle}: ${esc(f.title)}</strong><p style="margin-top:4px">${esc(f.detail)} Routed to ${f.owner}. Draft ticket ready.</p><div class="row" style="margin-top:8px"><button class="btn small" onclick="openTicket()">Review ticket</button><button class="btn small ghost" onclick="toast('Jumps the console to the fence marker for cycle ${f.cycle}.')">Show in console</button></div></div>`).join("") : `<p class="muted">None. Every check has matched the baseline.</p>`}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="console-head"><h2>Live console (serial over LAN)</h2><div class="row"><button class="btn small ghost" onclick="toast('Console paused. New lines queue until you resume.')">Pause</button><button class="btn small ghost" onclick="toast('Search the console: try “fence” or “Gen4”.')">Search</button></div></div>
+      <div class="console" id="sol">${r.lines.join("\n")}</div>
+      <p class="faint" style="margin-top:8px">Streaming from the BMC. Logs are copied off the server before every power action, so nothing here is lost when it powers off.</p>
+    </div>
+  </div>`;
+}
+function pauseRun(){ S.run.status="pausing"; render(); toast(`The run will hold after cycle ${S.run.cycle} finishes.`); }
+function resumeRun(){ S.run.status="running"; render(); toast("Resumed."); }
+function confirmAbort(){
+  const r=S.run;
+  dialog(`<h3>Abort run ${r.id}?</h3>
+  <p class="sentence">The target stays powered on. The ${r.passed.length+r.failed.length} completed cycles, all logs, and any findings are kept and the report is still generated. This can't be undone.</p>
+  <div class="actions"><button class="btn" onclick="closeDialog()">Keep running</button><button class="btn danger" onclick="S.run.status='aborted';closeDialog();render();toast('Run ${r.id} aborted. Target lease released.')">Abort run</button></div>`);
+}
+function openApproveRun(){
+  dialog(`<h3>Review and approve <span class="muted" style="font-weight:400">— step 3 of 3</span></h3>
+  <p class="sentence">This will power-cycle <strong>rack3-slot07</strong> <strong>25 times</strong>, about <strong>2.5 hours</strong>. Each cycle powers the server off and on and then compares its hardware against a baseline taken first. Nothing is written to firmware. The run stops on its own after 3 consecutive boot failures.</p>
+  <div class="hr"></div>
+  <h2 style="font-size:13.5px;margin-bottom:8px">Plan cross-check</h2>
+  ${consensus([
+    {who:"Qwen Coder 32B",    ok:true, why:"All 25 steps use approved actions. Cycle count is within policy."},
+    {who:"DeepSeek Coder V2", ok:true, why:"Matches the test suite. Baseline checks cover every device class."},
+    {who:"Kimi Dev 72B",      ok:true, why:"Settle time of 10 s meets the guardrail minimum."},
+  ], "3 of 3 models agree the compiled plan is safe and matches your test suite.")}
+  <div class="hr"></div>
+  <p class="muted">Guardrails for this run: 10 s minimum settle time, 15 min boot timeout, abort after 3 consecutive failures, exclusive lease on rack3-slot07.</p>
+  <div class="actions"><button class="btn" onclick="closeDialog()">Back to target</button><button class="btn primary" onclick="closeDialog();toast('Run 419 approved and queued. It starts when rack3-slot07 is free.')">Approve and start</button></div>`);
+}
+function openTicket(){
+  const f=S.run.findings[0];
+  const en=`Verification SOP — DC power-cycle validation, 25 iterations
+
+1. Reserve the target server and confirm no other run holds it.
+2. Open the serial console and start log forwarding before any power action.
+3. Record a baseline: CPUs, memory, storage, PCIe links, GPUs, firmware versions.
+4. Each cycle: save logs and the event log, power off, wait 10 s, power on, wait for the OS, compare against the baseline.
+5. Stop after 3 consecutive boot failures and notify the owner.
+6. On completion, export the report and any draft tickets for review.`;
+  const zh=`驗證標準作業程序 — DC 電源循環驗證，25 次
+
+1. 預留待測伺服器，並確認沒有其他測試佔用。
+2. 在任何電源動作之前，先開啟序列主控台並啟動日誌轉送。
+3. 記錄基準：CPU、記憶體、儲存裝置、PCIe 連結、GPU 與韌體版本。
+4. 每一次循環：儲存日誌與事件記錄、關機、等待 10 秒、開機、等待作業系統就緒、與基準比對。
+5. 連續 3 次開機失敗即停止，並通知負責人。
+6. 完成後匯出報告與待審查的問題單草稿。`;
+  dialog(`<h3>Draft ticket for cycle ${f.cycle}</h3>
+  <p class="muted" style="margin-bottom:10px">Written by the agent from the logs. Nothing is filed until you approve it.</p>
+  <div class="panel" style="padding:12px 14px;background:#FAFBFC"><pre class="mono" style="margin:0;white-space:pre-wrap">[Issue] PCIe link lost on GPU3 (0000:8a:00.0) during DC cycle
+[Detail] Link degraded x16 Gen5 → x8 Gen4 at cycle ${f.cycle} of 25; not recovered by warm boot
+[Occurrences] 1 of ${S.run.passed.length+S.run.failed.length} cycles so far — see matrix.csv
+[Owner] EE   [Severity] S2   [Fingerprint] 7f3a9c2e
+[Evidence] cycles/${f.cycle}/sol.log line 4412, dmesg line 881, diff.json
+[Baseline] BIOS 1.24 / BMC 3.11 / VBIOS 96.00.5E.00.04</pre></div>
+  <div class="hr"></div>
+  <h2 style="font-size:13.5px;margin-bottom:8px">Cross-check of the diagnosis</h2>
+  ${consensus([
+    {who:"Qwen Coder 32B",    ok:true,  why:"Owner EE. Severity S2: link degraded but device still present."},
+    {who:"DeepSeek Coder V2", ok:true,  why:"Owner EE. Severity S2. Matches known-issue KI-0412 pattern on this riser."},
+    {who:"Kimi Dev 72B",      ok:false, why:"Owner EE. Severity S1: a training failure on cycle 1 would have blocked boot."},
+  ], "3 of 3 models agree the owner is EE. They disagree on severity: 2 say S2, 1 says S1. Your call.")}
+  <div class="row" style="margin:8px 0 0"><label class="field" style="margin:0">Severity</label><select><option>S2 — degraded, still operable</option><option>S1 — blocks boot or loses a device</option><option>S3 — cosmetic or informational</option></select></div>
+  <div class="hr"></div>
+  <h2 style="font-size:13.5px;margin-bottom:8px">Verification SOP attached to the ticket</h2>
+  ${sopTabs("vsop", en, zh)}
+  <div class="actions"><button class="btn" onclick="closeDialog()">Keep as draft</button><button class="btn" onclick="closeDialog();toast('Exported ticket and SOP in English and 中文 to the run folder.')">Export EN and 中文</button><button class="btn primary" onclick="closeDialog();toast('Ticket filed to EE as S2. Link copied.')">File ticket</button></div>`, {wide:true});
+}
+function openReport(){
+  const r=S.run;
+  dialog(`<h3>Report for run ${r.id}</h3>
+  <p class="sentence">${r.passed.length} of ${r.total} cycles passed. ${r.failed.length? `${r.failed.length} cycle had a finding (PCIe link degradation on GPU3), routed to EE.`:"No findings."} Total time ${dur(r.startedMin)}.</p>
+  <div class="row wrap" style="margin-top:12px"><button class="btn" onclick="toast('Downloading report-418.pdf (EN).')">Report, English</button><button class="btn" onclick="toast('正在下載 report-418-zh.pdf。')">報告，中文</button><button class="btn" onclick="toast('Downloading run-418-bundle.tar.zst (1.8 GB): all logs, snapshots and diffs.')">Full log bundle</button></div>
+  <div class="actions"><button class="btn primary" onclick="closeDialog()">Close</button></div>`);
+}
+
+/* Console simulation */
+function tick(){
+  const r=S.run;
+  S.clock += 12 + Math.floor(Math.random()*30);
+  if(!(r.status==="running"||r.status==="pausing")) { renderHealth(); return; }
+  const n=r.cycle, t=()=>`<span class="t">${hhmmss(S.clock)}</span>`;
+  const willFail = n===14;
+  const push = (s)=>{ r.lines.push(`${t()} ${s}`); if(r.lines.length>120) r.lines.shift(); };
+  if(r.step===0){ push(`executor: sync complete. Event log saved (${300+n} entries). Fence marker <span class="ok">cycle-${n}</span> written.`); }
+  else if(r.step===1){ push(`redfish: ForceOff → power state Off after 2.1 s. Waiting 10 s settle.`); push(`redfish: On → power state On.`); }
+  else if(r.step===2){ push(`POST: memory training complete, 2048 GB.`); push(`POST: PCIe enumeration — 0000:8a:00.0 GPU3 ${willFail?'<span class="bad">x8 Gen4</span>':'x16 Gen5'}`); push(`Starting kernel …`); push(`ssh: reachable after ${60+Math.floor(Math.random()*30)} s.`); }
+  else if(r.step===3){
+    push(`verify: 2 CPUs, 32 DIMMs, 8 NVMe, 8 GPUs — <span class="ok">matches baseline</span>`);
+    if(willFail){ push(`verify: <span class="bad">PCIe: GPU3 0000:8a:00.0 x16 Gen5 → x8 Gen4 — differs from baseline</span>`); push(`verify: <span class="bad">AER: 1 correctable error on 0000:8a:00.0</span>`); push(`gate: policy says continue and record. Finding routed to EE.`); r.failed.push(n); r.findings.push({cycle:n,title:"GPU3 link dropped from x16 Gen5 to x8 Gen4",detail:"Not recovered by warm boot.",owner:"EE"}); }
+    else { push(`verify: PCIe links match baseline. Firmware unchanged. 0 new events, 0 AER, 0 GPU errors — <span class="ok">cycle ${n} passed</span>`); r.passed.push(n); }
+  }
+  r.startedMin += 1.4;
+  if(r.step===3){
+    if(n>=r.total){ r.status="done"; }
+    else { r.cycle=n+1; r.step=0; if(r.status==="pausing"){ r.status="paused"; toast(`Run held after cycle ${n}.`); } }
+  } else r.step++;
+  if(S.page==="validation"||S.page==="home") render(); else renderHealth();
+}
+/* Seed history: cycles 1–11 passed, and a few console lines */
+(function seed(){ const r=S.run; for(let i=1;i<=11;i++) r.passed.push(i); let c=S.clock-150; const L=(s,d)=>{ c+=d; r.lines.push(`<span class="t">${hhmmss(c)}</span> ${s}`); };
+  L(`verify: PCIe links match baseline. Firmware unchanged. 0 new events — <span class="ok">cycle 11 passed</span>`,0);
+  L(`executor: sync complete. Event log saved (311 entries). Fence marker <span class="ok">cycle-12</span> written.`,9);
+  L(`redfish: ForceOff → power state Off after 2.0 s. Waiting 10 s settle.`,14);
+  L(`redfish: On → power state On.`,12);
+  L(`POST: memory training complete, 2048 GB.`,48);
+  L(`POST: PCIe enumeration — 0000:8a:00.0 GPU3 x16 Gen5`,3);
+})();
+
+/* ── Factory ───────────────────────────────────────────────────────────── */
+function renderFactory(){
+  const f=S.factory;
+  const tests=f.steps;
+  const en=`Production line SOP — Station 7, final test
+
+1. Scan the unit label. The ticket opens automatically with the serial number.
+2. The agent powers the unit on and waits for the login screen (up to 5 minutes).
+3. The agent logs in through the station GUI and starts BurnIn 3.2.
+4. After 10 minutes, the agent reads the BurnIn result window and the event log.
+5. Three models review the logs. All three must agree before the unit is marked passed.
+6. On pass: the unit is powered off, the station state is backed up, and this SOP is attached to the ticket.
+7. On fail: the unit stays on, a draft ticket is created for the line lead, and the station is held.`;
+  const zh=`產線標準作業程序 — 第 7 站，最終測試
+
+1. 掃描機台標籤。工單會自動以序號開立。
+2. 代理程式將機台開機並等待登入畫面（最長 5 分鐘）。
+3. 代理程式透過測試站 GUI 登入並啟動 BurnIn 3.2。
+4. 10 分鐘後，代理程式讀取 BurnIn 結果視窗與事件記錄。
+5. 由三個模型審查日誌。三者全數同意後，機台才會標記為通過。
+6. 通過：機台關機、備份測試站系統狀態，並將本 SOP 附加至工單。
+7. 未通過：機台保持開機，為線長建立問題單草稿，並保留該站。`;
+  return `
+  <div class="page-head">
+    <div><h1>Factory</h1><p class="lede">Ticket ${esc(f.ticket)} ${f.source||"from the production system"}. Station ${f.station}, unit SN ${esc(f.sn)}, ${esc(f.template.toLowerCase())} loop.</p></div>
+    <div class="row"><span class="pill warn">Test ${f.test} of ${f.total}</span><button class="btn danger" onclick="toast('The station holds after the current test. The unit stays powered on.')">Hold station</button><button class="btn primary" onclick="openWizard('factory')">New factory job</button></div>
+  </div>
+  <div class="cols cols-main">
+    <div class="stack">
+      <div class="panel">
+        <h2>Test loop</h2>
+        <p class="sentence" style="margin-bottom:6px">${f.fresh?"Powering on the unit and waiting for the login screen. Up to 5 minutes.":"Burn-in is running. About 14 min until the verdict."}</p>
+        <div class="leds">${tests.map((_,i)=>{const n=i+1; const c=n<f.test?"pass":n===f.test?"now":""; return `<div class="led ${c}" title="${esc(tests[i])}">${n}</div>`;}).join("")}</div>
+        <ul class="plain steps">${tests.map((t,i)=>{const n=i+1; const c=n<f.test?"done":n===f.test?"now":""; return `<li><span class="s ${c}"></span><span class="${n>f.test?"muted":""}">${esc(t)}</span><span class="faint">${n<f.test?"passed":n===f.test?"running":""}</span></li>`;}).join("")}</ul>
+      </div>
+      <div class="panel">
+        <h2>What the agent did on the station screen</h2>
+        <ul class="plain feed">
+          ${f.feed.map(([t,h])=>`<li><time>${esc(t)}</time><span>${h}</span></li>`).join("")}
+        </ul>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="panel">
+        <h2>Verdict</h2>
+        <p class="sentence">Waiting for tests ${f.test} to ${f.total}. The unit is marked passed only if all three reviewing models agree; otherwise the line lead decides.</p>
+        <div class="hr"></div>
+        <p class="muted">Reviewing models for factory verdicts: Qwen Coder 32B, DeepSeek Coder V2, Kimi Dev 72B. Change this under Models.</p>
+      </div>
+      <div class="panel">
+        <h2>After the loop finishes</h2>
+        <ul class="plain check" style="margin-bottom:12px">
+          <li><span class="box"></span><span>Export the production line SOP in English and 中文 to the ticket</span></li>
+          <li><span class="box"></span><span>Back up the station's system state to <span class="mono">Backups/stations/07</span></span></li>
+          <li><span class="box"></span><span>Return the ticket to the production system with the verdict</span></li>
+        </ul>
+        ${sopTabs("fsop", en, zh)}
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ── Runs ──────────────────────────────────────────────────────────────── */
+function renderRuns(){
+  const rows=[
+    ["418","Validation","DC power cycle, 25 iterations, rack3-slot07",statusWord(S.run.status)+(S.run.findings.length?". 1 finding, routed to EE.":"."),"Today, 12:58"],
+    ["C-1187","Coding","Add event-log export to the BMC tool","Running, iteration "+S.coding.iteration+".","Today, 13:55"],
+    ["F-2291","Factory","Station 7, unit 7K2-00418","Running, test "+S.factory.test+" of 9.","Today, 13:47"],
+    ["417","Validation","AC power cycle, 10 iterations, rack3-slot06","Passed. Every check matched the baseline.","Today, 09:40"],
+    ["416","Validation","Storage stress (fio), 8 NVMe, rack2-slot01","Passed with a note: NVMe 5 ran 4% below spec.","Yesterday, 22:15"],
+    ["C-1183","Coding","Redfish task-service polling","Merged. Pull request 88 accepted.","Yesterday, 16:02"],
+    ["F-2290","Factory","Station 7, unit 7K2-00417","Passed. 3 models agreed. SOP exported.","Yesterday, 11:48"],
+    ["415","Validation","Inventory check, 4 servers, rack2","Failed. rack2-slot03 reported 30 DIMMs, baseline is 32. Routed to EE.","Yesterday, 08:30"],
+  ];
+  return `
+  <div class="page-head"><div><h1>Runs</h1><p class="lede">Every job the agents have run. Click a row to open it.</p></div>
+  <div class="row"><select><option>All agents</option><option>Validation</option><option>Coding</option><option>Factory</option></select><input placeholder="Search runs" style="width:200px"></div></div>
+  <div class="panel tight"><table class="list"><thead><tr><th>Run</th><th>Agent</th><th>What</th><th>Result</th><th>Started</th></tr></thead><tbody>
+  ${rows.map(r=>`<tr class="click" onclick="${r[1]==="Validation"&&r[0]==="418"?"setPage('validation')":r[1]==="Coding"&&r[0]==="C-1187"?"setPage('coding')":r[1]==="Factory"&&r[0]==="F-2291"?"setPage('factory')":"toast('Opens the run detail with its logs, findings and report.')"}"><td class="mono">${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td class="muted nowrap">${r[4]}</td></tr>`).join("")}
+  </tbody></table></div>`;
+}
+
+/* ── Models ────────────────────────────────────────────────────────────── */
+function fitSentence(m, role){
+  const cur=S.roles[role]; const free=totalGB()-usedGB();
+  if(cur===m.id) return `Already serving as ${role}.`;
+  const curM=cur?modelById(cur):null; const curShared = curM && Object.values(S.roles).filter(x=>x===cur).length>1;
+  const both = free>=m.vram;
+  if(both) return `${m.name} needs about ${m.vram} GB. ${free} GB is free across GPUs 0–3, so both models fit and there's no downtime.`;
+  const afterUnload = curM && !curShared ? free+curM.vram : free;
+  if(afterUnload>=m.vram) return `${m.name} needs about ${m.vram} GB but only ${free} GB is free. The current ${role} must unload first — about 3 minutes with no ${role}.`;
+  return `${m.name} needs about ${m.vram} GB. It won't fit even after unloading the current ${role}. Free a GPU or pick a smaller quantization.`;
+}
+function renderModels(){
+  const free=totalGB()-usedGB();
+  const roleCard=(k,label)=>`<div class="role"><div class="k">${label}</div><div class="v ${S.roles[k]?"":"none"}">${esc(modelName(S.roles[k]))}</div></div>`;
+  const cards=S.models.map(m=>{
+    const roles=Object.entries(S.roles).filter(([,v])=>v===m.id).map(([k])=>k);
+    const status = roles.length ? `<span class="pill pass">Serving as ${roles.join(" and ")}</span>` : `<span class="pill">Available</span>`;
+    const canGen = m.task==="generate";
+    return `<div class="mcard">
+      <div>
+        <div class="row"><span class="name">${esc(m.name)}</span>${status}</div>
+        <div class="meta">${m.quant==="—"?"":m.quant+", "}${m.ctx}, about ${m.vram} GB. ${esc(m.note)}</div>
+        ${canGen ? `<div class="fit row" style="gap:8px"><span class="chip ${m.votes?"on":""}" onclick="toggleVote('${m.id}')">${m.votes?"Votes in cross-checks":"Not a voter"}</span></div>`:""}
+      </div>
+      <div class="row" style="align-items:flex-start">
+        ${canGen ? `<div class="menu"><button class="btn" onclick="toggleMenu(this)">Use as</button><div class="menu-list"><div class="hint">Assign this model to a role</div>${["coder","planner","triage"].map(r=>`<button onclick="startSwap('${m.id}','${r}')">${r[0].toUpperCase()+r.slice(1)}${S.roles[r]===m.id?" (current)":""}</button>`).join("")}</div></div>`
+                : `<div class="menu"><button class="btn" onclick="toggleMenu(this)">Use as</button><div class="menu-list"><button onclick="startSwap('${m.id}','embed')">Embed${S.roles.embed===m.id?" (current)":""}</button></div></div>`}
+        <button class="btn" onclick="testModel('${m.id}')">Test</button>
+        <button class="btn ghost" onclick="toast('${esc(m.name)} is kept on disk. Remove deletes the weights after a confirmation.')">Remove</button>
+      </div>
+    </div>`;
+  }).join("");
+  const voters=S.models.filter(m=>m.votes).length;
+  return `
+  <div class="page-head">
+    <div><h1>Models</h1><p class="lede">${S.gpus.count} GPUs, ${totalGB()} GB total, ${free} GB free. Change which model serves a role here; nothing restarts.</p></div>
+    <div class="row"><button class="btn" onclick="toast('Scanned Models/. No new folders found.')">Scan for new models</button><button class="btn primary" onclick="openImportModel()">Add a model</button></div>
+  </div>
+  <div class="stack">
+    <div class="panel">
+      <h2>Roles</h2>
+      <p class="muted" style="margin-bottom:10px">The agents ask for a role, not a model name. Swap the model behind a role at any time.</p>
+      <div class="roles">${roleCard("coder","Coder")}${roleCard("planner","Planner")}${roleCard("triage","Triage")}${roleCard("embed","Embed")}${roleCard("rerank","Rerank")}</div>
+      ${S.lastSwap ? `<div class="row between" style="margin-top:12px"><p class="sentence">${S.lastSwap.role[0].toUpperCase()+S.lastSwap.role.slice(1)} is now ${esc(modelName(S.roles[S.lastSwap.role]))}. Rollback available for 24 hours.</p><button class="btn small" onclick="rollback()">Roll back to ${esc(modelName(S.lastSwap.prev))}</button></div>`:""}
+    </div>
+    <div class="panel">
+      <h2>Cross-check voters</h2>
+      <p class="sentence">${voters} models vote on critical outputs: plan approvals, final code changes, bug-ticket diagnoses and factory verdicts. ${voters<3?`<span style="color:var(--fail)">At least 3 are required — add a voter.</span>`:"Odd numbers avoid ties."} Toggle a model's chip below to change this.</p>
+    </div>
+    <div class="stack">${cards}</div>
+  </div>`;
+}
+function toggleVote(id){ const m=modelById(id); m.votes=!m.votes; render(); toast(m.votes?`${m.name} now votes in cross-checks.`:`${m.name} no longer votes.`); }
+function testModel(id){ const m=modelById(id); dialog(`<h3>Testing ${esc(m.name)}</h3><p class="sentence">Running 3 short prompts and one tool call with a strict schema. Takes about 30 seconds.</p><ul class="plain steps" id="teststeps"><li><span class="s done"></span><span>Loads and answers a plain question</span><span class="faint">1.2 s</span></li><li><span class="s done"></span><span>Returns a valid tool call for “power status”</span><span class="faint">0.9 s</span></li><li><span class="s now"></span><span>Summarizes a 400-line log into 3 sentences</span><span class="faint">running</span></li></ul><div class="actions"><button class="btn primary" onclick="closeDialog();toast('${esc(m.name)} passed all 3 checks. Scorecard saved.')">Close</button></div>`); }
+function openImportModel(){ dialog(`<h3>Add a model</h3><p class="sentence">Copy the model folder (weights, config.json and tokenizer) into <span class="mono">Models/</span> on the server, then scan. The platform reads the config, detects the quantization and estimates memory. No internet is needed.</p><div class="hr"></div><p class="muted">Folder path on the server</p><input style="width:100%;margin-top:6px" value="/AI/Agent/Models/qwen-coder-14b-awq"><div class="actions"><button class="btn" onclick="closeDialog()">Cancel</button><button class="btn primary" onclick="closeDialog();S.models.splice(4,0,{id:'qwen-coder-14b-awq',name:'Qwen Coder 14B',quant:'AWQ',vram:11,ctx:'32k context',task:'generate',votes:false,note:'Small and quick. Good for triage or as a third voter.'});render();toast('Qwen Coder 14B added and ready to use.')">Scan and add</button></div>`); }
+function startSwap(id, role){
+  document.querySelectorAll(".menu.open").forEach(m=>m.classList.remove("open"));
+  const m=modelById(id); if(S.roles[role]===id){ toast(`${m.name} is already the ${role}.`); return; }
+  const fit=fitSentence(m,role); const blocked=fit.includes("won't fit");
+  dialog(`<h3>Use ${esc(m.name)} as ${role}?</h3>
+  <p class="sentence">${esc(fit)}</p>
+  <div class="hr"></div>
+  <p class="muted">What happens: the new model starts alongside the current one, passes a health check and a 3-prompt smoke test, then traffic switches. The old model is kept for 24 hours so you can roll back with one click.</p>
+  <div class="actions"><button class="btn" onclick="closeDialog()">Cancel</button><button class="btn primary" ${blocked?"disabled":""} onclick="runSwap('${id}','${role}')">Swap now</button></div>`);
+}
+function runSwap(id, role){
+  const m=modelById(id); const steps=["Starting the new model","Loading weights onto the GPUs","Health check","Smoke test: 3 prompts, 1 tool call","Switching traffic to the new model"];
+  let i=0;
+  const paint=()=>{ dialog(`<h3>Swapping ${role} to ${esc(m.name)}</h3><ul class="plain steps">${steps.map((s,k)=>`<li><span class="s ${k<i?"done":k===i?"now":""}"></span><span class="${k>i?"muted":""}">${s}</span><span class="faint">${k<i?"done":k===i?"running":""}</span></li>`).join("")}</ul><div class="progress" style="margin-top:12px"><i style="width:${Math.round(i/steps.length*100)}%"></i></div><p class="faint" style="margin-top:10px">The current ${role} keeps serving until the last step.</p>`); };
+  paint();
+  const iv=setInterval(()=>{ i++; if(i>=steps.length){ clearInterval(iv); S.lastSwap={role,prev:S.roles[role]}; S.roles[role]=id; closeDialog(); render(); toast(`${role[0].toUpperCase()+role.slice(1)} is now ${m.name}. Rollback available for 24 hours.`); } else paint(); }, 900);
+}
+function rollback(){ const s=S.lastSwap; if(!s) return; S.roles[s.role]=s.prev; S.lastSwap=null; render(); toast(`${s.role[0].toUpperCase()+s.role.slice(1)} rolled back to ${modelName(s.prev)}.`); }
+
+/* ── Skills ────────────────────────────────────────────────────────────── */
+const SAMPLE_YAML = `skill:
+  id: station-login-burnin
+  name: Log in to test station and start BurnIn
+  version: 1.0
+  agents: [factory]              # any of: coding, validation, factory
+  requires: [screen]             # screen = keyboard/mouse on the target's display
+  inputs:
+    station_user:     { type: string }
+    station_password: { type: secret }   # never shown to the model
+  steps:
+    - focus_window: { title: "Login" }
+    - click:        { target: "#username" }
+    - type:         { text: "{{ station_user }}" }
+    - key:          { press: "Tab" }
+    - type:         { text: "{{ station_password }}" }
+    - key:          { press: "Enter" }
+    - wait_for:     { window: "BurnIn v3.2", timeout_s: 60 }
+    - click:        { text: "Start test" }
+    - run:          { command: ["burnin-ctl", "status", "--json"], expect_exit: 0 }
+  on_failure: screenshot_and_stop
+`;
+function renderSkills(){
+  const agentChips=(s)=>["coding","validation","factory"].map(a=>`<span class="chip ${s.agents[a]?"on":""}" onclick="toggleSkillAgent('${s.id}','${a}')">${a[0].toUpperCase()+a.slice(1)}</span>`).join("");
+  return `
+  <div class="page-head">
+    <div><h1>Skills</h1><p class="lede">Reusable step-by-step recipes. Write one once, then turn it on for any agent.</p></div>
+    <div class="row"><button class="btn" onclick="openImportSkill()">Import a skill file</button><button class="btn primary" onclick="openNewSkill()">New skill</button></div>
+  </div>
+  <div class="panel tight"><table class="list"><thead><tr><th>Skill</th><th>Kind</th><th>Enabled for</th><th></th></tr></thead><tbody>
+  ${S.skills.map(s=>`<tr><td><div style="font-weight:600">${esc(s.name)}</div><div class="muted">${s.steps} steps. By ${esc(s.by)}.</div></td><td class="muted">${esc(s.kind)}</td><td><div class="row" style="gap:6px">${agentChips(s)}</div></td><td class="nowrap"><button class="btn small" onclick="exportSkill('${s.id}')">Export</button> <button class="btn small ghost" onclick="toast('Runs the skill once against a target you pick, and shows each step as it happens.')">Try it</button></td></tr>`).join("")}
+  </tbody></table></div>
+  <p class="faint" style="margin-top:12px">Skills run inside the agent's sandbox or on the target machine, never on this server. Secrets are filled in at run time and are never shown to a model.</p>`;
+}
+function toggleSkillAgent(id,a){ const s=S.skills.find(x=>x.id===id); s.agents[a]=!s.agents[a]; render(); toast(`${s.name}: ${s.agents[a]?"on":"off"} for the ${a} agent.`); }
+function exportSkill(id){ const s=S.skills.find(x=>x.id===id); dialog(`<h3>Export “${esc(s.name)}”</h3><p class="muted" style="margin-bottom:8px">Saved as <span class="mono">${esc(s.id)}.skill.yaml</span>. Import it on any other installation.</p><textarea readonly>${esc(id==="station-login"?SAMPLE_YAML:`skill:\n  id: ${s.id}\n  name: ${s.name}\n  version: 1.0\n  agents: [${Object.entries(s.agents).filter(([,v])=>v).map(([k])=>k).join(", ")}]\n  steps:\n    # ${s.steps} steps …\n`)}</textarea><div class="actions"><button class="btn" onclick="closeDialog()">Close</button><button class="btn primary" onclick="closeDialog();toast('Downloaded ${esc(s.id)}.skill.yaml')">Download</button></div>`,{wide:true}); }
+function openImportSkill(){ dialog(`<h3>Import a skill file</h3><p class="muted" style="margin-bottom:8px">Paste the file or drop it here. It's checked against the schema before anything is saved.</p><textarea id="yamlin">${esc(SAMPLE_YAML)}</textarea><div class="row wrap" style="margin-top:10px;gap:6px"><span class="muted">Enable for:</span><span class="chip on" onclick="this.classList.toggle('on')">Coding</span><span class="chip" onclick="this.classList.toggle('on')">Validation</span><span class="chip on" onclick="this.classList.toggle('on')">Factory</span></div><div class="actions"><button class="btn" onclick="closeDialog()">Cancel</button><button class="btn primary" onclick="importSkill()">Check and import</button></div>`,{wide:true}); }
+function importSkill(){ S.skills.unshift({id:"station-login-burnin",name:"Log in to test station and start BurnIn (imported)",kind:"Screen actions + commands",steps:9,agents:{coding:true,validation:false,factory:true},by:"You"}); closeDialog(); render(); toast("Skill imported. 9 steps, schema valid, 1 secret input."); }
+function openNewSkill(){ dialog(`<h3>New skill</h3><p class="muted" style="margin-bottom:8px">Describe what it should do and the agent drafts the steps for you to edit. Or write the YAML yourself.</p><label class="field">Name</label><input style="width:100%;margin-bottom:10px" placeholder="For example: Collect fan speeds and save as CSV"><label class="field">What should it do?</label><textarea style="min-height:90px;font-family:var(--sans)" placeholder="Over SSH, read all fan speeds every 5 seconds for 2 minutes and save them to fans.csv in the run folder."></textarea><div class="actions"><button class="btn" onclick="closeDialog()">Cancel</button><button class="btn primary" onclick="closeDialog();toast('Draft ready: 4 steps. Open it under Skills to review.')">Draft the steps</button></div>`); }
+
+/* ── Admin ─────────────────────────────────────────────────────────────── */
+function renderAdmin(){
+  return `
+  <div class="page-head"><div><h1>Admin</h1><p class="lede">People, servers, settings and the health of this installation.</p></div></div>
+  <div class="cols cols-2">
+    <div class="stack">
+      <div class="panel tight"><div class="row between" style="padding:14px 18px 0"><h2>People</h2><button class="btn small" onclick="toast('Add someone by email. They get a one-time link; no internet needed.')">Add person</button></div>
+        <table class="list"><thead><tr><th>Person</th><th>Role</th><th>Can approve</th></tr></thead><tbody>
+        <tr><td>you@company.local</td><td>Validation engineer</td><td>Runs on rack 2 and rack 3</td></tr>
+        <tr><td>line-lead@company.local</td><td>Factory lead</td><td>Factory verdicts, station holds</td></tr>
+        <tr><td>fw@company.local</td><td>Firmware engineer</td><td>Coding exports, pull requests</td></tr>
+        <tr><td>admin@company.local</td><td>Administrator</td><td>Everything, including model changes</td></tr>
+        </tbody></table></div>
+      <div class="panel tight"><div class="row between" style="padding:14px 18px 0"><h2>Servers</h2><button class="btn small" onclick="toast('Add a server by its BMC address. Credentials are stored in the vault, never in a plan.')">Add server</button></div>
+        <table class="list"><thead><tr><th>Server</th><th>Status</th></tr></thead><tbody>
+        <tr><td><div style="font-weight:600">rack3-slot07</div><div class="muted mono">10.20.3.7</div></td><td><span class="pill warn">In use by run 418</span></td></tr>
+        <tr><td><div style="font-weight:600">rack3-slot06</div><div class="muted mono">10.20.3.6</div></td><td><span class="pill pass">Free</span></td></tr>
+        <tr><td><div style="font-weight:600">rack2-slot01</div><div class="muted mono">10.20.2.1</div></td><td><span class="pill pass">Free</span></td></tr>
+        <tr><td colspan="2"><div class="notice" style="margin:4px 0"><strong>rack2-slot03 can't be reached.</strong><dl><dt>What happened</dt><dd>The BMC at 10.20.2.3 didn't answer for 5 minutes.</dd><dt>Likely cause</dt><dd>The BMC is rebooting after a firmware update, or the management cable is out.</dd><dt>What to do</dt><dd>Wait 5 more minutes, or check the cable on the rack2 switch, port 3.</dd></dl><div class="row" style="margin-top:8px"><button class="btn small" onclick="toast('Trying now…')">Try again</button></div></div></td></tr>
+        </tbody></table></div>
+    </div>
+    <div class="stack">
+      <div class="panel"><h2>Settings</h2>
+        <div class="stack" style="gap:10px">
+          <div><label class="field">Where data is stored</label><input style="width:100%" value="/AI/Agent" readonly></div>
+          <div><label class="field">Minimum voters for a cross-check</label><select><option>3 (recommended)</option><option>5</option></select></div>
+          <div><label class="field">Languages for reports and SOPs</label><div class="row" style="gap:6px"><span class="chip on">English</span><span class="chip on">中文</span></div></div>
+          <div><label class="field">Sandbox isolation</label><select><option>gVisor (default)</option><option>Kata with Firecracker (strongest, slower)</option></select></div>
+        </div>
+        <p class="faint" style="margin-top:10px">Settings apply immediately. Nothing restarts.</p>
+      </div>
+      <div class="panel tight"><div class="row between" style="padding:14px 18px 0"><h2>Git hosts</h2><button class="btn small" onclick="toast('Internal hosts can be added directly. A host outside the perimeter needs an ADR first.')">Add host</button></div>
+        <p class="muted" style="padding:6px 18px 8px">Only these hosts can be used in remotes. The Git broker is the only service that can reach them.</p>
+        <table class="list"><thead><tr><th>Host</th><th>Status</th><th>Credentials</th></tr></thead><tbody>
+        ${S.gitHosts.map(h=>`<tr><td><div class="mono" style="font-weight:600">${esc(h.host)}</div><div class="muted">${esc(h.note)}</div></td><td><span class="pill ${h.allowed?"pass":"fail"}">${h.allowed?"Allowed":"Blocked"}</span></td><td class="muted">${esc(h.auth)||"—"}</td></tr>`).join("")}
+        </tbody></table></div>
+      <div class="panel"><h2>Health and backups</h2>
+        <ul class="plain check">
+          <li><span class="box done">✓</span><span>All 19 services are healthy. Last check 20 s ago.</span></li>
+          <li><span class="box done">✓</span><span>No internet connections were attempted in the last 30 days.</span></li>
+          <li><span class="box done">✓</span><span>Last backup today at 02:00, 1.2 GB, verified by a test restore.</span></li>
+          <li><span class="box now"></span><span>Restore drill due in 12 days. <a href="#" onclick="toast('Schedules a restore into a scratch copy. Takes about 20 minutes.');return false">Schedule it</a></span></li>
+        </ul>
+        <div class="row" style="margin-top:10px"><button class="btn small" onclick="toast('Backup started. About 4 minutes.')">Back up now</button><button class="btn small ghost" onclick="toast('Opens Grafana: GPU, inference and agent dashboards.')">Open dashboards</button></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ── "New …" wizards — three steps, one sentence, one verb ─────────────── */
+const SAMPLE_PLAN = `# Fan-speed CSV logger for the BMC tool
+
+Add a command "bmc-tool fans log" to the Python package that reads all fan
+speeds over Redfish every 5 seconds for a given duration and writes them to a
+CSV file. Ship a small shell script, fans-log.sh, that wraps it for the lab.
+
+- Arguments: --target, --duration (default 2m), --out (default fans.csv)
+- One row per sample: timestamp, fan name, RPM, status
+- Stop cleanly on Ctrl-C and still write the file
+- Unit tests with a recorded Redfish response`;
+
+// Toolchains shipped in the offline bundle. Users pick a language; the version is optional and
+// the agent resolves the best available one unless the user pins it.
+const TOOLCHAINS = {
+  "Python":            { versions:["3.11","3.12"],               pick:"3.12",      note:"uv, ruff, mypy, pytest" },
+  "C":                 { versions:["gcc 12","gcc 13","clang 17"], pick:"gcc 13",    note:"make, cmake, gdb, cppcheck" },
+  "C++":               { versions:["gcc 12","gcc 13","clang 17"], pick:"gcc 13",    note:"cmake, ninja, gtest, clang-tidy" },
+  "Rust":              { versions:["1.79","1.80"],               pick:"1.80",      note:"cargo, clippy, rustfmt" },
+  "Shell":             { versions:["bash 5.2","POSIX sh"],        pick:"bash 5.2",  note:"shellcheck, bats" },
+  "Go":                { versions:["1.22"],                      pick:"1.22",      note:"go test, golangci-lint" },
+  "TypeScript":        { versions:["Node 20"],                   pick:"Node 20",   note:"pnpm, vitest, eslint" },
+  "YAML / JSON config":{ versions:[],                            pick:"schema checks", note:"yamllint, jsonschema, JSON Schema validation" },
+};
+function matchVersion(t, want){ const w=(want||"").trim().toLowerCase(); if(!w) return null; return t.versions.find(v=>{ const x=v.toLowerCase(); return x===w || x.endsWith(" "+w) || x.includes(w) || w.includes(x); })||null; }
+function resolveToolchain(d){
+  return (d.langs||[]).map(l=>{ const t=TOOLCHAINS[l]; const want=(d.versions&&d.versions[l]||"").trim(); const hit=t.versions.length?matchVersion(t,want):null;
+    return { lang:l, version: hit||t.pick, pinned:!!hit, requested:want, unavailable: !!want && !hit && t.versions.length>0 }; });
+}
+function toolchainLabel(r){ if(r.lang==="YAML / JSON config") return "YAML/JSON config"; return /^\d/.test(r.version) ? `${r.lang} ${r.version}` : `${r.lang} (${r.version})`; }
+function wizReadVersions(){ const d=S.wiz&&S.wiz.data; if(!d) return; d.versions=d.versions||{}; document.querySelectorAll(".w-ver").forEach(i=>{ d.versions[i.dataset.lang]=i.value; }); }
+function wizToggleLang(l){ wizReadVersions(); const d=S.wiz.data; d.langs = d.langs.includes(l) ? d.langs.filter(x=>x!==l) : [...d.langs,l]; paintWizard(); }
+function detectLangs(plan){ const p=(plan||"").toLowerCase(); const out=[]; if(/python|\.py\b|pytest|pip|uv\b/.test(p)) out.push("Python"); if(/\bc\+\+|cpp|cmake/.test(p)) out.push("C++"); else if(/\bgcc\b|\.c\b|firmware|register/.test(p)) out.push("C"); if(/rust|cargo/.test(p)) out.push("Rust"); if(/\bbash\b|\bshell\b|\.sh\b|shell script/.test(p)) out.push("Shell"); if(/yaml|json|config/.test(p)) out.push("YAML / JSON config"); if(/typescript|node|react/.test(p)) out.push("TypeScript"); if(/\bgo\b|golang/.test(p)) out.push("Go"); return out.length?out:["Python"]; }
+
+const SUITE_ITEMS = [
+  {item:"DC power cycle",  action:"Power off and on through the BMC", count:25, checks:"Inventory, PCIe links, firmware, error counters after each cycle", flag:null},
+  {item:"Storage stress",  action:"fio, mixed read and write, 30 minutes", count:1, checks:"IOPS and bandwidth against spec, media errors", flag:null},
+  {item:"AC power cycle",  action:"Cut and restore mains through the PDU", count:5, checks:"Same as DC power cycle", flag:"Destructive. Needs your approval at step 3."},
+];
+const SERVERS = [
+  {id:"rack3-slot06", ip:"10.20.3.6", state:"free"},
+  {id:"rack2-slot01", ip:"10.20.2.1", state:"free"},
+  {id:"rack3-slot07", ip:"10.20.3.7", state:"in use by run 418"},
+  {id:"rack2-slot03", ip:"10.20.2.3", state:"unreachable"},
+];
+const STATIONS = [ {n:7, state:"in use by F-2291"}, {n:8, state:"free"}, {n:9, state:"free"} ];
+const FACTORY_TEMPLATES = {
+  "Final test": ["Power on and reach the login screen","Log in through the station GUI","Read serial numbers and match the label","Check every fan and temperature sensor","Run burn-in for 10 minutes","Check burn-in result in the BurnIn window","Read event log — must be empty","Power off and confirm standby current","Back up the station's system state"],
+  "Pre-burn-in quick check": ["Power on and reach the login screen","Read serial numbers and match the label","Check every fan and temperature sensor","Power off and confirm standby current"],
+  "Rework re-test": ["Power on and reach the login screen","Log in through the station GUI","Read event log — must be empty","Run burn-in for 30 minutes","Check burn-in result in the BurnIn window","Power off and confirm standby current"],
+};
+
+const WIZ = {
+  coding: {
+    title:"New coding task", finish:"Start task",
+    defaults:()=>({ title:"Fan-speed CSV logger for the BMC tool", plan:SAMPLE_PLAN, langs:detectLangs(SAMPLE_PLAN), detected:detectLangs(SAMPLE_PLAN), versions:{}, iso:"gVisor (default)", exp:"ZIP download", xc:true, skills:[],
+      steps:["Add a “fans log” command with --target, --duration and --out arguments","Read fan speeds over Redfish every 5 seconds and collect rows","Write the CSV, including when stopped with Ctrl-C","Add unit tests using a recorded Redfish response","Update the README with a usage example"] }),
+    steps:[
+      { name:"Plan",
+        render:d=>`<p class="muted" style="margin-bottom:10px">Drop a plan.md here or paste it. The agent reads it and proposes steps for you to approve before anything runs.</p>
+          <label class="field">Task name</label><input id="w-title" style="width:100%;margin-bottom:10px" value="${esc(d.title)}">
+          <label class="field">Plan</label><textarea id="w-plan" style="min-height:190px">${esc(d.plan)}</textarea>
+          <p class="faint" style="margin-top:6px">Or <a href="#" onclick="toast('File picker (demo). Pick a .md or .txt file.');return false">choose a file</a>. Markdown, plain text, or a pasted ticket all work.</p>`,
+        collect:d=>{ d.title=$("#w-title").value.trim(); d.plan=$("#w-plan").value; const det=detectLangs(d.plan); if(JSON.stringify(d.langs)===JSON.stringify(d.detected)) d.langs=det; d.detected=det; },
+        validate:d=> !d.title ? "Give the task a name." : !d.plan.trim() ? "Paste or drop a plan first." : null },
+      { name:"Setup",
+        render:d=>{ const tc=resolveToolchain(d); return `<label class="field">Languages</label>
+          <p class="muted" style="margin-bottom:8px">${d.detected.length?`Detected from your plan: ${d.detected.join(", ")}. `:""}Pick what the project uses. Versions are optional: leave them empty and the agent chooses the best toolchain available offline and tells you what it picked.</p>
+          <div class="row wrap" style="gap:6px;margin-bottom:10px">${Object.keys(TOOLCHAINS).map(l=>`<span class="chip ${d.langs.includes(l)?"on":""}" onclick="wizToggleLang('${esc(l)}')">${esc(l)}</span>`).join("")}</div>
+          ${d.langs.length?`<table class="list" style="border:1px solid var(--rule);border-radius:var(--r-panel);overflow:hidden;margin-bottom:12px"><thead><tr><th>Language</th><th>Version (optional)</th><th>Available offline</th></tr></thead><tbody>
+          ${d.langs.map(l=>{ const t=TOOLCHAINS[l]; return `<tr><td><strong>${esc(l)}</strong><div class="muted">${esc(t.note)}</div></td><td>${t.versions.length?`<input class="w-ver" data-lang="${esc(l)}" style="width:100%" placeholder="Agent picks ${esc(t.pick)}" value="${esc((d.versions||{})[l]||"")}" onchange="wizReadVersions();paintWizard()">`:`<span class="muted">Not versioned. Checked against schemas.</span>`}</td><td class="muted">${t.versions.join(", ")||"—"}</td></tr>`; }).join("")}
+          </tbody></table>`:`<p class="muted" style="margin-bottom:12px">Pick at least one language.</p>`}
+          ${tc.filter(r=>r.unavailable).map(r=>`<div class="notice warn" style="margin-bottom:12px"><strong>${esc(r.lang)} ${esc(r.requested)} isn't available offline.</strong> The agent will use ${esc(r.version)} instead. An admin can add toolchains with the next bundle.</div>`).join("")}
+          <div class="cols cols-2" style="gap:12px">
+            <div><label class="field">Sandbox isolation</label><select id="w-iso" style="width:100%">${["gVisor (default)","Kata with Firecracker (strongest, slower)"].map(o=>`<option ${o===d.iso?"selected":""}>${o}</option>`).join("")}</select></div>
+            <div><label class="field">Export to</label><select id="w-exp" style="width:100%">${["ZIP download",...S.remotes.map(r=>`Push to ${r.name} and open a merge request`),"Git bundle for offline transfer"].map(o=>`<option ${o===d.exp?"selected":""}>${esc(o)}</option>`).join("")}</select><p class="faint" style="margin-top:4px">Remotes are managed under Settings. The sandbox never holds the credential.</p></div>
+            <div><label class="field">Cross-check the final change</label><div style="margin-top:4px"><span class="chip ${d.xc?"on":""}" id="w-xc" onclick="this.classList.toggle('on')">3 models vote</span></div></div>
+          </div>
+          <div class="hr"></div>
+          <label class="field">Skills the agent may use</label>
+          <div class="row wrap" style="gap:6px">${S.skills.filter(s=>s.agents.coding).map(s=>`<span class="chip on w-skill" data-id="${s.id}" onclick="this.classList.toggle('on')">${esc(s.name)}</span>`).join("") || `<span class="muted">No skills are enabled for the coding agent yet. Turn some on under Skills.</span>`}</div>
+          <p class="faint" style="margin-top:10px">The sandbox has no network. Nothing is pushed to Git until you approve a merge request.</p>`; },
+        collect:d=>{ wizReadVersions(); d.iso=$("#w-iso").value; d.exp=$("#w-exp").value; d.xc=$("#w-xc").classList.contains("on"); d.skills=[...document.querySelectorAll(".w-skill.on")].map(e=>e.dataset.id); },
+        validate:d=> d.langs.length ? null : "Pick at least one language." },
+      { name:"Review the agent's steps",
+        render:d=>`<p class="sentence" style="margin-bottom:10px">The agent read your plan and proposes these steps. Edit any line, remove what you don't want, then start.</p>
+          ${d.steps.map(s=>`<input class="w-step" style="width:100%;margin-bottom:6px" value="${esc(s)}">`).join("")}
+          <button class="btn small ghost" onclick="const i=document.createElement('input');i.className='w-step';i.style.cssText='width:100%;margin-bottom:6px';i.placeholder='Another step';this.before(i);i.focus()">Add a step</button>
+          <div class="hr"></div>
+          <p class="sentence">${(()=>{ const tc=resolveToolchain(d); const parts=tc.map(r=> r.pinned ? `${esc(toolchainLabel(r))} (you pinned it)` : r.unavailable ? `${esc(toolchainLabel(r))} (${esc(r.requested)} isn't available offline)` : esc(toolchainLabel(r))); const auto=tc.filter(r=>!r.pinned&&TOOLCHAINS[r.lang].versions.length).length; return `This will run in an isolated sandbox with ${parts.join(", ")}, no network access, for up to 12 iterations.${auto?" Versions you left empty were chosen by the agent from the offline toolchains.":""}`; })()} ${d.xc?"Three models will review the final change before you export it.":"The final change will not be cross-checked."} A ticket is created now, and the code walkthrough is exported in English and 中文 when the task finishes.</p>`,
+        collect:d=>{ d.steps=[...document.querySelectorAll(".w-step")].map(e=>e.value.trim()).filter(Boolean); },
+        validate:d=> d.steps.length ? null : "Keep at least one step." },
+    ],
+    done:d=>{ const tc=resolveToolchain(d); const labels=tc.map(toolchainLabel); const auto=tc.filter(r=>!r.pinned&&TOOLCHAINS[r.lang].versions.length).map(r=>toolchainLabel(r));
+      S.coding={ ticket:"C-1188", title:d.title, iteration:1, status:"starting", fresh:true, toolchain:labels,
+        plan:d.steps.map((t,i)=>({t, s:i===0?"now":""})),
+        feed:[[hhmmss(S.clock),`Ticket C-1188 created.`],
+              [hhmmss(S.clock+4),`Chose ${labels.map(esc).join(", ")} from the offline toolchains${auto.length?` — you left ${auto.length===labels.length?"the versions":"some versions"} to me, so I took the newest ones available`:""}.`],
+              [hhmmss(S.clock+9),`Starting a sandbox with no network${d.skills.length?` and ${d.skills.length} skill${d.skills.length>1?"s":""} enabled`:""}.`],
+              ["now",`<span class="muted">Reading the plan and the repository…</span>`]] };
+      S.git={ branch:"agent/C-1188-"+d.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,24).replace(/-$/,""), base:"main", ahead:0, pushed:false, pushedTo:null, mr:null, remote:S.remotes[0]?S.remotes[0].id:null, changes:[], history:[{sha:"3d2a9b8", msg:"Bump version to 0.6.0", who:"You", agent:false, when:"Yesterday"}] };
+      S.term={lines:[]}; S.codingTab="agent"; S.gitTab="status";
+      setPage("coding"); toast("Ticket C-1188 created. The agent is starting."); },
+  },
+
+  validation: {
+    title:"New validation run", finish:"Approve and start",
+    defaults:()=>({ file:null, items:SUITE_ITEMS, target:"rack3-slot06", ownCreds:false }),
+    steps:[
+      { name:"Test suite",
+        render:d=>`<p class="muted" style="margin-bottom:10px">Upload the suite as .md or .xlsx. The platform parses the items and shows exactly what it understood, so nothing is hidden inside a spreadsheet.</p>
+          <div class="row" style="margin-bottom:12px"><button class="btn" onclick="S.wiz.data.file='dc_and_stress_suite.xlsx';paintWizard()">Choose a file</button><span class="muted">${d.file?`<span class="mono">${esc(d.file)}</span>`:"No file chosen yet."}</span></div>
+          ${d.file ? `<p class="sentence" style="margin-bottom:8px">${d.items.length} items parsed. ${d.items.filter(i=>i.flag).length} needs your approval because it is destructive.</p>
+          <table class="list" style="border:1px solid var(--rule);border-radius:var(--r-panel);overflow:hidden"><thead><tr><th>Item</th><th>What happens</th><th>Times</th><th>Checked after</th></tr></thead><tbody>
+          ${d.items.map(i=>`<tr><td><div style="font-weight:600">${esc(i.item)}</div>${i.flag?`<div class="pill warn" style="margin-top:4px">${esc(i.flag)}</div>`:""}</td><td>${esc(i.action)}</td><td class="mono">${i.count}</td><td class="muted">${esc(i.checks)}</td></tr>`).join("")}
+          </tbody></table>` : `<div class="panel" style="text-align:center;padding:28px;border-style:dashed"><p class="muted">Drop a suite here. Supported: .md with one item per heading, or .xlsx with the standard columns.</p></div>`}`,
+        validate:d=> d.file ? null : "Choose a suite file first." },
+      { name:"Target server",
+        render:d=>`<p class="muted" style="margin-bottom:10px">Pick the server to test. Only free servers can be chosen; the run takes an exclusive lease so nothing else touches it.</p>
+          <div class="stack" style="gap:6px">${SERVERS.map(s=>{ const ok=s.state==="free"; return `<label class="row between" style="padding:10px 12px;border:1px solid ${d.target===s.id?"var(--accent)":"var(--rule)"};border-radius:var(--r-ctl);${ok?"cursor:pointer":"opacity:.55"}">
+              <span class="row"><input type="radio" name="w-target" value="${s.id}" ${d.target===s.id?"checked":""} ${ok?"":"disabled"} onchange="S.wiz.data.target=this.value;paintWizard()"> <span><strong>${s.id}</strong> <span class="muted mono" style="margin-left:6px">${s.ip}</span></span></span>
+              <span class="pill ${ok?"pass":s.state==="unreachable"?"fail":"warn"}">${ok?"Free":esc(s.state)}</span></label>`; }).join("")}</div>
+          <div class="hr"></div>
+          <p class="sentence">Credentials for <strong>${esc(d.target)}</strong> are stored in the vault. They are used by the executor at run time and are never shown here or sent to a model.</p>
+          <div style="margin-top:8px"><span class="chip ${d.ownCreds?"on":""}" onclick="S.wiz.data.ownCreds=!S.wiz.data.ownCreds;paintWizard()">Use different credentials for this run only</span></div>
+          ${d.ownCreds?`<div class="cols cols-2" style="gap:10px;margin-top:10px"><div><label class="field">BMC user</label><input style="width:100%" value="admin"></div><div><label class="field">BMC password</label><input type="password" style="width:100%" value="••••••••••"></div><div><label class="field">Host user</label><input style="width:100%" value="root"></div><div><label class="field">Host password</label><input type="password" style="width:100%" value="••••••••••"></div></div><p class="faint" style="margin-top:6px">Kept only for this run, then discarded.</p>`:""}`,
+        validate:d=> d.target ? null : "Pick a free server." },
+      { name:"Review and approve",
+        render:d=>{ const dc=d.items.find(i=>i.item==="DC power cycle"), ac=d.items.find(i=>i.item==="AC power cycle"), st=d.items.find(i=>i.item==="Storage stress");
+          return `<p class="sentence">This will power-cycle <strong>${esc(d.target)}</strong> <strong>${dc?dc.count:0} times</strong> through the BMC${ac?` and <strong>${ac.count} times</strong> through the PDU (mains off and on)`:""}${st?`, and run a 30-minute storage stress`:""}. About <strong>3.5 hours</strong> in total. After every cycle the hardware is compared against a baseline taken first. Nothing is written to firmware. The run stops on its own after 3 consecutive boot failures.</p>
+          ${ac?`<div class="notice warn" style="margin-top:10px"><strong>AC power cycle is destructive.</strong> The BMC restarts too, so its event log is saved before each cycle. Approving this step is recorded with your name.</div>`:""}
+          <div class="hr"></div>
+          <h2 style="font-size:13.5px;margin-bottom:8px">Plan cross-check</h2>
+          ${consensus([
+            {who:"Qwen Coder 32B",    ok:true, why:"All steps use approved actions. Cycle counts are within policy."},
+            {who:"DeepSeek Coder V2", ok:true, why:"Matches the suite. Baseline checks cover every device class."},
+            {who:"Kimi Dev 72B",      ok:true, why:"Settle times meet the guardrail minimums (10 s DC, 30 s AC)."},
+          ], "3 of 3 models agree the compiled plan is safe and matches your suite.")}
+          <div class="hr"></div>
+          <p class="muted">Guardrails: 10 s minimum settle, 30 s after AC, 15 min boot timeout, abort after 3 consecutive failures, exclusive lease on ${esc(d.target)}, 72 h maximum.</p>`; } },
+    ],
+    done:d=>{ const dc=d.items.find(i=>i.item==="DC power cycle"), ac=d.items.find(i=>i.item==="AC power cycle"); S.queue.push({ id:419, target:d.target, summary:`DC cycle × ${dc?dc.count:0}${ac?`, AC cycle × ${ac.count}`:""}, storage stress`, eta:"3.5 hours" }); setPage("validation"); toast(`Run 419 approved and queued for ${d.target}. Ticket V-419 created.`); },
+  },
+
+  factory: {
+    title:"New factory job", finish:"Start job",
+    defaults:()=>({ trigger:"scan", sn:"7K2-00419", mes:"F-2292", station:8, template:"Final test", voters:"3 models (recommended)", onFail:"Hold the station and draft a ticket for the line lead", backup:true }),
+    steps:[
+      { name:"Trigger",
+        render:d=>`<p class="muted" style="margin-bottom:10px">How does this job start? On the line, scanning the label is the normal path; the other two are for re-tests and manual runs.</p>
+          <div class="stack" style="gap:6px">
+            ${[["scan","Scan a unit label","The ticket opens with the serial number."],["mes","Enter a production ticket number","Pulls the unit and test plan from the production system."],["manual","Pick a station manually","For engineering runs outside the line."]].map(([k,t,s])=>`<label class="row" style="padding:10px 12px;border:1px solid ${d.trigger===k?"var(--accent)":"var(--rule)"};border-radius:var(--r-ctl);cursor:pointer;align-items:flex-start"><input type="radio" name="w-trig" ${d.trigger===k?"checked":""} onchange="S.wiz.data.trigger='${k}';paintWizard()" style="margin-top:3px"><span><strong>${t}</strong><div class="muted">${s}</div></span></label>`).join("")}
+          </div>
+          <div class="cols cols-2" style="gap:10px;margin-top:12px">
+            ${d.trigger==="scan"?`<div><label class="field">Serial number</label><input id="w-sn" style="width:100%" value="${esc(d.sn)}"></div>`:""}
+            ${d.trigger==="mes"?`<div><label class="field">Production ticket</label><input id="w-mes" style="width:100%" value="${esc(d.mes)}"></div>`:""}
+            <div><label class="field">Station</label><select id="w-station" style="width:100%">${STATIONS.map(s=>`<option value="${s.n}" ${s.state!=="free"?"disabled":""} ${d.station===s.n?"selected":""}>Station ${s.n}${s.state==="free"?"":" — "+s.state}</option>`).join("")}</select></div>
+          </div>`,
+        collect:d=>{ const sn=$("#w-sn"), mes=$("#w-mes"); if(sn) d.sn=sn.value.trim(); if(mes) d.mes=mes.value.trim(); d.station=+$("#w-station").value; },
+        validate:d=> (d.trigger==="scan"&&!d.sn) ? "Scan or type the serial number." : (d.trigger==="mes"&&!d.mes) ? "Enter the production ticket number." : null },
+      { name:"Test loop",
+        render:d=>{ const steps=FACTORY_TEMPLATES[d.template]; return `<label class="field">Template</label><select id="w-tpl" style="width:100%;margin-bottom:12px" onchange="S.wiz.data.template=this.value;paintWizard()">${Object.keys(FACTORY_TEMPLATES).map(t=>`<option ${t===d.template?"selected":""}>${t}</option>`).join("")}</select>
+          <p class="sentence" style="margin-bottom:6px">${steps.length} steps on station ${d.station}. Steps that use the station screen are done through the station runner; you can watch and take over at any time.</p>
+          <ul class="plain steps">${steps.map((s,i)=>`<li><span class="s"></span><span>${esc(s)}</span><span class="faint">${/GUI|window|login screen/i.test(s)?"screen":/SSH|sensor|event log|serial/i.test(s)?"commands":"power"}</span></li>`).join("")}</ul>
+          <div class="hr"></div>
+          <label class="field">Skills used by this template</label>
+          <div class="row wrap" style="gap:6px">${S.skills.filter(s=>s.agents.factory).map(s=>`<span class="chip on">${esc(s.name)}</span>`).join("")||`<span class="muted">None enabled for the factory agent.</span>`}</div>`; } },
+      { name:"Verdict rules",
+        render:d=>`<div class="cols cols-2" style="gap:12px">
+            <div><label class="field">Who decides pass or fail</label><select id="w-voters" style="width:100%">${["3 models (recommended)","5 models"].map(o=>`<option ${o===d.voters?"selected":""}>${o}</option>`).join("")}</select><p class="faint" style="margin-top:4px">All must agree for a pass. Otherwise the line lead decides.</p></div>
+            <div><label class="field">If a test fails</label><select id="w-onfail" style="width:100%">${["Hold the station and draft a ticket for the line lead","Continue to the next unit and draft a ticket"].map(o=>`<option ${o===d.onFail?"selected":""}>${o}</option>`).join("")}</select></div>
+          </div>
+          <div class="hr"></div>
+          <label class="field">When the loop finishes</label>
+          <div class="row wrap" style="gap:6px"><span class="chip on" title="Always both">Export SOP in English</span><span class="chip on" title="Always both">匯出中文 SOP</span><span class="chip ${d.backup?"on":""}" id="w-backup" onclick="this.classList.toggle('on')">Back up the station state</span><span class="chip on">Return the verdict to the production system</span></div>
+          <div class="hr"></div>
+          <p class="sentence">This will run the <strong>${esc(d.template.toLowerCase())}</strong> loop, ${FACTORY_TEMPLATES[d.template].length} steps, on <strong>station ${d.station}</strong> for unit <strong>${esc(d.trigger==="mes"?"from ticket "+d.mes:d.sn)}</strong>. The unit is marked passed only if ${d.voters.startsWith("5")?"all 5":"all 3"} reviewing models agree. A ticket is created now.</p>`,
+        collect:d=>{ d.voters=$("#w-voters").value; d.onFail=$("#w-onfail").value; d.backup=$("#w-backup").classList.contains("on"); } },
+    ],
+    done:d=>{ const steps=FACTORY_TEMPLATES[d.template]; S.factory={ ticket:d.trigger==="mes"?d.mes:"F-2292", station:d.station, sn:d.trigger==="mes"?"7K2-00419":d.sn, test:1, total:steps.length, template:d.template, steps, fresh:true,
+        source: d.trigger==="scan"?"opened from a label scan":d.trigger==="mes"?"from the production system":"opened manually",
+        feed:[[hhmmss(S.clock),`Ticket created. Station ${d.station} leased. Powering on the unit.`],["now",`<span class="muted">Waiting for the login screen (up to 5 minutes)…</span>`]] };
+      setPage("factory"); toast(`Job started on station ${d.station}. Ticket ${S.factory.ticket} created.`); },
+  },
+};
+
+function openWizard(kind){ S.wiz={ kind, step:0, data:WIZ[kind].defaults() }; paintWizard(); }
+function paintWizard(){
+  const w=S.wiz; if(!w) return; const def=WIZ[w.kind]; const total=def.steps.length; const st=def.steps[w.step];
+  dialog(`<h3>${def.title} <span class="muted" style="font-weight:400">— step ${w.step+1} of ${total}: ${st.name}</span></h3>
+    <div class="progress" style="margin:8px 0 14px"><i style="width:${Math.round((w.step+1)/total*100)}%"></i></div>
+    ${st.render(w.data)}
+    <div class="actions">${w.step>0?`<button class="btn" onclick="wizBack()">Back</button>`:`<button class="btn" onclick="closeWizard()">Cancel</button>`}<button class="btn primary" onclick="wizNext()">${w.step===total-1?def.finish:"Next"}</button></div>`,{wide:true});
+}
+function wizBack(){ const st=WIZ[S.wiz.kind].steps[S.wiz.step]; if(st.collect) try{ st.collect(S.wiz.data); }catch(e){} S.wiz.step--; paintWizard(); }
+function wizNext(){
+  const w=S.wiz; const def=WIZ[w.kind]; const st=def.steps[w.step];
+  if(st.collect) st.collect(w.data);
+  if(st.validate){ const err=st.validate(w.data); if(err){ toast(err); return; } }
+  if(w.step<def.steps.length-1){ w.step++; paintWizard(); }
+  else { const d=w.data; S.wiz=null; closeDialog(); def.done(d); }
+}
+function closeWizard(){ S.wiz=null; closeDialog(); }
+
+/* ── Boot ──────────────────────────────────────────────────────────────── */
+const hash=(location.hash||"").slice(1); if(PAGES.some(([k])=>k===hash)) S.page=hash;
+render();
+setInterval(tick, 3200);
+</script>
+</body>
+</html>
