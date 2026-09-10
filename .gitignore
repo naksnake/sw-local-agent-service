@@ -8,12 +8,14 @@
 # python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
 .uv/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
 htmlcov/
+.pnpm-store/
 
 # node
 node_modules/

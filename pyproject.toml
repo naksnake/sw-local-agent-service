@@ -1,0 +1,61 @@
+[project]
+name = "slas-workspace"
+version = "0.0.0"
+description = "SW Local Agent Service: uv workspace root (not a package)"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+# Tooling named in CLAUDE.md §11. Exact pins: INV-8.
+dev = [
+  "pytest==9.0.2",
+  "ruff==0.15.8",
+  "mypy==1.19.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+# One member per CLAUDE.md §13 entry. services/edge is a reverse-proxy config, not Python.
+members = ["apps/api", "packages/*", "services/*"]
+exclude = ["services/edge"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["docs", "apps/webui", "tests/e2e", "node_modules"]
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, I isort, B bugbear, UP pyupgrade, S bandit (shell=True and
+# friends), N naming.
+select = ["E", "W", "F", "I", "B", "UP", "S", "N"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S603", "S607"]  # asserts and argv subprocess calls are the point of tests
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+files = ["apps/api", "packages", "services", "tests/unit", "tests/deploy"]
+explicit_package_bases = true
+namespace_packages = true
+# Every workspace member uses a flat layout (CLAUDE.md §0.1 names
+# packages/slas-kernel/slas_kernel/branding.py), so each member root is a package base.
+mypy_path = [
+  "apps/api",
+  "packages/slas-kernel", "packages/slas-schemas", "packages/slas-authz", "packages/slas-hal",
+  "packages/slas-skills", "packages/slas-screen", "packages/slas-git", "packages/slas-diff",
+  "packages/slas-triage", "packages/slas-rag", "packages/slas-sop", "packages/slas-eval",
+  "packages/slas-cli",
+  "services/agent-core-orchestrator", "services/llm-gateway", "services/model-manager",
+  "services/sandbox-manager", "services/screen-worker", "services/git-broker",
+  "services/validation-executor", "services/factory-executor", "services/station-runner",
+  "services/local-search-api",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit", "tests/deploy"]
+addopts = "-q -ra"
+xfail_strict = true

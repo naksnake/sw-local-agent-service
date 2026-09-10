@@ -1,0 +1,17 @@
+{
+  "name": "slas-workspace-js",
+  "private": true,
+  "description": "SW Local Agent Service: pnpm workspace root (apps/webui, tests/e2e)",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "e2e:list": "pnpm --filter slas-e2e run list"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}

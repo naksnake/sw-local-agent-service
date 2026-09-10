@@ -29,8 +29,26 @@ One command, one `.env`, one page to manage models. Details in `CLAUDE.md` §3.
 
 ## Status
 
-Pre-Phase 0. The repository currently holds the design documents and the UI demo.
-Follow `docs/DEVELOPMENT_PLAN.md` from P0.
+Phase 0 (skeleton) in progress: repository layout, toolchains, CI with an egress-DROP job,
+`slas doctor` and the preflight-only `install.sh`, ADR-0001 and ADR-0002. Follow
+`docs/DEVELOPMENT_PLAN.md`. The design review of 2026-09-10 lives in `docs/reviews/`.
+
+## Developing
+
+Prerequisites: Python 3.12, [uv](https://docs.astral.sh/uv/), Node 22 with pnpm through
+`corepack enable`. Every dependency is pinned in `uv.lock` and `pnpm-lock.yaml` (INV-8).
+
+```sh
+uv sync --locked --all-packages     # every workspace member plus the dev tools
+uv run ruff check . && uv run ruff format --check .
+uv run mypy                          # --strict, configured in pyproject.toml
+uv run pytest                        # tests/unit and tests/deploy, all against fakes
+pnpm install --frozen-lockfile
+pnpm -r typecheck && pnpm -r test    # apps/webui and tests/e2e
+./install.sh                         # preflight only in Phase 0; changes nothing
+scripts/ci/egress-drop.sh --netns    # the whole suite with outbound traffic blocked
+scripts/ci/no-cloud-ai.sh            # INV-2 grep
+```
 
 ## Licence
 
