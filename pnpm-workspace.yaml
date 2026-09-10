@@ -1,0 +1,3 @@
+packages:
+  - apps/webui
+  - tests/e2e

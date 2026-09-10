@@ -1,0 +1,15 @@
+[project]
+name = "slas-schemas"
+version = "0.0.0"
+description = "Pydantic schemas shared at every boundary (CLAUDE.md §5.4, §11)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = ["pydantic>=2.11,<3"]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "slas_schemas"
+module-root = ""

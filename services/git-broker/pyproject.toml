@@ -1,0 +1,15 @@
+[project]
+name = "slas-git-broker"
+version = "0.0.0"
+description = "The only holder of Git credentials and route to remotes (CLAUDE.md §5.7)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "slas_git_broker"
+module-root = ""

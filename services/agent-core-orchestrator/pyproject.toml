@@ -1,0 +1,15 @@
+[project]
+name = "slas-orchestrator"
+version = "0.0.0"
+description = "Runs the Agent Kernel (CLAUDE.md §4.2)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "slas_orchestrator"
+module-root = ""

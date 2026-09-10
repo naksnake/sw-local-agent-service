@@ -1,0 +1,77 @@
+# CI for the SW Local Agent Service repository (CLAUDE.md §11, INV-8).
+#
+# Jobs: Python lint/typecheck/tests, Node typecheck/tests, a cloud-AI grep (INV-2), and an
+# egress-DROP job that installs everything first and then runs the whole suite with all
+# outbound traffic blocked, as the air-gapped platform will be.
+#
+# Actions are pinned to release versions; replace with commit SHAs once the repository's
+# supply-chain policy is written (see docs/reviews/, decision 14).
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  DO_NOT_TRACK: "1"
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+  UV_VERSION: "0.8.17"
+
+jobs:
+  python:
+    name: python (ruff, mypy --strict, pytest)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: astral-sh/setup-uv@v6.4.3
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --locked --all-packages
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest
+
+  node:
+    name: node (tsc strict, vitest, playwright config)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version-file: .node-version
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r test
+      - run: pnpm --filter slas-e2e run list
+
+  no-cloud-ai:
+    name: no cloud AI (INV-2)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - run: scripts/ci/no-cloud-ai.sh
+
+  egress-drop:
+    name: egress-DROP (whole suite with outbound traffic blocked)
+    needs: [python, node]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: astral-sh/setup-uv@v6.4.3
+        with:
+          version: ${{ env.UV_VERSION }}
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version-file: .node-version
+      - run: corepack enable
+      # Everything that needs the network happens here, from the lockfiles.
+      - run: uv sync --locked --all-packages
+      - run: pnpm install --frozen-lockfile
+      # From here on, no outbound traffic. The script proves the block with a canary first.
+      - run: scripts/ci/egress-drop.sh --iptables

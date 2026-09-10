@@ -1,0 +1,15 @@
+[project]
+name = "slas-eval"
+version = "0.0.0"
+description = "Eval harness against local judges only (CLAUDE.md §8.1)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "slas_eval"
+module-root = ""
