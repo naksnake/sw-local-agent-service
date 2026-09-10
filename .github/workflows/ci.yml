@@ -73,5 +73,6 @@ jobs:
       # Everything that needs the network happens here, from the lockfiles.
       - run: uv sync --locked --all-packages
       - run: pnpm install --frozen-lockfile
-      # From here on, no outbound traffic. The script proves the block with a canary first.
-      - run: scripts/ci/egress-drop.sh --iptables
+      # From here on the suite runs inside an empty network namespace; the runner agent keeps
+      # its own network so it can still report to GitHub. A canary proves the block first.
+      - run: scripts/ci/egress-drop.sh --netns
