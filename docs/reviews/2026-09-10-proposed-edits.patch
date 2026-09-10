@@ -1,0 +1,1723 @@
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -4,9 +4,11 @@
+ > this file first and treats it as authoritative. Where this file conflicts with a
+ > request, surface the conflict; never resolve it silently.
+ >
+-> **Version 3.1 · 2026-09-10** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
++> **Version 3.2 · 2026-09-10** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
+ > (phases, done criteria) and `docs/PROMPTS.md` (copy-paste session prompts).
+-> 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14).
++> 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14). 3.2 applies the design review of
++> 2026-09-10 (`docs/reviews/2026-09-10-claude-md-and-development-plan-review.md`): the broker
++> no longer opens the workspace repository, secrets leave `.env`, and the open decisions grow.
+ 
+ ---
+ 
+@@ -92,18 +94,18 @@
+ 
+ | ID | Invariant |
+ |---|---|
+-| **INV-1** | No external network dependency at runtime — weights, images, packages, fonts, telemetry, CA, NTP. |
++| **INV-1** | No external network dependency at runtime — weights, images, packages, fonts, telemetry, CA, NTP. An internal time source (site NTP or PTP) is required and named at install; every journal records the clock offset of the BMC or station it talks to. |
+ | **INV-2** | No cloud AI services (OpenAI, Anthropic API, Azure/Vertex/Bedrock, Copilot, Codex, LangSmith, W&B cloud, HF Inference…). Offline libraries allowed with tracing off. |
+ | **INV-3** | **The LLM is never in the hardware control loop.** Models compile plans and analyse results; a deterministic executor performs actions. Applies to power, firmware, GUI on stations, and anything with physical effect. |
+-| **INV-4** | **Agents never touch the platform host.** OS-level control is of the machine the agent works *on* — sandbox, target server, factory station — never the host running the platform. No host X11 socket, `/dev/input`, or runtime socket is mounted into anything that runs model-authored or skill-authored steps. |
++| **INV-4** | **Agents never touch the platform host.** OS-level control is of the machine the agent works *on* — sandbox, target server, factory station — never the host running the platform. No host X11 socket, `/dev/input`, or runtime socket is mounted into anything that runs model-authored or skill-authored steps. Exception: `model-manager` and `sandbox-manager` hold the container-engine socket; they accept only schema-validated requests (container id, argv list, cwd, timeout) from the orchestrator or api and never evaluate model or skill content. |
+ | **INV-5** | Credentials never enter a model context. Plans, skills and prompts carry opaque refs; executors resolve secrets at dispatch; logs are redacted before a model sees them. |
+ | **INV-6** | Every action with physical effect is journalled write-ahead: `intent → action → observation`. |
+-| **INV-7** | Destructive actions need per-run human approval: firmware flash, secure erase, BIOS reset, AC cycle, RAID change, factory PASS/FAIL override, station config change. |
++| **INV-7** | Destructive actions need per-run human approval: firmware flash, secure erase, BIOS reset, AC cycle, RAID change, factory PASS/FAIL override, station config change. The authoritative list is `requires_approval` in `config/guardrails.yaml`; §5.6 and §6.2 classify risk from it. An approval is bound to the content hash of the plan it approves, including every compiled skill; a changed plan needs a new approval. |
+ | **INV-8** | No `latest` tags, no unpinned deps; builds succeed with networking disabled. |
+ | **INV-9** | Model and user changes never require config edits or restarts. |
+ | **INV-10** | `./install.sh` on a fresh GPU host reaches a working login page with no manual steps. CI enforces it. |
+ | **INV-11** | **Cross-check never authorises.** A consensus of models is an extra check on judgement outputs; it never substitutes for INV-3, INV-6 or INV-7, and cannot trigger a hardware or GUI action by itself. |
+-| **INV-12** | **Skills are data.** A skill file is validated against the schema, may only use whitelisted primitives, runs with the importing user's capabilities, and cannot escalate them. There is no `shell` primitive. |
++| **INV-12** | **Skills are data.** A skill file is validated against the schema, may only use whitelisted primitives, runs with the capabilities of the user who triggers the run (checked by `slas_authz` at the executor before the first step), and cannot escalate them. There is no `shell` primitive. |
+ | **INV-13** | **Both languages or neither.** Every SOP, report and ticket export produces English and Chinese together from one structured source. Identifiers, commands, numbers and versions are copied by code, never translated by a model. |
+ | **INV-14** | **Git credentials exist only inside `git-broker`, only during an operation.** Stored encrypted by reference; never written to a workspace, mounted into a sandbox, placed in a URL, argv, log or model context; never returned to the UI beyond a fingerprint. Sandboxes have no route to any Git remote. Every clone, pull or push passes the broker's validation gate. |
+ 
+@@ -115,23 +117,33 @@
+ 
+ | | `quickstart` (default) | `prod` |
+ |---|---|---|
+-| Install | `tar xzf slas-bundle.tgz && ./install.sh` | `./install.sh --profile prod` |
++| Install | `tar xzf slas-bundle-<version>.tar.gz && cd slas-bundle-<version> && ./install.sh` | `./install.sh --profile prod` |
+ | Auth | built-in users + roles | + OIDC via local Keycloak |
+-| Secrets | generated `.env` + Docker secrets | Vault, injected at dispatch |
+-| Sandbox | rootless Podman + gVisor if present | gVisor required, Kata/Firecracker tier |
++| Secrets | `.env` holds non-secret settings only; secrets are compose file secrets generated by `install.sh`, each attached only to the services that need it (§12) | Vault, injected at dispatch |
++| Sandbox | rootless Podman + gVisor (`runsc` ships in the bundle; if the kernel cannot run it, `slas doctor` says so and sandboxes fall back to hardened runc, labelled as such on every ticket) | gVisor required, Kata/Firecracker tier |
+ | Screen worker | one Xvfb display per session, VNC for the operator | same, plus per-session display isolation on Kata |
+ | Inference | 1 coder + 1 embed + 1 small triage instance | dedicated instance per role, blue/green |
+ | Observability | Prometheus + Grafana | + Loki, Tempo, alerting |
+ | Backups | nightly dump + snapshots, 14 days | pgBackRest PITR, object-lock, restore drills |
+ 
+-`install.sh`: preflight (`slas doctor`) → generate `.env` → load images → copy models →
+-`docker compose up -d` → wait healthy → print URL and one-time admin password. Idempotent.
+-Anything mandatory in quickstart has zero manual setup.
+-
+-The `slas` CLI mirrors the WebUI: `doctor`, `status`, `logs`, `user add`, `model
+-scan|fit|swap|test`, `toolchain list|add`, `skill import|export|validate`, `backup now|restore`,
+-`upgrade`. The bundle ships the offline **toolchains** (Python 3.11/3.12, gcc/clang, Rust, Go,
+-Node, shell tooling, yamllint/jsonschema); `slas toolchain list` shows what is available.
++`install.sh`: verify the bundle signature and manifest → preflight (`slas doctor`) → generate
++`.env` and secrets (only if absent; a re-run never changes `SLAS_SECRET_KEY`) → load and verify
++images → copy models → seed the data root (shipped skills, templates, config) → `docker compose
++up -d` → wait healthy → on first run print the URL and a one-time admin password; on a re-run
++print that the admin already exists. Idempotent. Anything mandatory in quickstart has zero
++manual setup. The bundle is `slas-bundle-<version>/` with a `MANIFEST.json` (version, git SHA,
++every image with its verified image id, every model and toolchain with a sha256, OS packages)
++and a detached signature whose public key fingerprint is printed in the delivery note.
++
++The `slas` CLI mirrors the WebUI: `doctor`, `status`, `logs`, `user add|deactivate`, `model
++scan|fit|swap|test`, `toolchain list|add`, `skill import|export|validate`, `git remote
++add|test|rotate|rm`, `git push|pull`, `git bundle export|import`, admin `git hosts list|add|rm`,
++`backup now|restore`, `secret rotate`, `knowledge reindex`, `upgrade <bundle>` (verify signature
++→ preflight → load images → skip models whose hashes already verify → migrate the schema → recreate
++services; `slas doctor` reports the previous version for rollback). The bundle ships the offline
++**toolchains** (Python 3.11/3.12, gcc/clang, Rust, Go, Node, shell tooling, yamllint/jsonschema)
++under `Toolchains/<lang>/<version>/` with a manifest and sha256 each, bind-mounted read-only into
++every sandbox; `slas toolchain list` shows what is available.
+ 
+ ---
+ 
+@@ -142,12 +154,12 @@
+ | Zone | What runs | Network | Runtime |
+ |---|---|---|---|
+ | **0 Control** | api, orchestrator (kernel), gateway, model-manager | backend | plain containers |
+-| **A Code sandbox** | model-authored code; optional virtual desktop | none / allowlist proxy | gVisor, Kata tier |
++| **A Code sandbox** | model-authored code; optional virtual desktop | none (project dependencies come from the read-only offline package cache mounted into the sandbox) | gVisor, Kata tier |
+ | **B Validation executor** | deterministic executor + HAL | lab VLAN only | plain container, sole lab member |
+ | **B′ Factory executor** | deterministic executor + station runner client | factory LAN only | plain container, sole factory member |
+-| **G Git broker** | clone/pull/push with injected credentials; bundle export/import | backend + `slas-git` (allowlisted Git hosts only) | plain container, no sockets, sole `slas-git` member |
++| **G Git broker** | clone/pull/push with injected credentials on broker-owned mirrors; bundle export/import | backend + `slas-git` (allowlisted Git hosts only) | plain container, no sockets, sole `slas-git` member; never opens a workspace `.git` |
+ | **C Inference** | vLLM instances | inference net, no egress | GPU containers, managed |
+-| **S Screen worker** | Xvfb + VNC + screen driver, per session | none (talks to orchestrator only) | gVisor |
++| **S Screen worker** | Xvfb + VNC + screen driver, per session | `slas-screen` (orchestrator) + `slas-frontend` (operator noVNC via edge); no egress | gVisor |
+ | **D Targets** | servers, stations | lab / factory | not ours |
+ 
+ Zone A and Zone S never talk to vLLM. The kernel calls the gateway, then sends concrete
+@@ -191,9 +203,9 @@
+  │ no creds, no │ ┌──────────────────────────────────────────────────────────────────────┐
+  │ route out    │ │ ZONE G  GIT BROKER — the only holder of Git credentials and the only │
+  └──────────────┘ │         route to remotes. Creds encrypted by reference, decrypted in  │
+-                  │         memory per operation. Hooks neutralised · validation gate ·   │
+-                  │         branch push · PR/MR · bundle export/import. Works on the SAME │
+-                  │         Projects/<slug>/.git that Zone A commits to locally.          │
++                  │         memory per operation. Broker-owned mirrors · SHA-pinned gate ·│
++                  │         branch push · PR/MR · bundle export/import. Syncs with the   │
++                  │         workspace repo through bundles; never opens it directly.     │
+                   │                                     slas-git ──► allowlisted Git hosts│
+                   └──────────────────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────┐   ┌──────────────────────────────┐
+@@ -213,37 +225,49 @@
+ ### 4.3 Tech stack
+ Frontend TypeScript 5 strict, React 18, Vite, Tailwind, shadcn/ui, TanStack Query/Table,
+ react-hook-form + zod. Backend Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic,
+-Postgres 16, Redis 7, MinIO, `uv`. AI: vLLM (offline), Qdrant, Postgres FTS. Sandbox:
+-rootless Podman, gVisor, Kata. Screen: Xvfb, x11vnc/noVNC, PyAutoGUI + xdotool behind our
+-driver. Git: system `git` in the broker and in sandbox images; xterm.js terminal into the
+-sandbox; `git bundle` for offline transfer. Observability: Prometheus, Grafana, DCGM,
+-node/postgres exporters; prod Loki/Tempo.
+-
+-**Rejected:** Docker-in-Docker (needs privileged or a socket) · host X11 socket or
+-`/dev/input` sharing into any agent container (INV-4) · SearXNG as an air-gapped search
+-(it is a proxy to Google/Bing and returns nothing offline — see §8.3) · tokens embedded in
+-remote URLs · SSH keys or credential helpers inside a workspace · running a workspace's
+-git hooks inside the broker (INV-14).
++Postgres 16, Redis 7, MinIO, `uv`. AI: vLLM (offline, version pinned in `Models/models.yaml`),
++Qdrant, Postgres FTS for English plus a Chinese-capable index (open decision 15). Sandbox:
++rootless Podman, gVisor, Kata. Screen: Xvfb with a minimal EWMH window manager (openbox, no
++panel), x11vnc/noVNC, PyAutoGUI + xdotool behind our driver; accessible-name targeting through
++AT-SPI (`pyatspi`), text targeting through Tesseract OCR, template images through OpenCV. PDF:
++WeasyPrint with bundled Noto Sans CJK TC. Git: system `git` in the broker and in sandbox images;
++xterm.js terminal into the sandbox; `git bundle` for offline transfer. Observability: Prometheus,
++Grafana, DCGM, node/postgres exporters; prod Loki/Tempo. Pre-approved libraries (pinned in
++`uv.lock`): asyncssh, httpx, pyghmi, openpyxl, jsonschema, structlog, Pillow; binary: gitleaks.
++Anything not listed here still needs a question first (§0.3).
++
++**Rejected:** Docker-in-Docker (needs privileged or a socket; the two managers that hold the
++engine socket are the INV-4 exception) · host X11 socket or `/dev/input` sharing into any agent
++container (INV-4) · SearXNG as an air-gapped search (it is a proxy to Google/Bing and returns
++nothing offline — see §8.3) · tokens embedded in remote URLs · SSH keys or credential helpers
++inside a workspace · running git inside the broker against a workspace's `.git`, hooks or config
++included (INV-14).
+ 
+ ### 4.4 Filesystem layout
+ 
+ ```
+-${SLAS_DATA_ROOT}/                       # default /AI/Agent
++${SLAS_DATA_ROOT}/                       # default /AI/Agent; <user> is the immutable user id, never the login
+ ├── Coding/<user>/
+-│   ├── Container/<session>/                 # ephemeral sandbox overlay, reaped on TTL
+-│   ├── Projects/<slug>/.git                 # THE local repo — durable, bind-mounted rw into the sandbox
+-│   ├── Artifacts/<run>/                     # zips, walkthroughs
+-│   └── Bundles/                             # git bundle exports/imports for offline transfer
+-│   # Remotes and credentials are NOT on disk here — they live in the broker's encrypted store (§5.7)
+-├── Validation/{Suites/,Plans/,Runs/<run>/{journal.jsonl,baseline/,cycles/<n>/,findings/,report/}}
+-├── Factory/{Templates/,Jobs/<ticket>/{journal.jsonl,screens/,logs/,report/},Stations/<n>/backup/}
+-├── Tickets/<ticket-id>/                 # every agent; see §5.4
+-├── Skills/{library/<id>.skill.yaml, imported/, compiled/}
++│   ├── Container/<ticket-id>/               # ephemeral sandbox overlay, reaped on TTL after the ticket closes
++│   ├── Projects/<slug>/.git                 # THE local repo — durable, bind-mounted rw into the sandbox; slug ^[a-z0-9][a-z0-9-]{0,63}$
++│   ├── Artifacts/<ticket-id>/               # zips, walkthroughs
++│   └── Bundles/                             # git bundle exports/imports for offline transfer and for broker sync
++│   # Credentials are never on disk here; .git/config may hold a remote URL (not a secret) after a broker clone (§5.7)
++├── GitBroker/<user>/<slug>.git          # broker-owned bare mirrors (§5.7); never mounted into any sandbox
++├── Docs/<remote-name>/.git              # broker-owned clones for "Publish to repo" (§5.7)
++├── Toolchains/<lang>/<version>/         # offline toolchains + package cache; manifest.yaml + sha256; read-only in every sandbox
++├── Validation/{Suites/,Plans/,Runs/<ticket-id>/{journal.jsonl,baseline/,cycles/<n>/,findings/,report/}}
++├── Factory/{Templates/,Jobs/<ticket-id>/{journal.jsonl,screens/,logs/,report/}}
++├── Tickets/<ticket-id>/                 # every agent: ticket.json + manifest.json listing every file of the ticket with kind and sha256 (§5.4)
++├── Skills/{library/<id>.skill.yaml (shipped), imported/<id>.skill.yaml (user imports), compiled/<ticket-id>/}
+ ├── SOP/<ticket-id>/{sop.en.md, sop.zh-Hant.md, sop.json}
+-├── Models/{models.yaml, <model-id>/}
++├── Models/{models.yaml, <model-id>/}    # <model-id>/model.yaml carries family, quant, licence and per-file sha256
+ ├── Knowledge/{datasheets/,test-specs/,runbooks/,past-reports/,ingest-manifest.yaml}
+-├── Backups/{postgres,qdrant,minio,stations}/
+-└── .env
++├── Backups/{postgres,qdrant,minio,stations/<n>/<ticket-id>/,keys}/
++└── secrets/                             # compose file secrets written by install.sh, mode 0600 (§12)
++# .env lives outside the data root in ${SLAS_CONFIG_DIR} (default /etc/slas) and holds no secret.
++# The filesystem is the record for tickets, journals, run evidence and repos; MinIO holds Knowledge
++# documents and a mirror of closed tickets' evidence for backup.
+ ```
+ 
+ ---
+@@ -253,21 +277,23 @@
+ ### 5.1 Agent Kernel — the lifecycle every agent runs
+ 
+ ```
+-INGEST      input arrives (plan.md · suite.xlsx · production ticket)
+-   │        kernel.ingest() → normalized Job
+-TICKET      kernel.ticket.create(job)  → T-xxxx, state=Open        ← automatic, always
+-   │        links: user, agent, inputs, target/sandbox, approvals needed
+-PLAN        agent.plan(job) → structured Plan (JSON-Schema)
+-   │        if plan has destructive steps → approval request (INV-7)
+-   │        if plan is critical → Consensus Router (§5.3) → votes attached to ticket
++INGEST      input arrives (plan.md · suite.xlsx · production ticket · label scan · manual trigger)
++   │        kernel receives the raw input, calls agent.ingest(raw) → Job, validates the Job schema
++TICKET      kernel.ticket.create(job)  → T-<agent>-<seq>, state=Open   ← automatic, always
++   │        links: user (the triggering principal), agent, inputs, target/sandbox, approvals needed
++PLAN        agent.plan(job) → structured Plan (JSON-Schema); referenced skills are compiled
++   │        into the Plan here (§5.6) so the approved artefact is complete and hashable
++   │        if plan has destructive steps → approval request bound to plan_hash (INV-7)
++   │        if the decision is listed in §5.3 → Consensus Router → votes attached to ticket
+ ACT         deterministic executor runs the Plan step by step        (INV-3)
+    │        every step: journal write-ahead · stdout/stderr captured · screenshots for GUI
+-   │        skills (§5.6) expand into steps here
++   │        Coding only: the kernel calls agent.iterate() in a bounded loop; every Step it
++   │        returns still runs on the executor, never on the platform host
+ COLLECT     kernel.logs.collect() → normalized log bundle on the ticket
+ RCA         kernel.rca(bundle) → root-cause analysis via RAG over logs + knowledge
+    │        + Consensus Router on the conclusion; deterministic fingerprint + owner routing
+ SOP         kernel.sop.generate() → structured SOP → EN + 中文 (§5.5)      (INV-13)
+-CLOSE       ticket state → Done / Needs review / Failed; exports attached
++CLOSE       ticket state → Done / Needs review / Failed / Aborted / Cancelled; exports attached
+ ```
+ 
+ `slas_kernel` exposes exactly one abstract class:
+@@ -275,14 +301,28 @@
+ ```python
+ class Agent(Protocol):
+     name: Literal["coding", "validation", "factory"]
+-    def ingest(self, raw: Upload | MesTicket) -> Job: ...
++    def ingest(self, raw: Upload | MesTicket | LabelScan | ManualTrigger) -> Job: ...
+     def plan(self, job: Job) -> Plan: ...          # returns steps from the primitive whitelist
+-    def verify(self, step: Step, obs: Observation) -> Verdict: ...
++    def iterate(self, job: Job, state: LoopState) -> list[Step] | Done: ...  # Coding only; kernel bounds it
++    def verify(self, step: Step, obs: Observation) -> StepResult: ...        # pass | fail | retry
+     def sop_template(self) -> SopTemplate: ...     # agent-specific sections, kernel renders
+ ```
+ 
+ Everything else — tickets, journal, log collection, RCA, SOP rendering, cross-check,
+ skill expansion, approvals, exports — is kernel code and is **forbidden in agent modules**.
++Ticket persistence and its REST surface live in `apps/api`; `slas_kernel` (in the orchestrator)
++is the only writer and owns the transition rules. `ConsensusVerdict` (§5.3) and `StepResult`
++are different types; neither is ever accepted where an `Approval` is required.
++
++**ACT recovery.** Leases live in Postgres `{resource, ticket, holder, expires_at,
++heartbeat_at}`; executors heartbeat every 30 s and the api expires a lease after three missed
++heartbeats. Executors mount their data subtree and write the journal themselves through the
++kernel journal module; the `intent` record is fsynced before dispatch. On start an executor
++scans for `intent` records without `observation`: for a step with physical effect it re-reads
++the target state, records it, and moves the run to *Needs review* for a human to resume; for
++any other step it re-runs it. Step ids are stable, so a resumed run never duplicates journal
++entries or child tickets. Sandbox TTLs are suspended while a ticket is Running or a terminal
++is attached.
+ 
+ ### 5.2 OS Automation Interface
+ 
+@@ -291,24 +331,54 @@
+ | Driver | Reaches | Used by | Runs where |
+ |---|---|---|---|
+ | `screen` | keyboard, mouse, windows, screenshots, clipboard | all three | Zone S (virtual display) or the **station runner** on a physical station |
+-| `inband` | SSH: commands, files, system config | Validation, Factory, Coding (inside sandbox) | executor / sandbox-manager |
++| `inband` | commands, files, system config — over SSH on targets and stations; over the sandbox-manager exec API inside a sandbox (no network) | Validation, Factory, Coding (inside sandbox) | executor / sandbox-manager |
+ | `oob` | BMC: Redfish/IPMI power, SEL, SOL, inventory, PDU | Validation | Zone B |
+ | `files` | read/write within the job's workspace | all three | sandbox / executor |
+ 
+ **Screen driver rules**
+ - Backed by PyAutoGUI + xdotool on an **Xvfb display the platform owns**, one per session,
+   exposed to the operator through noVNC so they can watch and take over.
+-- On physical stations, a small **station runner** daemon (Python, signed step batches over
+-  mTLS) performs the same primitives locally. The platform never receives the station's
+-  raw display device; it receives screenshots and results.
+-- Every GUI step: screenshot before, screenshot after, both attached to the ticket.
+-  Targets are found by **window title / accessible name / template image**, never by
+-  bare coordinates unless the recipe author supplies them explicitly.
+-- Rate limit ≤ 10 actions/s, deny-list of windows (terminal emulators on the platform
+-  host, password managers), and a hard stop if the focused window changes unexpectedly.
++- `focus_window` is `xdotool search` plus `windowactivate --sync`; the hard stop polls
++  `_NET_ACTIVE_WINDOW` at 10 Hz. Both need the EWMH window manager the screen-worker image
++  starts on every display.
++- For Coding desktop sessions the screen worker publishes the session's X socket on a
++  per-session tmpfs volume that sandbox-manager mounts read-write into that one sandbox
++  (`DISPLAY=:N`); no host X socket is involved (INV-4). Validation GUI sessions reach a BMC
++  KVM through a per-run, authenticated TCP relay that validation-executor exposes on
++  `slas-screen`; the screen worker never joins `slas-lab`.
++- On physical stations, a small **station runner** daemon (signed step batches over mTLS)
++  implements the `ScreenPrimitives` interface with a per-OS backend (Linux: xdotool, AT-SPI,
++  Tesseract; other operating systems only after an ADR, see open decision 20). The platform
++  never receives the station's raw display device; it receives screenshots and results.
++  Runner rules: enrolment by a one-time code from Admin → Stations, certificate SAN = station
++  id, 90-day rotation, revocation list in `config/`; every batch carries ticket id, station id,
++  nonce, expiry and a monotonic sequence and is rejected otherwise; `run` and `ssh` on a
++  station are limited to executables listed per station; the runner shows an on-screen
++  "under agent control" banner and refuses steps while a human is using the keyboard or mouse.
++- Every GUI step: screenshot before, screenshot after, both attached to the ticket. When a
++  `type` step references a `secret` input the after-screenshot is withheld and the journal
++  records "typed <input name>, screenshot withheld". Targets are found by **window title /
++  accessible name / template image**, never by bare coordinates unless the recipe author
++  supplies them explicitly; `target` is a selector `{role?, name?, window?}` resolved through
++  the accessibility tree, `text` an OCR-or-accessibility match, `image` a template shipped
++  with the skill with a `confidence` (default 0.9).
++- Rate limit ≤ 10 actions/s; a per-driver deny-list of windows (password managers and any
++  terminal or remote-access client by default; on a station also the station configuration
++  tool, MES client and runner console, extended per station under Admin → Stations); a hard
++  stop if the focused window changes unexpectedly. A hard stop fails the current step with
++  reason `focus_changed`, keeps both screenshots, ignores any `on_failure: retry`, and moves
++  the ticket to *Needs review*; the lease is kept (Validation: target left as is; Factory:
++  station held).
++- Operator take-over: the VNC view is view-only until the operator clicks *Take over*, which
++  stops the driver at the step boundary, moves the ticket to *Paused (by operator)*, grants
++  exclusive input, and journals `operator_takeover`, one screenshot per second while it lasts,
++  and `operator_handback`.
+ - "Executing raw files dynamically" means: a file produced by the job may be run
+-  **inside the sandbox or on the target** via the `run` primitive, with argv, timeout,
+-  and the user's capabilities — never on the platform host.
++  **inside the sandbox** via the `run` primitive or **on the target** via `ssh`, with argv,
++  timeout, and the running user's capabilities — never on the platform host.
++- Capability names (`slas_authz`, `config/rbac-roles.yaml`): `screen`, `ssh`, `redfish`,
++  `files`, `git:*`, `approve:*`. Drivers map to capabilities: `inband` → `ssh`, `oob` →
++  `redfish`, `screen` → `screen`, `files` → `files`.
+ 
+ ### 5.3 Multi-Model Cross-Check — the Consensus Router
+ 
+@@ -321,17 +391,25 @@
+ |---|---|---|---|
+ | Plan approval (Validation, Factory) | 3 | unanimous | human decides; concerns shown |
+ | Final code change (Coding) | 3 | majority; every concern surfaced | user addresses or dismisses with a note |
+-| Ticket diagnosis: owner / severity / root cause | 3 | majority **per field** | field marked "your call" |
+-| Factory PASS verdict | 3 | unanimous for PASS | line lead decides |
+-| RCA conclusion | 3 | majority | flagged "uncertain" in the report |
++| RCA: owner / severity / cause | 3 | majority **per field** | field marked "your call"; an uncertain `cause` is also flagged in the report |
++| Factory PASS recommendation | 3 | unanimous for PASS | line lead decides (a human confirms every verdict, §10.3) |
+ 
+ Not cross-checked: routine tool calls, per-line log triage, chat, anything inside a
+-deterministic loop. Budget: cross-checks ≤ 5% of daily tokens; the router degrades to
+-"single model + flagged" and alerts, never blocks work silently.
++deterministic loop. Budget: 5% of the previous 7-day average of gateway tokens across all
++generate roles, per calendar day, split per agent in `config/consensus.yaml` (defaults
++factory 50%, validation 30%, coding 20%) and exported as
++`slas_consensus_budget_tokens{agent,state}`; the router degrades to "single model + flagged"
++and alerts, never blocks work silently. Factory PASS recommendations are exempt from the
++budget and always run three voters. In the quickstart profile only two generate instances
++exist, so every verdict carries the label "2 of 3 voters — reduced cross-check" until a third
++family is added on the Models page. `config/consensus.yaml` is the only place voter count and
++budget are configured, and it is hot-reloaded.
+ 
+ Vote schema is fixed (`slas_schemas/consensus.py`): `{voter, verdict: approve|concern|reject,
+ fields: {...}, reason, confidence}`. Votes are stored on the ticket and shown in the UI as
+-sentences: *"3 of 3 agree the owner is EE. Severity: 2 say S2, 1 says S1. Your call."*
++sentences with codes rendered through `config/routing.yaml` display names: *"All 3 reviewers
++agree the owner is Electrical Engineering (EE). Severity: 2 say degraded but operable (S2),
++1 says blocks boot or loses a device (S1). Your call."*
+ 
+ **INV-11 restated:** a unanimous vote is *input to* a human approval or to the
+ deterministic gate — it never *is* the approval.
+@@ -341,19 +419,41 @@
+ Every job **is** a ticket. Schema (`slas_schemas/ticket.py`):
+ 
+ ```
+-T-<agent>-<seq>   state: Open → Planned → Approved → Running → Analysing → Needs review → Done | Failed
+-fields: agent, user, inputs[], target|sandbox, plan_id, approvals[], votes[], steps[],
+-        logs{stdout,stderr,console,screens}, findings[], rca{cause, evidence[], confidence},
+-        sop{en, zh}, exports[], parent (for bug tickets spawned from findings)
+-```
+-
+-- Created at ingest, never by hand. Child **bug tickets** are spawned from findings
+-  (`[Issue] … | [Owner] EE` format, §10.2) after deduplication by fingerprint.
++T-<agent>-<seq>   seq is a per-agent increasing integer without padding, e.g. T-coding-42
++state:  Open → Planned → Approved → Running (↔ Paused {by: operator | budget}) → Analysing → Needs review → Done | Failed
++        Cancelled (from Open, Planned or Approved: nothing executed)
++        Aborted {by: operator | guardrail} (from Running or Paused; still passes Analysing so the report exists)
++        child bug tickets start in Draft → Open ("File ticket", records the filer) | Discarded
++fields: agent, user (the triggering principal), mes_ref?, inputs[], target|sandbox, plan_id, plan_hash,
++        approvals[{approver, at, plan_hash}], votes[], steps[],
++        logs{stdout,stderr,console,screens,terminal}, findings[Finding], rca{cause, evidence[], confidence},
++        sop{en, zh-Hant}, exports[], parent (for bug tickets spawned from findings)
++Finding: {fingerprint, symptom (RichText, §5.5), component {label, bdf}, phase, owner_code, severity,
++          occurrences, evidence[]}; severity S1 blocks boot or loses a device · S2 degraded, still operable ·
++          S3 cosmetic or informational; owner codes and display names live in config/routing.yaml
++```
++
++- Created at ingest, never by hand; the wizard's final button moves the ticket from Planned
++  to Approved. Child **bug tickets** are spawned from findings after deduplication by
++  fingerprint; the `[Issue] … | [Owner] EE` line (§10.2) is the English rendering of a
++  `Finding`, exported together with its zh-Hant rendering (INV-13).
++- `Tickets/<ticket-id>/` holds `ticket.json` and `manifest.json`, rewritten by the kernel at
++  every state change, listing every file of the ticket wherever it lives (`{path, kind:
++  journal|log|screen|sol|report|sop|export|artifact|bundle|terminal, sha256, bytes}`);
++  exports, backups and retention iterate the manifest.
+ - Log collection is continuous, not at the end: stdout/stderr streamed; console (SOL)
+-  streamed; screenshots per GUI step; fence markers before every power action.
++  streamed; screenshots per GUI step; fence markers before every power action. Terminal
++  recordings are PTY output only (asciicast v2), never keystrokes, passed through
++  `config/redaction.yaml` before write.
+ - **RCA pipeline (kernel):** normalise → fingerprint → retrieve similar past tickets and
+   knowledge (RAG) → model drafts cause + evidence → Consensus Router → deterministic owner
+-  routing → human reviews. RCA never blocks the run; it runs after COLLECT.
++  routing (`config/routing.yaml`, evaluated by code after the vote) → human reviews. RCA never
++  blocks the run; it runs after COLLECT. Only structured fields (findings, rca, sop, normalised
++  log lines that passed redaction) are ever embedded or shown to a model; terminal recordings,
++  raw stdout/stderr, console captures and screenshots are never indexed (INV-5).
++- Approvals are shown to every user holding the approving capability: on the ticket detail and
++  in a "Needs you" list on Home. The user who started a run may not be its only approver for
++  an INV-7 action (`approve:*` capabilities are granted to roles other than the initiator's).
+ 
+ ### 5.5 Dual-language SOP / report generation
+ 
+@@ -363,17 +463,26 @@
+ SopModel (JSON): title, purpose, prerequisites[], steps[{n, action, expected, evidence}],
+                  checks[], results{}, findings[], next_actions[], glossary_refs[]
+         │
+-        ├─ prose fields authored by the model in English (schema-constrained)
+-        ├─ prose translated to zh-Hant by the `planner` role with the project glossary
++        ├─ every prose field is RichText {template, tokens{name: {kind: path|command|version|
++        │   number|bdf|product|identifier, value}}}: the model emits the template with
++        │   {{name}} placeholders and the tokens separately
++        ├─ templates authored by the model in English (schema-constrained)
++        ├─ templates translated to zh-Hant by the `planner` role with the project glossary
+         │   pinned (docs/glossary.yaml: e.g. "power cycle" → 電源循環, "baseline" → 基準)
+-        ├─ identifiers, commands, versions, numbers, paths, BDFs: copied by code
+-        └─ renderers: sop.en.md, sop.zh-Hant.md (+ .pdf via local WeasyPrint), sop.json
++        ├─ tokens substituted verbatim by the renderer in both languages: never translated
++        └─ renderers: sop.en.md, sop.zh-Hant.md (+ .pdf via WeasyPrint in the api image with
++            bundled Noto Sans CJK TC; a render with any missing glyph fails the export), sop.json
+ ```
+ 
+-Default Chinese is **Traditional (zh-Hant)**; Simplified is a Settings toggle. Eval suite
++Chinese is **Traditional (zh-Hant)**. Simplified Chinese is out of scope for v1; adding it
++needs an ADR covering a deterministic converter, a `zh-Hans` glossary column, `sop.zh-Hans.md`
++and the `lang` metric values. `docs/glossary.yaml` schema: `terms: [{key, en, zh-Hant,
++do_not_translate: bool, note}]`, seeded before P5 with every §14 term, the product and agent
++names, and the owner and severity codes; CI fails when a §14 term is missing. Eval suite
+ includes a back-translation spot check and a terminology-consistency check against the
+ glossary. Agent-specific SOP shape: Coding → code walkthrough; Validation → verification
+-SOP; Factory → production line SOP.
++SOP; Factory → production line SOP. The WebUI itself is English (open decision 17); every
++export is EN + zh-Hant.
+ 
+ ### 5.6 User skills — import, compile, run, export
+ 
+@@ -383,23 +492,30 @@
+ 
+ ```
+ IMPORT     schema validation (jsonschema) → primitive whitelist check →
+-           capability check (skill requires [screen, ssh] → user must hold them) →
+-           risk classification (safe / caution / destructive) → stored under Skills/library
+-COMPILE    `{{ inputs }}` bound · secrets resolved to handles · loops unrolled (bounded)
+-           → flat StepPlan the executor understands; identical for all agents
+-RUN        each step journalled; screen steps screenshot before/after; `run` steps capture
++           capability preview (skill requires [screen, ssh] → warn if the importer lacks them) →
++           risk classification (safe / caution / destructive: the maximum of primitive risk and
++           the skill's declared `effects`, using config/guardrails.yaml) → stored under
++           Skills/library (shipped) or Skills/imported (user imports; id collisions refused)
++COMPILE    runs inside PLAN (§5.1): `{{ inputs }}` bound · secrets resolved to handles · loops
++           unrolled (bounded) → flat StepPlan embedded in the Plan with skill_content_hash;
++           the frozen copy is stored under Skills/compiled/<ticket-id>/; identical for all agents
++RUN        capability check against the running user, then per-step authz at the executor;
++           each step journalled; screen steps screenshot before/after; `run` steps capture
+            stdout/stderr; failures follow on_failure
+ EXPORT     the stored YAML, with secrets stripped and a content hash
+ ```
+ 
+-Skills never grant capabilities — they consume the importing user's. A skill containing a
+-destructive primitive shows the approval requirement at import time and at every run.
++Skills never grant capabilities — every run is authorised against the running user. A skill
++classified destructive shows the approval requirement at import time and at every run; the
++approval covers the compiled StepPlan by hash, so a changed skill needs a new approval.
+ 
+ ### 5.7 Hybrid Git Control Engine
+ 
+ Two ways to work with Git, one repository, one rule: **the sandbox never holds a credential
+-and never has a route to a remote** (INV-14). Both methods operate on the same
+-`Projects/<slug>/.git`.
++and never has a route to a remote** (INV-14). Both methods end in the same
++`Projects/<slug>/.git`; the broker reaches it only through bundles and a broker-owned mirror,
++because the workspace `.git` is writable by model-authored code and is therefore untrusted
++input.
+ 
+ ```
+       WebUI Git panel · `slas git …` · agent kernel "publish" step
+@@ -421,62 +537,85 @@
+ 
+ | Rule | Detail |
+ |---|---|
+-| Storage | `Remote {id, owner, name, uri (no secret), host, auth_type: pat\|ssh_key, credential_ref, fingerprint, allowed_ops, default_branch, last_used}`. The secret is AES-GCM encrypted with a key derived from `SLAS_SECRET_KEY` (quickstart) or held in Vault KV (prod), referenced by `credential_ref`. |
+-| Use | Decrypted inside `git-broker` for one operation. PAT via `GIT_ASKPASS` helper reading an inherited fd (never argv, never in the URL). SSH key written to a per-op tmpfs file, mode 0600, `GIT_SSH_COMMAND="ssh -i <f> -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<pinned>"`, shredded after. |
+-| Hostile-repo hardening | Every invocation: `GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0` and `-c core.hooksPath=/var/empty -c core.fsmonitor=false -c credential.helper= -c core.sshCommand= -c include.path=`. Repo config written by a model or a user never executes code inside the broker. |
+-| Egress | `git-broker` is the **only** member of the `slas-git` network, which egresses only to hosts in `config/git-hosts.yaml`. Quickstart default: internal GitLab/Gitea. `github.com`/`gitlab.com` require an ADR (INV-1 exception) and a per-host allow entry. A disallowed host fails with: *"github.com is not an allowed Git host. Allowed: gitlab.internal, gitea.internal."* |
+-| Push policy | Default: push to a branch, open a PR/MR when the host API is known (GitLab, Gitea, GitHub). Direct push to a protected branch needs `git:push_protected` (off by default). |
+-| Validation gate (every push) | changes inside the project path · secret scan (gitleaks) · no new hooks, submodules, or symlinks escaping the tree · size and file-count sane · LFS off unless enabled · **agent-authored diffs also pass the Consensus Router** (§5.3) |
+-| UI | Paste-only fields, never echoed back; after save the UI shows only the SSH fingerprint or PAT last-4. "Test connection" runs `ls-remote`. Rotate / delete / expiry. Recommend deploy keys or project tokens over personal credentials. |
+-| Audit | One row per operation: user, remote, op, branch, commit SHA, result, duration. Credentials are redacted at the logging boundary; a CI check greps every log sink for token/key patterns. |
++| Storage | `Remote {id, owner, name, uri (no secret), host, username (non-secret; per-host default from git-hosts.yaml: GitLab oauth2, GitHub x-access-token, Gitea any), auth_type: pat\|ssh_key, credential_ref, api_token_ref?, protected_branches: [glob] (default [default_branch]), fingerprint, allowed_ops, default_branch, last_used}`. The api forwards the pasted secret unmodified to `git-broker` over the backend network and never logs or persists it; the broker encrypts it AES-GCM with a broker-only key (`SLAS_GIT_KEK`, a compose secret present in no other container, or Vault KV in prod) and stores it in a table owned by a Postgres role only the broker uses; `slas_api` has no grant on it. `slas secret rotate` re-encrypts every row; `slas backup now` writes a passphrase-wrapped escrow of the key to `Backups/keys/`, never beside the dump. |
++| Use | Decrypted inside `git-broker` for one operation. PAT via a `GIT_ASKPASS` helper reading an inherited fd (never argv, never in the URL); the broker sets `-c credential.username=<username>` so the helper is asked only for the password, and it exits non-zero on any other prompt. SSH key written to a per-op tmpfs file, mode 0600, `GIT_SSH_COMMAND="ssh -F /dev/null -i <f> -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<per-op file rendered from git-hosts.yaml ssh_host_keys>"`, shredded after. Host keys are maintained under Admin → Git hosts, never learned from the network. |
++| Untrusted workspace | The broker **never opens `Projects/<slug>/.git`** as its repository: a `.git/config` the sandbox can write would redirect a credentialed push (`url.*.insteadOf`, `remote.*.pushurl`), execute commands during pull, diff or merge (`filter.*`, `diff.*.textconv`, `merge.*.driver`, `core.gitProxy`) and follow `[include]` directives; no git switch disables repository config, and `-c include.path=` is rejected by git. Instead the broker keeps a private bare mirror per project (`GitBroker/<user>/<slug>.git`, owned by the broker uid, mounted into no sandbox). Workspace → mirror: a `git bundle` created inside the sandbox through the sandbox-manager exec API and fetched by the broker with `git --git-dir=<mirror> fetch <bundle>`; mirror → workspace: a bundle fetched inside the sandbox. clone, fetch, push and ls-remote run only against the mirror with `GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 HOME=/nonexistent -c core.hooksPath=/var/empty -c core.fsmonitor=false -c credential.helper= -c protocol.allow=never -c protocol.https.allow=always -c protocol.ssh.allow=always -c transfer.fsckObjects=true -c submodule.recurse=false --no-recurse-submodules`; the remote URI always comes from the Remote record on argv, never from a remote name. The broker never runs checkout, merge, add, diff, status or a scanner against a worktree: pull is fetch into the mirror plus a merge executed inside the sandbox; clone is fetch into the mirror plus `git clone --no-checkout` from the mirror into `Projects/<slug>/` and a checkout inside the sandbox. Every broker operation takes an exclusive project lease through the api; while held, the exec API rejects git write commands and the Terminal and Git panel show "Sync in progress". |
++| Egress | `git-broker` is the **only** member of the `slas-git` network. The allowlist lives in Postgres (table `git_hosts`, edited under Admin → Git hosts by `git:hosts_manage`, audited); `config/git-hosts.yaml` is the seed applied by `install.sh`. Enforced at two layers: the broker resolves and checks the host before spawning git, and `install.sh` renders the table into a host nftables set bound to the `slas-git` bridge, refreshed on change. Quickstart default: internal GitLab/Gitea. `github.com`/`gitlab.com` require an ADR (INV-1 exception) and a per-host allow entry. A disallowed host fails with the three-part message the demo already shows: what happened *"github.com is not an allowed Git host. The remote was not saved and nothing was sent anywhere."* · likely cause *"This installation is air-gapped and has no route to github.com."* · what to do *"Use one of the allowed hosts (gitlab.internal, gitea.internal), or ask an admin to allow github.com under Admin → Git hosts. Allowing an outside host needs an ADR."* The audit row records the resolved URL. |
++| Push policy | Default: push to a branch, then open a PR/MR through the host API using `api_token_ref` (GitLab, Gitea, GitHub); without an API token the broker uses GitLab push options where supported, otherwise pushes the branch and shows the link to open the request by hand. Direct push to a branch matching `protected_branches` needs `git:push_protected` (off by default). |
++| Validation gate (every push and every bundle export) | Operates on an immutable snapshot: the broker resolves the branch tip to a SHA, fetches that SHA into its mirror, runs every check on the mirror's objects, then pushes `<sha>:refs/heads/<branch>` from the mirror; the audit row records gated SHA = pushed SHA. Checks: every commit in `<remote-tip>..<sha>` touches only the project path · secret scan (gitleaks) over every blob in the range, including blobs deleted in later commits, before any diff reaches a model (INV-5) · no hooks, submodules, or symlinks escaping the tree (`git ls-tree -r`) · size and file-count sane · LFS pointers refused unless enabled · **every commit not recorded on the ticket as user-authored through the terminal audit log passes the Consensus Router** (§5.3); trailers are informational only. |
++| UI | Paste-only fields, never echoed back; after save the UI shows only a fingerprint: the SSH key fingerprint, or for a PAT the first 8 hex characters of its SHA-256. "Test connection" runs `ls-remote`. Rotate / delete / expiry. Recommend deploy keys or project tokens over personal credentials. |
++| Audit | One row per operation: user, remote, op, branch, gated and pushed SHA, resolved URL, result, duration. The broker registers each decrypted value with the `slas-redact` redactor for the operation's lifetime; the deploy test runs a full clone/push cycle against a fake host with a known canary PAT and key and asserts the canaries appear in no log sink, workspace file, argv or model context. |
+ 
+ **Method 2 — Workspace-local Git (inside the sandbox)**
+ 
+ | Rule | Detail |
+ |---|---|
+-| Identity | `git init` at project creation; `user.name = <display name>`, `user.email = <user>@slas.local`, per user, set in the sandbox's `GIT_CONFIG_GLOBAL`. |
+-| Agent commits | Carry trailers `Slas-Agent: coding` and `Slas-Ticket: T-…` so history shows what the agent did versus the user. |
+-| Terminal | xterm.js over WebSocket, executing **inside the sandbox** as the workspace user — same isolation as the agent, TTL, session recorded to the ticket with secrets redacted. Never a shell on the platform host. |
++| Identity | `git init` at project creation; `user.name = <display name>`, `user.email = <login>@slas.local` (cosmetic; the immutable user id is on the ticket), set in the sandbox's `GIT_CONFIG_GLOBAL`. Every user's sandbox runs as a dedicated subordinate uid. |
++| Agent commits | Carry trailers `Slas-Agent: coding` and `Slas-Ticket: T-…` so history shows what the agent did versus the user; the orchestrator also records every SHA it creates on the ticket, which is what the gate trusts. |
++| Terminal | xterm.js over WebSocket, executing **inside the sandbox** as the workspace user — same isolation as the agent; bound to the ticket whose sandbox it is (idle TTL 60 min, extended while an agent step or terminal input is active, 5-minute warning); PTY output recorded to the ticket (asciicast v2, never keystrokes) through `slas-redact`. Never a shell on the platform host. |
+ | File explorer | Shows git status decorations; Commit and History panels call `git` in the sandbox through the sandbox-manager exec API (argv only). |
+-| Remotes | None reachable. `git remote -v` may show a URL (not a secret) after a broker clone; `git push` fails with no route and the UI explains: *"Push happens from the Git panel, which uses your saved remote."* |
+-| Offline sync | `git bundle create` / `git bundle verify` + fetch through the Git panel → `Bundles/`. This is the air-gap-native way to move history between sites. |
++| Remotes | None reachable. After a broker clone `.git/config` may hold a remote URL (not a secret); the broker never reads it. The sandbox image's `git` is a thin wrapper: for push, pull, fetch or clone to a non-file URL it appends the three-part message — what happened *"This sandbox cannot reach Git remotes."* · likely cause *"Remotes are reached only by the Git broker, with your saved remote."* · what to do *"Push from the Git tab."* |
++| Offline sync | `git bundle create` / `git bundle verify` + fetch through the Git panel → `Bundles/`. This is the air-gap-native way to move history between sites. A bundle export runs the same validation gate as a push over the exported range; the gate result and the bundle's content hash are recorded on the ticket. |
+ 
+ **Shared rules**
+ 
+ - Validation and Factory use the same engine: any ticket export (SOP, plan, report) has
+-  *Publish to repo*, which commits to a configured docs remote through the broker.
++  *Publish to repo*, which commits to a configured docs remote through the broker using a
++  broker-owned clone under `Docs/<remote-name>/.git`; the same gate applies.
+ - Capabilities (`slas-authz`): `git:remote_manage` (own remotes) · `git:clone` · `git:pull`
+   · `git:push_branch` · `git:push_protected` (default off) · `git:bundle` · `git:terminal`
+   · admin `git:hosts_manage`.
++- Slug grammar `^[a-z0-9][a-z0-9-]{0,63}$`, enforced by the api. The broker resolves every
++  workspace path with realpath, requires the prefix `/data/Coding/<user>/Projects/<slug>` and
++  a real `.git` directory (no `gitdir:` file, opened `O_NOFOLLOW`), and passes
++  `-c safe.directory=<exact realpath>` where it must touch one, never `*`.
+ - A clone lands in `Projects/<slug>/` and is immediately visible to the sandbox; a push
+-  never moves files — it reads the repo the sandbox already committed to.
++  never moves files — it reads the commits the sandbox already made, through the mirror.
+ - Models see `remote_ref: gitlab-firmware`, never a URI with credentials, never a key.
++- This design is recorded in ADR-0003 "Git broker: credentials only in git-broker".
+ 
+ ---
+ 
+ ## §6 SKILL RECIPE SPECIFICATION
+ 
+-### 6.1 Schema (`packages/slas-schemas/skill.schema.json` is generated from this)
++### 6.1 Schema (`skills/schema/skill.schema.json` is generated from this by `slas-schemas`)
+ 
+ ```yaml
+ skill:
+-  id: string                    # slug, unique in the library
++  id: string                    # slug, unique across library/ and imported/
+   name: string                  # shown in the UI
+   version: semver
+   description: string
+   agents: [coding | validation | factory]       # where it may be enabled
+-  requires: [screen | ssh | redfish | files | network]   # capabilities the user must hold
+-  timeout_s: int                # whole-skill wall clock, default 900
++  requires: [screen | ssh | redfish | files]    # capabilities the running user must hold
++  effects: [none | station_config | bios_settings | power]   # declared side effects; required when
++                                #   requires includes screen or ssh on validation/factory; import
++                                #   classifies station_config and bios_settings as destructive
++  timeout_s: int                # whole-skill wall clock, default 900; every wait counts against it
+   inputs:                       # bound at run time; {{ name }} in steps
+     <name>: { type: string|int|bool|path|target_ref|secret, required: bool, default: any }
++                                # a secret may be referenced only by type.text and by the env
++                                # argument of run/ssh; any other reference fails import
+   steps: [ <step>, ... ]        # ≤ 200 after loop expansion
+   on_failure: stop | screenshot_and_stop | continue | { retry: { max: int, delay_s: int } }
++                                # retry never applies to a destructive step
+   outputs:                      # optional, exposed to the parent plan / SOP
+-    <name>: { from: <step_id> }
+-  sop_summary: { en: string, zh: string }        # optional; kernel generates if absent
++    <name>: { from: <step_id>, field?: string }   # field defaults to the primitive's primary output
++  sop_summary: { en: string, zh: string }        # optional; if present both are required; kernel generates both if absent
+ ```
+ 
+-A step is `{ <primitive>: { <args> }, id?: string, when?: <expr> }`.
++A step is `{ id?: string, when?: <expr>, <primitive>: { <args> } }`; `id` sits at step level.
++
++**Expression language (INV-12: no eval).** `{{ path }}` is pure substitution of a dotted path
++rooted at `inputs.` or `steps.<id>.` (no filters, no calls). `when` and `condition` accept
++`<operand> (==|!=|<|<=|>|>=) <operand>` joined by `and`, `or`, `not`, where an operand is a
++path, a quoted string, an integer or a boolean; parsed by a hand-written parser in
++`slas_skills`, never by a template engine or the Python evaluator. Per-primitive outputs:
++`run`/`ssh` → `exit_code`, `stdout`, `stderr`; `redfish get_sel` and `sel_snapshot` → `file`,
++`count`; `inventory_snapshot` → `file`; `screenshot` → `file`; `wait_for` → `found`. All `path`
++values (`copy`, `run.cwd`, inputs of type `path`) are resolved with realpath against the job's
++workspace root; absolute paths, `..` components and symlink escapes fail the step before
++execution.
+ 
+ ### 6.2 Primitive whitelist (the only verbs a skill may use)
+ 
+@@ -490,10 +629,10 @@
+ | `wait_for` | `window` \| `text` \| `image`, `timeout_s` | screen | safe |
+ | `screenshot` | `name` | screen | safe |
+ | `assert_visible` | `text` \| `image`, `message` | screen | safe |
+-| `run` | `command: [argv]`, `cwd`, `expect_exit`, `timeout_s`, `capture: true` | files (sandbox) or ssh (target) | caution |
+-| `ssh` | `target: {{ target_ref }}`, `command: [argv]`, `timeout_s` | ssh | caution |
+-| `copy` | `from`, `to` (within workspace or via ssh) | files/ssh | caution |
+-| `redfish` | `target`, `action: get_power_state|get_sel|get_inventory|power_on|power_off|force_off|graceful_restart` | redfish | `get_*` safe · power actions **destructive** |
++| `run` | `command: [argv]`, `cwd`, `env: {NAME: "{{ secret }}"}`, `expect_exit`, `timeout_s`, `capture: true` | files (executes only in the job's sandbox; the compiler rejects `run` on Validation/Factory — use `ssh`) | caution |
++| `ssh` | `target: {{ target_ref }}`, `command: [argv]`, `env: {...}`, `timeout_s` | ssh | caution |
++| `copy` | `from`, `to` (within workspace or via ssh; paths canonicalised, §6.1) | files/ssh | caution |
++| `redfish` | `target`, `action: get_power_state|get_sel|get_inventory|clear_sel|power_on|power_off|force_off|graceful_restart` | redfish | `get_*` safe · `clear_sel` caution · power actions caution, covered by the run-level approval every Validation and Factory run has; AC cycle is not a skill primitive (`config/guardrails.yaml` is the destructive list) |
+ | `sel_snapshot` / `inventory_snapshot` | `target` | redfish/ssh | safe |
+ | `wait` | `seconds` (≤ 3600) | — | safe |
+ | `set` | `var`, `value` (from a previous step's output) | — | safe |
+@@ -526,8 +665,8 @@
+     - key:          { press: "Enter" }
+     - wait_for:     { window: "BurnIn v3.2", timeout_s: 60 }
+     - click:        { text: "Start test" }
+-    - ssh:          { id: status, target: "{{ station }}", command: ["burnin-ctl","status","--json"] }
+-  outputs: { burnin_status: { from: status } }
++    - { id: status, ssh: { target: "{{ station }}", command: ["burnin-ctl","status","--json"] } }
++  outputs: { burnin_status: { from: status, field: stdout } }
+   on_failure: screenshot_and_stop
+ ```
+ 
+@@ -540,10 +679,11 @@
+   requires: [redfish]
+   inputs: { target: { type: target_ref, required: true } }
+   steps:
+-    - redfish:      { id: sel, target: "{{ target }}", action: get_sel }
++    - { id: sel, redfish: { target: "{{ target }}", action: get_sel } }
+     - copy:         { from: "{{ steps.sel.file }}", to: "logs/sel-before.json" }
+-    - assert:       { condition: "{{ steps.sel.count }} < 4000", message: "SEL nearly full before clearing" }
+-  outputs: { sel_file: { from: sel } }
++    - assert:       { condition: "steps.sel.count < 4000", message: "SEL nearly full before clearing" }
++    - redfish:      { target: "{{ target }}", action: clear_sel }
++  outputs: { sel_file: { from: sel, field: file } }
+   on_failure: stop
+ ```
+ 
+@@ -555,13 +695,25 @@
+ Models page or `slas model swap`, with 24 h rollback (INV-9). vLLM has no native base-model
+ hot-swap; the Model Manager provides one by starting the candidate alongside, smoke-testing,
+ switching the gateway route, and draining the incumbent. `slas model fit` states VRAM need
+-vs. free in a sentence before any load. Quantisation: FP8 on Hopper/Blackwell, AWQ 4-bit on
+-Ada/Ampere, one BF16 reference kept for eval regression. `--enable-prefix-caching` and
+-`--guided-decoding-backend xgrammar` are mandatory on every generate instance.
++vs. free in a sentence before any load: with headroom for both, the swap is blue/green;
++otherwise it is stop-start with a stated downtime sentence, as the demo shows. 24 h rollback
++keeps the previous weights and `models.yaml` entry on disk. Quantisation: FP8 on
++Hopper/Blackwell, AWQ 4-bit on Ada/Ampere, one BF16 reference kept for eval regression. Every
++generate instance runs with structured outputs enabled (xgrammar preferred, automatic fallback)
++and prefix caching; the exact CLI flags and request field for the pinned vLLM version live in
++`packages/slas-schemas/vllm_flags.py` and are asserted by a unit test. `Models/models.yaml`
++pins the vLLM image (`runtime: {image, image_id}`); model-manager refuses any image whose id
++is not in the bundle lock. A model package is `Models/<model-id>/` with `model.yaml` (id,
++family, quant, licence, sha256 per file); `slas model scan` verifies hashes and compatibility
++and reports a mismatch in one sentence. A role without its own instance aliases another
++(quickstart: `planner` → `coder`, `rerank` → none, so search is RRF only, `voters` → the two
++generate instances with the reduced-cross-check label of §5.3).
+ 
+ ## §8 LLMOps
+ **8.1 Eval** — Ragas/TruLens configured against local vLLM only (`slas_eval/judges.py` is
+-the single construction site; CI asserts no `api.openai.com`). Gates (prod): tool-call
++the single construction site; `RAGAS_DO_NOT_TRACK` set; `tests/eval` runs nightly on the GPU
++lane under the egress-DROP job and fails on any connect attempt; PR CI runs only the harness
++wiring against the fake vLLM). Gates (prod): tool-call
+ schema validity ≥ 98%, plan validity ≥ 99%, RAG faithfulness ≥ 0.90, triage recall ≥ 0.95,
+ consensus agreement with golden labels ≥ 90%, SOP terminology consistency 100%, destructive
+ refusal without approval 100%. Golden set of labelled failures lives in `docs/golden-set/`.
+@@ -573,32 +725,62 @@
+ **8.3 Search** — Option A (default): internal corpus hybrid search over datasheets, specs,
+ past tickets and SOPs (dense + FTS → RRF → rerank). Option B: SearXNG in a DMZ with
+ allowlisted egress, an INV-1 exception needing an ADR. Never call B "air-gapped".
+-**8.4 Backups** — quickstart nightly dump + Qdrant snapshot + MinIO mirror + station
+-state backups; prod pgBackRest PITR, object-lock, quarterly restore drill with recorded RTO.
++**8.4 Backups** — run nightly by the `backup-runner` container in every profile, 14-day
++retention in quickstart: (1) Postgres dump, (2) `${SLAS_DATA_ROOT}` rsync excluding
++`Coding/*/Container/` and `Models/` (covers Projects, GitBroker mirrors, Tickets, SOP, Skills,
++Knowledge, journals and station backups), (3) MinIO mirror, (4) Qdrant snapshot (derived
++data; `slas knowledge reindex` rebuilds Qdrant and FTS from `Knowledge/ingest-manifest.yaml`
++and runs at the end of every restore), (5) passphrase-wrapped escrow of `SLAS_GIT_KEK` to
++`Backups/keys/`, never beside the dump. `slas backup restore` restores in that order and
++prompts for the escrow passphrase. Prod adds pgBackRest PITR, object-lock and a quarterly
++restore drill with recorded RTO.
++**8.5 Retention** — defaults in `config/retention.yaml`, enforced nightly by `backup-runner`
++through the ticket manifests: journals and audit rows are never deleted (compressed after
++30 d); screenshots 90 d with thumbnails 1 y; raw SOL and syslog 180 d; Artifacts 180 d;
++Bundles 30 d; the last 5 station backups per station; Container overlays 24 h after the
++ticket closes. Free space below 10% raises an alert and pauses new runs with a sentence.
++**8.6 Quotas** — `config/quotas.yaml`, enforced by the api: per user `sandboxes_concurrent 2`,
++`sandbox_cpu 4`, `sandbox_mem_gb 8`, `sandbox_disk_gb 20`, `screen_sessions 1`,
++`tokens_per_day 2M`; per resource one run per target or station. Deactivating a user revokes
++sessions and tokens, stops their sandboxes, releases their leases and deletes their Remotes and
++credential refs (audit rows kept); their tickets, SOPs and journals stay.
+ 
+ ## §9 WEBUI
+ Ten rules: plain language; one primary action per screen; say what will happen before it
+ happens; live progress for anything over 5 s; three-part errors (what happened, likely
+ cause, what to do); human time; progressive disclosure; no dead ends; dense but calm; WCAG
+-AA. Anti-patterns rejected in review: nested modals/tabs, raw JSON as primary content,
++AA. Rule 11: status is never conveyed by colour alone (every LED, vote and severity carries a
++glyph or text label and an accessible name; live updates honour `prefers-reduced-motion`;
++dialogs trap focus and return it on close). Rule 12: wizard validation errors are shown inline
++next to the field, never as toasts. Rule 13: export controls never offer one language (INV-13).
++Anti-patterns rejected in review: nested modals/tabs, raw JSON as primary content,
+ auto-refresh that steals scroll, toasts for errors that need action, settings needing a
+-restart, URL-only pages.
++restart, URL-only pages. Codes such as owner and severity are rendered through their display
++names (`config/routing.yaml`), with the code in parentheses at most.
+ 
+ **Pages:** Home · Coding · Validation · Factory · Runs · Tickets · Models · Skills ·
+-Knowledge · Admin. Adding a page needs an ADR. Inside Coding, each project has a **Git
+-panel** (Status · Commit · History · Push/Pull · Bundle) and a **Terminal** tab that runs
+-inside the sandbox. Users manage their remotes under Settings → Git remotes (paste-only
+-fields, fingerprint shown after save, "Test connection"); admins manage the host allowlist
+-under Admin → Git hosts.
++Knowledge · Settings (per user: Git remotes, report preferences; ADR-0005) · Admin (People,
++Servers, Stations, Git hosts, Settings for the installation). Adding a page needs an ADR.
++Runs lists every ticket across agents with its live state; Tickets is the detail and export
++view; both use the ticket id as the only identifier. Inside Coding, each project has a **Git
++panel** (Status · Commit · History · Push/Pull · Bundle), a **New project** action (empty
++`git init`, or clone from a saved remote through the broker with stepped progress) and a
++**Terminal** tab bound to the running task's sandbox. Users manage their remotes under
++Settings → Git remotes (paste-only fields, fingerprint shown after save, "Test connection");
++admins manage the host allowlist under Admin → Git hosts and register hardware under
++Admin → Servers (BMC address, SSH host, PDU outlet) and Admin → Stations (runner enrolment by
++one-time code); hardware credentials are paste-only into the platform credential store, the
++same encrypted-by-reference store as Git remotes. Pending approvals appear on the ticket
++and in a "Needs you" list on Home for every holder of the approving capability.
+ 
+ **Every agent has a "New …" wizard, always three steps, always ending in a sentence that
+ says what will happen and a verb button:**
+ 
+ | Wizard | Step 1 | Step 2 | Step 3 (finish) |
+ |---|---|---|---|
+-| New coding task | Plan: drop/paste `plan.md`, task name (languages are detected from the plan) | Setup: **languages only** — Python, C, C++, Rust, Shell, Go, TypeScript, YAML/JSON config — with an **optional** version per language (empty = the agent picks the newest bundled toolchain and says so); isolation, skills, cross-check, export target (ZIP · a Git remote you have added · bundle) | Review the agent's proposed steps (editable); the sentence names the resolved toolchain → **Start task** (creates T-coding-…) |
+-| New validation run | Suite: upload `.md`/`.xlsx`, see parsed items, destructive items flagged | Target: pick a free server; credentials come from the vault, never shown | Review & approve: sentence, cross-check votes, guardrails → **Approve and start** |
+-| New factory job | Trigger: scan label / MES ticket / pick station | Test loop: template, steps, skills used | Rules: voters, on-fail behaviour, exports, backup → **Start job** |
++| New coding task | Plan: project (existing or new), drop/paste `plan.md`, task name (languages are detected from the plan); the ticket T-coding-… is created here (Open) | Setup: **languages only** — Python, C, C++, Rust, Shell, Go, TypeScript, YAML/JSON config — with an **optional** version per language (empty = the agent picks the newest bundled toolchain and says so); isolation, skills, cross-check, export target (ZIP · a Git remote you have added · bundle) | Review the agent's proposed steps (editable); the sentence names the resolved toolchain → **Start task** (moves T-coding-… from Planned to Approved) |
++| New validation run | Suite: upload `.md`/`.xlsx`, see parsed items, destructive items flagged | Target: pick a free server; credentials come from the platform credential store (Admin → Servers), never shown, no per-run override | Review & approve: sentence, cross-check votes, guardrails → **Approve and start** (approval bound to the plan hash) |
++| New factory job | Trigger: scan label / MES ticket / pick station | Test loop: template, steps, skills used | Rules: the template's policy shown read-only (voters, on-fail = hold the station and notify the line lead; edited by a line lead under the template, not per job), exports, backup → **Start job** |
+ 
+ Live views: Validation's LED cycle map with console; Factory's test-step map with the
+ station screenshot strip; Coding's plan checklist with activity feed. Every finding is a
+@@ -608,8 +790,10 @@
+ 
+ ### 10.1 Coding Agent
+ ```
+-INGEST  plan.md → task breakdown (schema) → user edits/approves → ticket T-coding-n
+-ACT     Zone A sandbox (gVisor; virtual desktop via Zone S only if the plan needs an IDE/GUI)
++INGEST  plan.md → ticket T-coding-n (Open) → task breakdown (schema) → user edits/approves
++        → Planned → Approved
++ACT     Zone A sandbox (gVisor; virtual desktop via Zone S only if the plan needs an IDE/GUI;
++        project dependencies from the read-only offline package cache under Toolchains/)
+         toolchain: the user picks LANGUAGES only (Python, C, C++, Rust, Shell, Go, TypeScript,
+         YAML/JSON config); a version is optional. The agent resolves the newest version in the
+         offline toolchain bundle, records the choice on the ticket and in the first feed line,
+@@ -641,25 +825,46 @@
+         GUI steps (vendor tools with a UI, BIOS setup over KVM) run through the screen driver
+ ANALYSE fingerprint → dedup → RAG RCA → Consensus (owner/severity per field) → bug tickets
+         `[Issue] PCIe link lost on GPU3 (0000:8a:00.0) during DC cycle | [Owner] EE`
++        (the English rendering of a Finding, §5.4; the zh-Hant rendering is exported with it)
+ SOP     verification SOP EN + 中文 attached to the run and to each bug ticket
+ ```
+ Guardrails (`config/guardrails.yaml`): `max_cycles_per_run 100 · min_settle_s 10 ·
+ min_ac_settle_s 30 · boot_timeout_s 900 · consecutive_failure_abort 3 · exclusive lease ·
+ max_run_hours 72 · requires_approval [ac_cycle, firmware_flash, secure_erase, bios_reset,
+-raid_reconfigure]`.
++raid_reconfigure]`. Plan primitives (`plans/primitives/`, a superset of §6.2): `dc_cycle`,
++`ac_cycle` (PDU outlet; refused when the outlet is shared with another leased target),
++`warm_boot`, `firmware_flash`, `secure_erase`, `bios_reset`, `raid_reconfigure`, `stress
++{tool, args}`, `collect {logs}`; the `requires_approval` names are these primitives. The
++baseline records the BMC clock offset in the journal header and VERIFY diffs the SEL by
++record id, never by timestamp. Abort finishes the in-flight step so the target is in a known
++state, then moves the ticket to Aborted and releases the lease.
+ 
+ ### 10.3 Factory Agent
+ ```
+-TRIGGER production ticket from MES (adapter) · label scan · manual → T-factory-n
++TRIGGER production ticket from MES (adapter) · label scan · manual → T-factory-n (mes_ref kept)
++        an MES- or scan-triggered job runs as the station's bound principal (set by a line lead
++        at enrolment; holds factory:start_job and the template's skill capabilities, never an
++        approval capability); a manual job runs as the logged-in user
++        MES adapter interface: receive() -> MesTicket; report(ticket, status in {in_test,
++        pending_review, pass, fail, aborted}, payload{mes_ref, ticket_id, sn, station,
++        decided_by, sop paths}); file_drop reads Pydantic-validated, HMAC-signed records
++        ≤ 64 KB from a directory outside the data root; a retest of the same SN needs the
++        previous ticket's reference
+ PLAN    pick test-loop template (Factory/Templates) → steps + skills → plan.yaml
+         station lease (exclusive); unit SN bound to the ticket
++GATE    line-lead approval of the template version + Consensus Router on the plan (unanimous),
++        evaluated once per template version and re-used until the template or a skill changes
+ ACT     deterministic loop on the station via the station runner: power on → GUI login →
+         start vendor test app → read results from the screen and logs → sensors over SSH →
+         every GUI step screenshot before/after → event log must be empty
+-VERDICT Consensus Router: PASS requires 3/3; otherwise line lead decides in the UI
++VERDICT Consensus Router: a 3/3 vote pre-fills a PASS recommendation; a human (operator for
++        PASS, line lead for anything else) confirms every verdict with one click recorded on
++        the ticket (§1.3, INV-11); MES receives pending_review meanwhile
+         FAIL → unit stays on, station held, draft ticket for the line lead
+-SOP     production line SOP EN + 中文 attached to the ticket; returned to MES with verdict
+-BACKUP  station system state → Backups/stations/<n>/<ticket>/ (config, logs, app versions)
++SOP     production line SOP EN + 中文 attached to the ticket; returned to MES with the verdict
++        and the confirming user
++BACKUP  station system state → Backups/stations/<n>/<ticket-id>/ as opaque, size-capped blobs
++        from a manifest, signed by the runner; the platform never extracts station archives
+ ```
+ 
+ ## §11 CODING STANDARDS
+@@ -668,14 +873,21 @@
+ env/stdin never argv · parameterised SQL · uploads type-sniffed and size-capped, `.xlsx`
+ parsed with macros/external entities off · TypeScript strict, no `any` without a comment.
+ 
+-**Separation:** `apps/api` (authz, tickets, approvals; no hardware, no LLM) ·
+-`services/orchestrator` (kernel; never hardware directly) · `services/llm-gateway` (only
+-component talking to vLLM; hosts the Consensus Router) · `services/model-manager` (only
+-one starting inference containers) · `services/sandbox-manager` · `services/screen-worker`
+-· `services/git-broker` (only component holding Git credentials or reaching Git hosts)
+-· `services/validation-executor` and `services/factory-executor` (only ones touching
+-targets, via `slas_hal` / station runner) · `packages/slas-kernel`, `slas-hal`,
+-`slas-skills`, `slas-authz` (shared; authz runs where the action executes).
++**Separation:** `apps/api` (authz, ticket store, approvals, leases, quotas; no hardware, no
++LLM) · `services/agent-core-orchestrator` (kernel; the only ticket writer; never hardware
++directly) · `services/llm-gateway` (only component talking to vLLM; hosts the Consensus
++Router) · `services/model-manager` (only one starting inference containers) ·
++`services/sandbox-manager` (callers authenticate with per-service mTLS; requests are
++`{session_id, argv[], cwd, timeout_s, user_token}`; it owns the session→container map and the
++complete container spec from its own config and never accepts an image, mount or network
++from a caller) · `services/screen-worker` · `services/git-broker` (only component holding Git
++credentials or reaching Git hosts) · `services/validation-executor` and
++`services/factory-executor` (only ones touching targets, via `slas_hal` / station runner; no
++gateway client, enforced by an import-linter contract) · `services/backup-runner` ·
++`packages/slas-kernel`, `slas-hal`, `slas-skills`, `slas-authz` (shared; authz runs where the
++action executes) · `packages/slas-redact` (the only reader of `config/redaction.yaml`; used by
++the kernel log collector, llm-gateway, git-broker audit, the terminal recorder and validation
++log bundles).
+ 
+ **Tool-call fallback tiers:** 0 constrained decoding (`guided_json`, mandatory) → 1 retry
+ ≤ 2 with the validation error as a tool result → 2 simplified schema + one-shot → 3
+@@ -687,20 +899,34 @@
+ **Tests:** unit · integration (ephemeral services) · `hal/` and `screen/` against recorded
+ fakes (including ugly fixtures) · `skills/` schema + compile + run against fakes · `eval/`
+ nightly · `e2e/` Playwright · `deploy/` fresh-VM `install.sh` under egress-DROP. Coverage
+-≥ 85% on `slas-kernel`, `slas-hal`, `slas-skills`, `slas-authz`. No test needs real
+-hardware, a real display, or a live model.
++≥ 85% on `slas-kernel`, `slas-hal`, `slas-skills`, `slas-authz`. No unit, integration, hal,
++screen, skills, e2e or deploy test needs real hardware, a physical display, or a live model
++(an Xvfb display in CI is virtual and allowed). `tests/eval` is the one exception: it talks
++only to local vLLM through `slas_eval/judges.py`, runs nightly on the GPU lane and never in PR
++CI. Security fixtures that must stay green: the hostile-repository suite of §5.7 (includes,
++`insteadOf`, `pushurl`, `core.gitProxy`, filter/textconv/merge drivers, symlinked and
++`gitdir:` `.git`), a canary credential that appears in no sink after a full push flow, no
++container except `git-broker` holding `SLAS_GIT_KEK`, and no PASS export without a human
++approval row.
+ 
+ **Definition of done:** tests + coverage · ruff/mypy clean · egress-DROP green ·
+-trace_id + metrics · typed three-part errors · secrets via .env/Vault · authz at executor
+-· hardware via HAL, GUI via screen driver · kernel-only for tickets/RCA/SOP/skills · UI copy
+-per §9 · both-language export produced · install.sh still green · ADR if a boundary moved
+-· this file updated if an invariant or interface changed.
++trace_id + metrics · typed three-part errors · secrets via compose secrets/Vault, never in
++`.env` · authz at executor · hardware via HAL, GUI via screen driver · kernel-only for
++tickets/RCA/SOP/skills · UI copy per §9 · both-language export produced · install.sh still
++green · ADR if a boundary moved · this file updated if an invariant or interface changed.
+ 
+ ## §12 DOCKER COMPOSE BLUEPRINT (conceptual; `compose/` holds the real files)
+ 
+ ```yaml
+-x-airgap: &airgap { DO_NOT_TRACK: "1", HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1", HF_HUB_DISABLE_TELEMETRY: "1" }
+-x-common: &common { restart: unless-stopped, env_file: [.env], logging: { driver: json-file, options: { max-size: "50m", max-file: "5" } } }
++x-airgap: &airgap { DO_NOT_TRACK: "1", HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1", HF_HUB_DISABLE_TELEMETRY: "1", RAGAS_DO_NOT_TRACK: "true", VLLM_NO_USAGE_STATS: "1" }
++x-common: &common { restart: unless-stopped, env_file: ["${SLAS_CONFIG_DIR}/.env"], logging: { driver: json-file, options: { max-size: "50m", max-file: "5" } } }
++                 # .env holds NON-SECRET settings only (data root, profile, ports). Secrets are compose file secrets, attached per service below.
++secrets:         # written by install.sh under ${SLAS_DATA_ROOT}/secrets/, mode 0600
++  slas_git_kek:      { file: "${SLAS_DATA_ROOT}/secrets/slas_git_kek" }       # git-broker ONLY
++  postgres_password: { file: "${SLAS_DATA_ROOT}/secrets/postgres_password" }
++  minio_root:        { file: "${SLAS_DATA_ROOT}/secrets/minio_root" }
++  redis_password:    { file: "${SLAS_DATA_ROOT}/secrets/redis_password" }
++  runner_ca_key:     { file: "${SLAS_DATA_ROOT}/secrets/runner_ca_key" }     # factory-executor ONLY
+ networks:
+   slas-edge: {}                                   slas-frontend: { internal: true }
+   slas-backend: { internal: true }                slas-inference: { internal: true }   # no egress
+@@ -713,77 +939,106 @@
+   edge:        { <<: *common, image: registry.internal/slas/edge@sha256:…, networks: [slas-edge, slas-frontend], ports: ["443:443"] }
+   webui:       { <<: *common, image: registry.internal/slas/webui@sha256:…, networks: [slas-frontend] }
+   api:         { <<: *common, image: registry.internal/slas/api@sha256:…, networks: [slas-frontend, slas-backend, slas-observability],
+-                 volumes: ["${SLAS_DATA_ROOT}:/data"] }                                   # includes Ticket Service
+-  agent-core-orchestrator:                                                                # runs the Agent Kernel
+-               { <<: *common, image: registry.internal/slas/orchestrator@sha256:…,
++                 secrets: [postgres_password, minio_root, redis_password],
++                 volumes: ["${SLAS_DATA_ROOT}/Tickets:/data/Tickets", "${SLAS_DATA_ROOT}/SOP:/data/SOP", "${SLAS_DATA_ROOT}/Validation:/data/Validation:ro",
++                           "${SLAS_DATA_ROOT}/Factory:/data/Factory:ro", "${SLAS_DATA_ROOT}/Coding:/data/Coding:ro"] }   # ticket store + exports (PDF render); no secrets dir
++  agent-core-orchestrator:                                                                # runs the Agent Kernel; the only ticket writer
++               { <<: *common, image: registry.internal/slas/agent-core-orchestrator@sha256:…,
+                  networks: [slas-backend, slas-inference, slas-knowledge, slas-screen, slas-observability],
+-                 volumes: ["${SLAS_DATA_ROOT}:/data"] }
++                 secrets: [postgres_password, minio_root, redis_password],
++                 volumes: ["${SLAS_DATA_ROOT}/Tickets:/data/Tickets", "${SLAS_DATA_ROOT}/SOP:/data/SOP", "${SLAS_DATA_ROOT}/Skills:/data/Skills",
++                           "${SLAS_DATA_ROOT}/Knowledge:/data/Knowledge", "${SLAS_DATA_ROOT}/Coding:/data/Coding"] }
+                  # NOTE: no X11 socket, no /dev/input here (INV-4). GUI control goes through screen-worker.
+-  screen-worker: { <<: *common, image: registry.internal/slas/screen-worker@sha256:…,     # Xvfb + x11vnc + noVNC + screen driver
+-                 networks: [slas-screen, slas-frontend],                                  # frontend only for the operator's VNC view
++  screen-worker: { <<: *common, image: registry.internal/slas/screen-worker@sha256:…,     # Xvfb + openbox + x11vnc + noVNC + screen driver
++                 runtime: runsc,                                                          # prod: Kata per session (§3)
++                 networks: [slas-screen, slas-frontend],                                  # frontend only for the operator's noVNC view via edge
+                  environment: { <<: *airgap, DISPLAYS_PER_WORKER: "8", ACTION_RATE_LIMIT: "10" },
++                 volumes: ["slas-x-sockets:/run/slas-x"],                                 # per-session X sockets for Coding desktops (§5.2)
+                  security_opt: ["no-new-privileges:true"], cap_drop: [ALL], shm_size: 1g }
+   llm-gateway: { <<: *common, image: registry.internal/slas/llm-gateway@sha256:…,        # includes Consensus Router
+                  networks: [slas-backend, slas-inference, slas-observability],
+-                 environment: { <<: *airgap, SCHEMA_ENFORCE: strict, CONSENSUS_DEFAULT_VOTERS: "3", CONSENSUS_TOKEN_BUDGET_PCT: "5" } }
+-  model-manager: { <<: *common, image: registry.internal/slas/model-manager@sha256:…,
++                 secrets: [postgres_password, redis_password],
++                 environment: { <<: *airgap, SCHEMA_ENFORCE: strict, CONSENSUS_POLICY: /etc/slas/consensus.yaml },
++                 volumes: ["./config/consensus.yaml:/etc/slas/consensus.yaml:ro", "./config/redaction.yaml:/etc/slas/redaction.yaml:ro"] }
++  model-manager: { <<: *common, image: registry.internal/slas/model-manager@sha256:…,     # INV-4 exception: holds the engine socket
+                  networks: [slas-backend, slas-inference],
+-                 volumes: ["/run/podman/podman.sock:/run/podman/podman.sock", "${SLAS_DATA_ROOT}/Models:/data/Models"] }
+-  # vllm-cluster: vllm-coder, vllm-planner, vllm-triage, vllm-embed, vllm-rerank are CREATED by model-manager
+-  #               from Models/models.yaml (networks: [slas-inference], ipc: host, shm 16g, VLLM_NO_USAGE_STATS=1, GPU ids per role).
++                 volumes: ["${SLAS_ENGINE_SOCKET}:/run/engine.sock", "${SLAS_DATA_ROOT}/Models:/data/Models"] }   # socket path decided by ADR-0004 (engine)
++  # vllm-cluster: vllm-coder, vllm-planner, vllm-triage, vllm-embed, vllm-rerank are CREATED by model-manager from Models/models.yaml
++  #               (image + image_id pinned there; networks: [slas-inference]; shm_size: 16g, private IPC namespace; GPU ids per role).
+   vector-db:   { <<: *common, image: registry.internal/qdrant/qdrant@sha256:…, networks: [slas-knowledge, slas-observability],
+                  environment: { QDRANT__TELEMETRY_DISABLED: "true" } }
+-  local-search-api: { <<: *common, image: registry.internal/slas/local-search-api@sha256:…,  # §8.3 Option A by default
+-                 networks: [slas-knowledge, slas-inference], environment: { SEARCH_MODE: internal_corpus } }
+-  sandbox-manager: { <<: *common, image: registry.internal/slas/sandbox-manager@sha256:…, networks: [slas-backend],
+-                 environment: { DEFAULT_RUNTIME: runsc, DEFAULT_NETWORK: none, PIDS_LIMIT: "512" },
+-                 volumes: ["/run/podman/podman.sock:/run/podman/podman.sock", "${SLAS_DATA_ROOT}/Coding:/data/Coding"],
++  local-search-api: { <<: *common, image: registry.internal/slas/local-search-api@sha256:…,  # §8.3 Option A by default; built in P5 from slas-rag
++                 networks: [slas-knowledge, slas-backend, slas-observability], environment: { SEARCH_MODE: internal_corpus } }   # embed/rerank via llm-gateway roles
++  sandbox-manager: { <<: *common, image: registry.internal/slas/sandbox-manager@sha256:…, networks: [slas-backend],   # INV-4 exception: holds the engine socket
++                 environment: { DEFAULT_RUNTIME: runsc, DEFAULT_NETWORK: none, PIDS_LIMIT: "512", SANDBOX_IDLE_TTL_MIN: "60", SANDBOX_MAX_TTL_H: "12" },
++                 volumes: ["${SLAS_ENGINE_SOCKET}:/run/engine.sock", "${SLAS_DATA_ROOT}/Coding:/data/Coding",
++                           "${SLAS_DATA_ROOT}/Toolchains:/data/Toolchains:ro", "slas-x-sockets:/run/slas-x"],
+                  security_opt: ["no-new-privileges:true"], cap_drop: [ALL] }
+-                 # sandbox images ship `git` for local commits; sandboxes get NO remote route and NO credentials (INV-14)
++                 # sandbox images ship `git` (thin wrapper, §5.7) for local commits; sandboxes get NO remote route and NO credentials (INV-14)
+   git-broker:  { <<: *common, image: registry.internal/slas/git-broker@sha256:…,           # §5.7 — the ONLY holder of Git credentials
+                  networks: [slas-backend, slas-git],                                       # ONLY member of slas-git
+-                 environment: { <<: *airgap, GIT_HOSTS_ALLOWLIST: /etc/slas/git-hosts.yaml, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0",
++                 secrets: [slas_git_kek, postgres_password],                               # the KEK exists in no other container
++                 environment: { <<: *airgap, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: /dev/null, GIT_TERMINAL_PROMPT: "0",
+                                 CRED_STORE: "postgres+aesgcm" },                           # prod override: CRED_STORE: vault
+-                 volumes: ["${SLAS_DATA_ROOT}/Coding:/data/Coding", "./config/git-hosts.yaml:/etc/slas/git-hosts.yaml:ro"],
++                 volumes: ["${SLAS_DATA_ROOT}/GitBroker:/data/GitBroker", "${SLAS_DATA_ROOT}/Docs:/data/Docs",
++                           "${SLAS_DATA_ROOT}/Coding:/data/Coding:ro"],                    # ro: bundles in Coding/<user>/Bundles only; never a workspace .git
+                  tmpfs: ["/run/slas-keys:mode=700,size=16m"],                              # per-operation SSH key files, shredded after use
+                  security_opt: ["no-new-privileges:true"], cap_drop: [ALL] }
+-  validation-executor: { <<: *common, image: registry.internal/slas/validation-executor@sha256:…,   # + NVQual, MFT, fio, stress-ng, perftest
+-                 networks: [slas-backend, slas-observability, slas-lab],
+-                 environment: { GUARDRAIL_POLICY: /etc/slas/guardrails.yaml, SYSLOG_LISTEN: "0.0.0.0:5514", LLM_IN_CONTROL_LOOP: "false" } }
++  validation-executor: { <<: *common, image: registry.internal/slas/validation-executor@sha256:…,   # OSS clients only; NVQual, MFT and stress tools run on the target (decision 6)
++                 networks: [slas-backend, slas-observability, slas-lab, slas-screen],      # slas-screen for the per-run KVM relay (§5.2)
++                 secrets: [postgres_password],
++                 volumes: ["${SLAS_DATA_ROOT}/Validation:/data/Validation", "./config/guardrails.yaml:/etc/slas/guardrails.yaml:ro"],   # executor-owned journal
++                 environment: { GUARDRAIL_POLICY: /etc/slas/guardrails.yaml, SYSLOG_LISTEN: "0.0.0.0:5514" } }
+   factory-executor: { <<: *common, image: registry.internal/slas/factory-executor@sha256:…,
+                  networks: [slas-backend, slas-observability, slas-factory],
+-                 environment: { MES_ADAPTER: file_drop, RUNNER_MTLS_CA: /etc/slas/runner-ca.pem, LLM_IN_CONTROL_LOOP: "false" } }
+-  postgres:    { <<: *common, image: registry.internal/library/postgres@sha256:…, networks: [slas-backend, slas-knowledge] }
+-  redis:       { <<: *common, image: registry.internal/library/redis@sha256:…, networks: [slas-backend] }
+-  minio:       { <<: *common, image: registry.internal/minio/minio@sha256:…, networks: [slas-backend] }
++                 secrets: [postgres_password, runner_ca_key],
++                 volumes: ["${SLAS_DATA_ROOT}/Factory:/data/Factory", "${SLAS_DATA_ROOT}/Backups/stations:/data/Backups/stations"],
++                 environment: { MES_ADAPTER: file_drop, MES_DROP_DIR: /var/lib/slas-mes, RUNNER_MTLS_CA: /etc/slas/runner-ca.pem } }
++  backup-runner: { <<: *common, image: registry.internal/slas/backup-runner@sha256:…,      # §8.4/§8.5 nightly backups and retention (ADR-0006)
++                 networks: [slas-backend, slas-knowledge], secrets: [postgres_password, minio_root],
++                 volumes: ["${SLAS_DATA_ROOT}:/data", "./config/retention.yaml:/etc/slas/retention.yaml:ro"] }
++  postgres:    { <<: *common, image: registry.internal/library/postgres@sha256:…, networks: [slas-backend, slas-knowledge], secrets: [postgres_password] }
++  redis:       { <<: *common, image: registry.internal/library/redis@sha256:…, networks: [slas-backend], secrets: [redis_password] }
++  minio:       { <<: *common, image: registry.internal/minio/minio@sha256:…, networks: [slas-backend], secrets: [minio_root],
++                 environment: { MINIO_UPDATE: "off", MINIO_BROWSER_REDIRECT: "false" } }
+   prometheus:  { <<: *common, image: registry.internal/prom/prometheus@sha256:…, networks: [slas-observability, slas-inference, slas-backend, slas-knowledge] }
+   grafana:     { <<: *common, image: registry.internal/grafana/grafana@sha256:…, networks: [slas-frontend, slas-observability],
+                  environment: { GF_ANALYTICS_REPORTING_ENABLED: "false", GF_ANALYTICS_CHECK_FOR_UPDATES: "false", GF_INSTALL_PLUGINS: "" } }
+   dcgm-exporter: { <<: *common, image: registry.internal/nvidia/dcgm-exporter@sha256:…, networks: [slas-observability], cap_add: [SYS_ADMIN] }
+   node-exporter: { <<: *common, image: registry.internal/prom/node-exporter@sha256:…, networks: [slas-observability], pid: host }
+-  # prod profile: vault, keycloak, loki, tempo, backup-runner (pgBackRest + snapshots + station backups)
++volumes: { slas-x-sockets: { driver_opts: { type: tmpfs, device: tmpfs } } }
++  # prod profile: vault, keycloak, loki, tempo; backup-runner gains pgBackRest PITR and object-lock
+ ```
+ 
++Image references: an immutable release tag plus `bundle/images.lock` `{name, tag, image_id,
++manifest_digest, size}`; `install.sh` loads each archive and refuses any image whose id
++differs from the lock (digests do not survive an offline `docker load`; see open decision 13).
++The `slas-git` allowlist is enforced by the broker and by a host nftables set rendered from
++the `git_hosts` table (§5.7); a compose network has no hostname filter of its own.
++
+ Start order: `postgres → redis → minio → model-manager (→ vllm-*) → llm-gateway →
+ vector-db → local-search-api → api → agent-core-orchestrator → screen-worker →
+-sandbox-manager → validation-executor → factory-executor → observability → edge → webui`.
++sandbox-manager → git-broker → validation-executor → factory-executor → backup-runner →
++observability → edge → webui`.
+ 
+ ## §13 REPOSITORY LAYOUT
+ ```
+ sw-local-agent-service/
+-├── CLAUDE.md  README.md  install.sh
+-├── docs/{DEVELOPMENT_PLAN.md, PROMPTS.md, adr/, runbooks/, ui/, ui-demo/, golden-set/, glossary.yaml}
++├── CLAUDE.md  README.md  install.sh  LICENSE (decision 12)
++├── docs/{DEVELOPMENT_PLAN.md, PROMPTS.md, THIRD_PARTY.md, adr/, runbooks/, reviews/, ui-demo/, golden-set/, glossary.yaml}
+ ├── apps/{webui, api}
+ ├── services/{agent-core-orchestrator, llm-gateway, model-manager, sandbox-manager, screen-worker,
+-│             git-broker, validation-executor, factory-executor, station-runner, local-search-api, edge}
+-├── packages/{slas-kernel, slas-schemas, slas-authz, slas-hal, slas-skills, slas-screen, slas-git,
++│             git-broker, validation-executor, factory-executor, station-runner, local-search-api, backup-runner, edge}
++├── packages/{slas-kernel, slas-schemas, slas-authz, slas-hal, slas-skills, slas-screen, slas-git, slas-redact,
+ │             slas-diff, slas-triage, slas-rag, slas-sop, slas-eval, slas-cli}
+-├── plans/{schema/plan.schema.json, primitives/}          # Validation/Factory plan verbs
++├── plans/{schema/plan.schema.json, primitives/}          # Validation/Factory plan verbs (§10.2)
+ ├── skills/{schema/skill.schema.json, library/}           # shipped skills
+ ├── templates/factory/                                    # test-loop templates
+-├── images/{sandbox-*, screen-worker, validation-executor, factory-executor}
++├── images/{sandbox-*, screen-worker, validation-executor, factory-executor, backup-runner}
++├── bundle/{LAYOUT.md, build-bundle.sh, images.lock}      # offline bundle builder and lock (§3)
+ ├── compose/{docker-compose.yml, prod.override.yml, macvlan.override.yml}
+-├── config/{.env.example, guardrails.yaml, redaction.yaml, rbac-roles.yaml, consensus.yaml, git-hosts.yaml}
++├── config/{.env.example, guardrails.yaml, redaction.yaml, rbac-roles.yaml, consensus.yaml, git-hosts.yaml,
++│           routing.yaml, retention.yaml, quotas.yaml}
+ └── tests/{unit, integration, hal, screen, skills, eval, e2e, deploy}
+ ```
+ 
+@@ -797,18 +1052,36 @@
+ the only service that touches remotes) · **bundle** (`git bundle` file for offline transfer).
+ 
+ ## §15 CHANGE MANAGEMENT
+-ADRs in `docs/adr/NNNN-title.md` (Status, Context, Decision, Consequences, Invariants
+-touched). Required for: new dependency, container, page, boundary change, data-model
+-change, any invariant relaxation. Update this file when an invariant, boundary, phase or
+-public interface changes; bump the version; reference the ADR.
++ADRs in `docs/adr/NNNN-title.md`, copied from `docs/adr/0000-template.md` (Status, Date,
++Context, Decision, Consequences, Invariants touched, Licence and redistribution). Required
++for: new dependency, container, page, boundary change, data-model change, any invariant
++relaxation. Update this file when an invariant, boundary, phase or public interface changes;
++bump the version; reference the ADR. ADRs the plan schedules: 0001 Agent Kernel, 0002 Screen
++worker instead of host X11, 0003 Git broker (credentials only in `git-broker`, mirror
++design), 0004 Container engine and sandbox runtime, 0005 Settings page, 0006 backup-runner
++container. Every third-party component is listed in `docs/THIRD_PARTY.md` (version, licence,
++redistributable?, obligations).
+ 
+ **Open decisions:** (1) user/target/station counts → single node vs. multi-node; (2) GPU
+ budget → which roles co-reside and whether 3 voters can be resident at once; (3) AC cycling:
+-PDU vs relay; (4) BMC fleet homogeneity → HAL quirk scope; (5) `.xlsx` suite schema fixed?
+-→ parser replaces LLM extraction; (6) search Option A/B; (7) Git target (GitLab/Gitea);
+-(8) MES integration: file drop, REST, or database; (9) Chinese default zh-Hant confirmed?
+-(10) Git host allowlist — internal GitLab/Gitea only, or is `github.com` an approved INV-1
+-exception? (11) Default remote auth — deploy keys / project tokens recommended over personal
+-credentials; confirm the policy.
++PDU vs relay, and how PDU outlet topology is modelled; (4) BMC fleet homogeneity → HAL quirk
++scope; (5) `.xlsx` suite schema fixed? → parser replaces LLM extraction; (6) search Option
++A/B; (7) Git target (GitLab/Gitea); (8) MES integration: file drop, REST, or database;
++(9) Chinese default zh-Hant confirmed? (10) Git host allowlist — internal GitLab/Gitea only,
++or is `github.com` an approved INV-1 exception? (11) Default remote auth — deploy keys /
++project tokens recommended over personal credentials; confirm the policy. Added by the review
++of 2026-09-10: (12) project licence and customer redistribution terms; (13) container engine:
++one rootful Podman engine with gVisor and `--userns=auto` (recommended, Kata-compatible) or a
++rootless sandbox user with no Kata tier; and how image identity survives an offline load
++(release tag plus verified image id, recommended); (14) bundle signing: `ssh-keygen -Y`
++(recommended, no new dependency), minisign or cosign; (15) Chinese-capable search index:
++`pg_bigm`, `zhparser`/`pg_jieba`, or Qdrant sparse vectors; (16) supported host distributions
++and whether the NVIDIA driver is a host prerequisite (recommended) or shipped; (17) WebUI
++language: English UI with bilingual exports (recommended) or a bilingual UI; (18) eval in CI:
++nightly GPU lane (recommended) or only on a deployed installation; (19) target credential
++store in quickstart: one `slas_secrets` interface with AES-GCM and Vault backends
++(recommended) or Vault mandatory; (20) station operating systems: Linux only for v1
++(recommended) or a Windows runner backend; (21) DC power actions as "caution" covered by the
++run approval (recommended) or "destructive" with the wizard approval as the per-run approval.
+ 
+ *End of CLAUDE.md*
+--- a/README.md
++++ b/README.md
+@@ -25,13 +25,16 @@
+ ./install.sh            # preflight → config → load images → models → up → login URL
+ ```
+ 
+-One command, one `.env`, one page to manage models. Details in `CLAUDE.md` §3.
++One command, one `.env` (non-secret settings), one page to manage models. Details in
++`CLAUDE.md` §3. Platform data lives in `${SLAS_DATA_ROOT}` (default `/AI/Agent`), outside
++this repository; nothing under it is ever committed.
+ 
+ ## Status
+ 
+-Pre-Phase 0. The repository currently holds the design documents and the UI demo.
+-Follow `docs/DEVELOPMENT_PLAN.md` from P0.
++Pre-Phase 0. The repository currently holds the design documents, the UI demo and the
++design review of 2026-09-10 (`docs/reviews/`). Follow `docs/DEVELOPMENT_PLAN.md` from P0.
+ 
+ ## Licence
+ 
+-To be decided (see `CLAUDE.md` §15, open decisions).
++To be decided (see `CLAUDE.md` §15, open decision 12). Third-party components and their
++licences will be listed in `docs/THIRD_PARTY.md` from Phase 0.
+--- a/.gitignore
++++ b/.gitignore
+@@ -22,11 +22,13 @@
+ playwright-report/
+ test-results/
+ 
+-# platform data (never in git)
+-/AI/
+-data/
+-Models/
+-Backups/
++# platform data lives in ${SLAS_DATA_ROOT} (default /AI/Agent), outside this repository.
++# Anchored patterns only: an unanchored "Models/" or "data/" would also hide source
++# directories such as docs/Models/ or services/<x>/data/.
++/.slas-data/
++/data-root/
++/bundle/out/
++*.bundle
+ 
+ # editors / OS
+ .DS_Store
+--- a/docs/DEVELOPMENT_PLAN.md
++++ b/docs/DEVELOPMENT_PLAN.md
+@@ -1,57 +1,92 @@
+ # Development Plan — SW Local Agent Service
+ 
+-Companion to `CLAUDE.md` v3.0. Phases are ordered so that the **shared kernel exists before
++Companion to `CLAUDE.md` v3.2. Phases are ordered so that the **shared kernel exists before
+ any agent**, and every agent is built against **fakes before hardware**. Each phase ends
+ with something you can click or run. Do not start a phase until the previous one's "Done
+-when" is green in CI.
+-
+-Estimated effort is in Claude Code sessions of roughly 1–2 hours with review.
++when" is green in CI. P8 and P10 need real hardware and are the exception: their "Done when"
++is demonstrated by the owner from the WebUI through the approval flow, never by a Claude Code
++session acting on a target or station.
++
++Estimated effort is in Claude Code sessions of roughly 1–2 hours with review; the estimates
++below are starting points, not commitments, and P6 in particular is re-estimated as two
++sub-phases.
+ 
+ ## Dependency map
+ 
+ ```
+ P0 skeleton ──► P1 quickstart core ──► P2 kernel + tickets ──► P3 models + gateway + consensus
+-                                                     │                      │
+-                                                     ▼                      ▼
+-                                              P4 skills + screen ◄─── P5 knowledge + RCA + SOP
+-                                                     │
+-                     ┌───────────────────────────────┼─────────────────────────────┐
+-                     ▼                               ▼                             ▼
+-              P6 Coding Agent                P7 Validation (fakes)          P9 Factory (fakes)
+-                                                     │                             │
+-                                                     ▼                             ▼
+-                                             P8 Validation hardware       P10 Factory station
+-                                                     └──────────────┬──────────────┘
+-                                                                    ▼
+-                                                     P11 observability ──► P12 prod profile
++                                                │                             │
++                                                ▼                             ▼
++                                        P4 skills + screen            P5 knowledge + RCA + SOP
++                                                │                             │
++                                                └──────────────┬──────────────┘
++                                                               ▼  (every agent needs P3, P4 and P5)
++                     ┌─────────────────────────────────────────┼─────────────────────────────┐
++                     ▼                                         ▼                             ▼
++          P6a Coding Agent → P6b Git engine          P7 Validation (fakes)          P9 Factory (fakes)
++                                                               │                             │
++                                                               ▼                             ▼
++                                                       P8 Validation hardware       P10 Factory station
++                                                               └──────────────┬──────────────┘
++                                                                              ▼
++                                                               P11 observability ──► P12 prod profile
+ ```
+ 
+ ## Phases
+ 
+ ### P0 — Skeleton (2 sessions)
+ **Scope.** Repo layout from CLAUDE.md §13; `uv`, `pnpm`, `ruff`, `mypy --strict`,
+-`pytest`, `vitest`, Playwright config; CI with an egress-DROP job; `slas doctor` and
+-`install.sh` preflight only; `.env.example`; ADR-0001 "Agent Kernel" and ADR-0002 "Screen
+-worker instead of host X11".
++`pytest`, `vitest`, Playwright config; CI with an egress-DROP job and a build job that
++proves INV-8 (every Dockerfile `FROM` pinned by digest, lockfiles checked with `uv lock
++--check` and `pnpm install --frozen-lockfile`, images built with egress dropped from a
++vendored mirror); `slas doctor` (shipped as a self-contained executable that needs only
++glibc) and `install.sh` preflight only; `.env.example`; `docs/THIRD_PARTY.md` (every
++component named in CLAUDE.md with version, licence and redistribution status); ADR-0001
++"Agent Kernel", ADR-0002 "Screen worker instead of host X11", ADR-0003 "Git broker:
++credentials only in git-broker, mirror design" and ADR-0004 "Container engine and sandbox
++runtime" (CLAUDE.md open decision 13).
+ **Done when.** `./install.sh` runs preflight and prints a plain-language report; CI is
+-green on an empty repo; `docs/adr/` has two accepted ADRs.
++green on an empty repo, including the offline build job; `docs/adr/` has ADR-0001 to
++ADR-0004 accepted.
+ 
+ ### P1 — Quickstart core (3 sessions)
+-**Scope.** Compose with postgres, redis, minio, api, webui shell, edge (self-signed TLS);
+-built-in auth (argon2) + RBAC/capabilities in `slas-authz`; Admin → People and Settings
+-(writes `.env`); `slas user add`; deploy test (fresh VM → login page under egress-DROP).
+-**Done when.** INV-10 test green; you can log in, add a user, change a setting without a
+-restart.
++**Scope.** Compose with postgres, redis, minio, api, webui shell, edge (self-signed TLS),
++`backup-runner`; compose file secrets generated by `install.sh` and attached per service
++(CLAUDE.md §12; `.env` holds non-secret settings only); built-in auth (argon2) +
++RBAC/capabilities in `slas-authz` from `config/rbac-roles.yaml` (roles administrator,
++validation engineer, factory lead, firmware engineer, viewer; capability namespaces per
++CLAUDE.md §5.2 and §5.7); Admin → People and Admin → Settings (a `settings` table in
++Postgres re-read by services on change; the UI and CLI never write `.env`); `slas user
++add|deactivate`; `slas backup now|restore` per CLAUDE.md §8.4; the bundle builder
++(`bundle/build-bundle.sh` → `slas-bundle-<version>/` with `MANIFEST.json`, `images.lock`
++and a detached signature; `install.sh` verifies both and seeds the data root); deploy test
++(fresh VM → login page under egress-DROP, GPU-less path; the GPU path runs on the nightly
++lane).
++**Done when.** INV-10 test green; you can log in, add a user, change a setting and see a
++running service pick it up without a restart; `install.sh` refuses a bundle with a bad
++signature or a wrong image id in one sentence; `slas backup now` followed by `slas backup
++restore` on a scratch copy round-trips a user and a setting; no container except
++`git-broker` will ever receive `slas_git_kek` (compose lint).
+ 
+ ### P2 — Agent Kernel + Ticket Service (4 sessions)
+ **Scope.** `slas-kernel` lifecycle (ingest → ticket → plan → act → collect → rca → sop →
+-close) with pluggable `Agent` protocol; `slas-schemas` for Job, Plan, Step, Ticket, Vote,
+-SopModel, Finding; Ticket Service in `apps/api` with state machine and exports; write-ahead
+-journal; a **NullAgent** that exercises the whole lifecycle with fake steps; Tickets page
+-(list, detail, state, attachments).
++close) with pluggable `Agent` protocol (`ingest`, `plan`, `iterate`, `verify`,
++`sop_template`); `slas-schemas` for Job, Plan (with `plan_hash`), Step, StepResult, Ticket
++(states including Paused, Cancelled, Aborted, child Draft), Vote, SopModel with RichText
++tokens, Finding, LabelScan, ManualTrigger; ticket store and REST surface in `apps/api` with
++the kernel as the only writer; approvals bound to `plan_hash`, exclusive leases with
++heartbeats, and quotas in `apps/api`; `services/agent-core-orchestrator` (long-running
++worker that dequeues jobs, runs the kernel, exposes `/healthz` and `/metrics`); write-ahead
++journal as a kernel module executors can import; `packages/slas-redact` reading
++`config/redaction.yaml`; ticket manifests under `Tickets/<ticket-id>/`; a **NullAgent**
++that exercises the whole lifecycle with fake steps; Tickets page (list, detail, state,
++attachments), Runs page and the Home "Needs you" list.
+ **Done when.** Running the NullAgent creates a ticket, journals 5 fake steps, collects
+ stdout/stderr, produces a placeholder RCA and a placeholder two-language SOP, and closes.
+-Killing the process mid-run and restarting resumes from the journal.
++Killing the process mid-run and restarting resumes from the journal without duplicate
++journal entries; an approval is refused when the plan hash changed after it was granted; a
++lease expires after three missed heartbeats and the run moves to Needs review; a fixture log
++with a canary secret is redacted before it reaches the ticket.
+ 
+ ### P3 — Models, gateway, Consensus Router (4 sessions)
+ **Scope.** `Models/models.yaml`; model-manager reconciler (start/stop vLLM containers,
+@@ -60,69 +95,118 @@
+ per-decision rules from `config/consensus.yaml`, token budget); Models page (cards, roles,
+ fit sentence, swap progress, voter chips); `slas model scan|fit|swap|test`.
+ **Done when.** Swap `coder` from the UI with progress and roll back; a cross-check request
+-with 3 voters returns a verdict object; a voter that fails schema twice trips the breaker;
+-eval harness runs against local judges only (CI asserts no `api.openai.com`).
++with 3 voters returns a verdict object; a voter instance that exhausts fallback tiers 0–2 on
++N consecutive requests (N from `config/consensus.yaml`, default 5) trips its breaker and the
++router runs in the documented "single model + flagged" mode with an alert; the quickstart
++alias table (`planner` → `coder`, two voters) produces the "reduced cross-check" label; the
++eval harness wiring runs against the fake vLLM in PR CI and the judge suite runs on the
++nightly GPU lane under egress-DROP.
+ 
+ ### P4 — Skills + screen worker (4 sessions)
+-**Scope.** `skills/schema/skill.schema.json` from CLAUDE.md §6; `slas-skills` import →
+-validate → compile → run; primitive whitelist with risk classes; capability check against
+-`slas-authz`; screen-worker container (Xvfb, x11vnc/noVNC, `slas-screen` driver with
+-PyAutoGUI + xdotool, screenshot before/after, rate limit, window deny-list); **screen fake**
+-that replays scripted windows for tests; Skills page (list, enable per agent, import,
+-export, "Try it").
++**Scope.** `skills/schema/skill.schema.json` from CLAUDE.md §6 (step-level `id`, `effects`,
++expression grammar, per-primitive outputs, secret-reference rule); `slas-skills` import →
++validate → compile (inside PLAN, frozen under `Skills/compiled/<ticket-id>/` with content
++hash) → run; primitive whitelist with risk classes from `config/guardrails.yaml`;
++capability preview at import and capability check against `slas-authz` at run;
++`slas-hal` package skeleton with the `oob` and `inband` driver interfaces and a minimal
++recorded fake (get_power_state, get_sel with file and count, get_inventory, clear_sel,
++power_off; ssh returning scripted stdout) so the §6.3 examples can run; screen-worker
++container (Xvfb + openbox, x11vnc/noVNC, `slas-screen` driver with PyAutoGUI + xdotool,
++AT-SPI and OCR targeting, screenshot before/after with the secret rule, rate limit, window
++deny-list, focus-change hard stop); **screen fake** that replays scripted windows for
++tests; Skills page (list, enable per agent, import, export, "Try it").
+ **Done when.** The two example skills in §6.3 validate, compile and run against fakes; a
+-skill with a `redfish: power_off` step shows the approval requirement at import and at run;
+-a GUI skill runs on a real Xvfb display in CI and produces before/after screenshots; a
+-skill exported from one install imports into another unchanged.
++skill with a `redfish: power_off` step shows the run-level approval requirement at import
++and at run; a GUI skill runs on an Xvfb display (virtual) in CI and produces before/after
++screenshots; a `type` step with a secret input produces no after-screenshot and a journal
++line saying so; a skill exported from one install imports into another unchanged; a skill
++whose `when` expression calls a function is refused at import.
+ 
+ ### P5 — Knowledge, RCA, dual-language SOP (3 sessions)
+-**Scope.** Qdrant + Postgres FTS ingestion; hybrid retrieval with RRF and rerank;
+-Knowledge page; kernel RCA pipeline (normalise → fingerprint → retrieve → draft → consensus
+-→ owner routing); `slas-sop` renderer (SopModel → EN + zh-Hant Markdown/PDF, glossary
+-pinned, identifiers copied by code); `docs/glossary.yaml`; eval: terminology consistency
+-and back-translation spot check.
+-**Done when.** Drop a datasheet, ask a question, get a cited answer; feed a recorded
+-failure log and get an RCA with votes and an owner; the NullAgent's SOP now renders real
+-EN and 中文 files side by side with identical commands and numbers.
+-
+-### P6 — Coding Agent + Hybrid Git Control Engine (6 sessions)
+-**Scope.** sandbox-manager (rootless Podman + gVisor, hardened runc fallback, TTL, quotas,
+-no network, `git` installed, per-user identity); sandbox images per language and a **toolchain
++**Scope.** Qdrant + Postgres FTS ingestion with a Chinese-capable index (CLAUDE.md open
++decision 15); hybrid retrieval with RRF and rerank through the gateway, exposed as
++`services/local-search-api`; Knowledge page; kernel RCA pipeline (normalise → fingerprint →
++retrieve → draft → consensus → owner routing from `config/routing.yaml`); `slas-sop`
++renderer (SopModel with RichText tokens → EN + zh-Hant Markdown/PDF in the api image with
++bundled Noto Sans CJK TC, glossary pinned, tokens copied by code); `docs/glossary.yaml`
++seeded from §14; eval: terminology consistency and back-translation spot check.
++**Done when.** Drop a datasheet, ask a question, get a cited answer, also for a zh-Hant
++query; feed a recorded failure log and get an RCA with votes and an owner rendered by
++display name; the NullAgent's SOP now renders real EN and 中文 files side by side with
++identical commands and numbers, and the PDF render fails when a glyph is missing from the
++bundled font.
++
++### P6a — Coding Agent (4 sessions)
++**Scope.** sandbox-manager (engine per ADR-0004, gVisor with the visible hardened-runc
++fallback, per-user subordinate uid, idle and maximum TTL suspended while a ticket runs or a
++terminal is attached, quotas from `config/quotas.yaml`, no network, `git` thin wrapper
++installed, per-user identity, exec API contract per CLAUDE.md §11); the offline package
++cache under `Toolchains/` bind-mounted read-only (pip `--no-index`, npm offline cache, cargo
++vendored registry, `GOPROXY=file://`); sandbox images per language and a **toolchain
+ resolver** (user picks languages, version optional → newest bundled version, pinned version
+-honoured if present, else a sentence and fallback; `slas toolchain list|add`); Coding agent on
+-the kernel: plan ingestion
+-→ breakdown → iterate loop (lint, type, build, test) → stall detection; consensus on the
+-final diff; code walkthrough SOP; ZIP export. **Git (CLAUDE.md §5.7):** `services/git-broker`
+-(encrypted credential store by reference, `GIT_ASKPASS`/tmpfs SSH key handling, hostile-repo
+-hardening flags, host allowlist from `config/git-hosts.yaml`, validation gate, branch push +
+-PR/MR, bundle export/import, audit rows); Settings → Git remotes and Admin → Git hosts;
+-per-project Git panel (Status, Commit, History, Push/Pull, Bundle) and Terminal tab running
+-inside the sandbox; Coding page and **New coding task wizard** with the export target
+-listing the user's remotes.
++honoured if present, else a sentence and fallback; `slas toolchain list|add` against
++`Toolchains/<lang>/<version>/manifest.yaml`); Coding agent on the kernel: plan ingestion →
++ticket → breakdown → `iterate()` loop (lint, type, build, test) → stall detection;
++consensus on the final diff; code walkthrough SOP; ZIP export; Coding page with **New
++project** (init or clone) and the **New coding task wizard**; the Coding desktop transport
++(per-session X socket volume, CLAUDE.md §5.2).
+ **Done when.** Upload a plan (languages detected) → leave versions empty → the ticket shows
+ which toolchain the agent chose; pin `Rust 1.99` → a sentence says it isn't available and 1.80
+-is used → approve the breakdown → agent commits passing code on a
+-branch in `Projects/<slug>/.git` → 3-voter cross-check shown → EN/中文 walkthrough exported
+-→ ZIP downloads → "Push to gitlab-firmware" opens a PR on local GitLab. In the terminal,
++is used → approve the breakdown → agent commits passing code on a branch in
++`Projects/<slug>/.git`, installing a dependency from the offline cache with no network →
++3-voter cross-check shown → EN/中文 walkthrough exported → ZIP downloads. In the terminal,
+ `git log` shows the agent's commits with `Slas-Agent` trailers and `git push` fails with the
+-"push happens from the Git panel" message. A PAT pasted in the UI appears in no log,
+-workspace file, argv or model context (CI grep on every sink). A repo with a malicious
+-`pre-push` hook pushes without the hook executing. A bundle exported from one install
+-imports into another. A plan that needs a missing file stops after 3 iterations with a
+-three-part message.
++three-part "This sandbox cannot reach Git remotes" message. A plan that needs a missing file
++stops after 3 iterations with a three-part message. A sandbox whose TTL expires while its
++ticket is Running is not reaped.
++
++### P6b — Hybrid Git Control Engine (4 sessions)
++**Scope.** `services/git-broker` and `packages/slas-git` per CLAUDE.md §5.7 (ADR-0003):
++encrypted credential store by reference under a broker-only key delivered as a compose
++secret, paste path api → broker without persistence in the api; `GIT_ASKPASS` with
++`credential.username`, tmpfs SSH key handling with pinned host keys from Admin → Git hosts;
++**broker-owned bare mirrors and bundle sync, never opening the workspace `.git`**; the
++SHA-pinned validation gate over the pushed range (path scope, gitleaks over every blob,
++hooks, submodules, symlinks, size, LFS, Consensus Router for commits not recorded as
++user-authored); exclusive project lease during broker operations; host allowlist in Postgres
++seeded from `config/git-hosts.yaml`, enforced in the broker and as a host nftables set;
++branch push + PR/MR through `api_token_ref` with push-option and link fallbacks; bundle
++export/import through the same gate; `Docs/<remote>` clones for *Publish to repo*; audit rows
++with gated and pushed SHA; `slas git remote|push|pull|bundle|hosts`; Settings → Git remotes
++and Admin → Git hosts; per-project Git panel (Status, Commit, History, Push/Pull, Bundle) and
++the Terminal tab bound to the task's sandbox, recorded through `slas-redact`.
++**Done when.** "Push to gitlab-firmware" pushes a branch and opens a merge request against
++the fake Git server's GitLab-API emulation in CI (Gitea and GitHub API paths covered by unit
++tests); the M4 demo repeats it against the site's own Git host. A canary PAT and SSH key
++pasted in the UI appear in no log sink, workspace file, argv or model context after a full
++clone/push cycle. The hostile-repository fixture suite passes: a workspace `.git/config`
++carrying `[include]`/`[includeIf]`, `url.*.insteadOf`, `remote.*.pushurl`, `core.gitProxy`,
++filter/textconv/merge drivers, and a `.git` replaced by a symlink or a `gitdir:` file each
++leave the broker's behaviour unchanged, no child process other than `git-remote-https` or
++`ssh` spawns during a push, and the pushed SHA equals the gated SHA even when the workspace
++ref moves after gating. A remote on a host outside the allowlist is refused with the
++three-part message. A bundle exported from one install imports into another, and an export
++containing a planted secret is refused by the gate.
+ 
+ ### P7 — Validation Agent against fakes (5 sessions)
+ **Scope.** `plans/schema/plan.schema.json` and primitives; plan compiler (`.md`/`.xlsx` →
+ plan.yaml, reject rules); `slas-hal` with `fakes/` (recorded Redfish, scripted SOL, SEL,
+ inventory) including ugly fixtures; `slas-diff` (baseline vs snapshot, PCIe width AND
+ speed, firmware, counters) with Hypothesis tests; validation-executor state machine
+-(ARM/QUIESCE/ACT/SETTLE/VERIFY/GATE) with fence markers and crash recovery; guardrail
+-policy engine; `slas-triage` fingerprint/dedup/owner routing; bug-ticket spawning;
+-Validation page (LED cycle map, console, findings), **New validation run wizard**.
++(ARM/QUIESCE/ACT/SETTLE/VERIFY/GATE) with fence markers, the executor-owned write-ahead
++journal on the mounted `Validation/` volume, lease heartbeats and crash recovery; guardrail
++policy engine over the plan primitives of CLAUDE.md §10.2; Admin → Servers with hardware
++credentials in the platform credential store (decision 19); `slas-triage` fingerprint/dedup
++and owner routing from `config/routing.yaml`; bug-ticket spawning as `Finding` renderings
++in both languages; Validation page (LED cycle map with glyph labels, console, findings),
++**New validation run wizard**.
+ **Done when.** A 25-cycle DC run completes against fakes with a planted failure at cycle
+ 14: LED map shows it, one deduplicated bug ticket is drafted with 3 votes, EN/中文
+-verification SOP attached; `kill -9` mid-cycle and restart resumes at the right cycle;
+-approval dialog blocks an AC-cycle plan until approved.
++verification SOP attached; `kill -9` mid-cycle and restart resumes at the right cycle
++without duplicate journal entries or child tickets; `kill -9` between the `intent` and
++`observation` of a power step leaves the run in Needs review with the target's re-read
++power state recorded; the approval dialog blocks an AC-cycle plan until approved by a user
++other than the initiator, and a plan edited after approval needs a new approval.
+ 
+ ### P8 — Validation hardware (3 sessions, needs one target server)
+ **Scope.** Real Redfish/IPMI/SSH drivers, SOL capture, syslog receiver, PDU driver (per
+@@ -132,21 +216,30 @@
+ any log or model context (grep-based CI check on redacted bundles).
+ 
+ ### P9 — Factory Agent against fakes (4 sessions)
+-**Scope.** Factory templates (`templates/factory/*.yaml`); MES adapter interface with a
+-file-drop implementation; Factory agent on the kernel using skills for GUI steps; station
+-runner service (mTLS, signed step batches, screenshots back) with a **runner fake**;
+-factory-executor with station leases; consensus PASS rule; station state backup;
+-production line SOP; Factory page (test-step map, screenshot strip), **New factory job
+-wizard**.
+-**Done when.** A fake MES ticket triggers a 9-step loop on a fake station; PASS requires
+-3/3 votes; a planted failure holds the station and drafts a line-lead ticket; EN/中文 line
+-SOP and a station backup land in the ticket.
++**Scope.** Factory templates (`templates/factory/*.yaml`) with template-level policy
++(voters, on-fail = hold); MES adapter interface (`receive`, `report`) with a file-drop
++implementation (signed, size-capped, validated records); station-bound principals set at
++enrolment under Admin → Stations; Factory agent on the kernel using skills for GUI steps;
++the GATE step per template version; station runner service (mTLS with enrolment, rotation
++and revocation; signed, sequenced step batches; screenshots back; per-station executable
++allowlist; on-screen "under agent control" banner) with a **runner fake**;
++factory-executor with station leases and the executor-owned journal on `Factory/`; PASS
++recommendation by consensus with a recorded human confirmation of every verdict; station
++state backup as signed opaque blobs; production line SOP; Factory page (test-step map,
++screenshot strip), **New factory job wizard**.
++**Done when.** A fake MES ticket triggers a 9-step loop on a fake station as the station's
++principal; a 3/3 vote pre-fills PASS and the unit is marked passed only after a human
++confirms, with the confirming user in the MES export; a planted failure holds the station
++and drafts a line-lead ticket while MES shows pending_review; EN/中文 line SOP and a station
++backup land in the ticket; a runner batch with a reused nonce is rejected.
+ 
+ ### P10 — Factory station (2 sessions, needs one station)
+-**Scope.** Install the station runner on a real station; run the login + BurnIn skill;
+-tune window matching and timing; screenshot retention policy.
+-**Done when.** A real unit goes through the loop end to end with the operator watching on
+-the VNC view and able to take over.
++**Scope.** Install the station runner on a real Linux station (other operating systems per
++CLAUDE.md open decision 20); run the login + BurnIn skill; tune window matching and timing;
++apply `config/retention.yaml` to screenshots.
++**Done when.** A real unit goes through the loop end to end, driven from the WebUI by the
++owner, with the operator following the screenshot strip and runner status in the Factory
++page and able to stop the job from *Hold station* or at the station itself.
+ 
+ ### P11 — Observability (2 sessions)
+ **Scope.** Prometheus rules, six Grafana dashboards as code (inference, GPU, agents,
+@@ -168,7 +261,7 @@
+ | M1 "It installs" | P1 | one command → login page, air-gapped |
+ | M2 "Models are friendly" | P3 | swap a model from the UI, roll back, watch 3 voters agree |
+ | M3 "Skills travel" | P4 | export a skill, import on a second install, run it on a virtual display |
+-| M4 "First agent" | P6 | plan → code → local commits → cross-check → EN/中文 walkthrough → push through the broker → PR |
++| M4 "First agent" | P6b | plan → code → local commits → cross-check → EN/中文 walkthrough → push through the broker → merge request on the site's Git host |
+ | M5 "Hardware, safely" | P8 | one real DC cycle with SOL, baseline diff, approval flow |
+ | M6 "Factory line" | P10 | real unit through the loop, consensus verdict, line SOP |
+ | M7 "Production" | P12 | prod install, restore drill, dashboards |
+@@ -183,11 +276,14 @@
+ | Three voters don't fit in VRAM | Models page fit sentence; consensus degrades to single-model + flag, never blocks |
+ | Dual-language drift | one structured source; identifiers copied by code; glossary pinned; eval checks |
+ | Skill files become an attack surface | schema + whitelist + capabilities + risk classes; no shell primitive; import-time review of destructive steps |
+-| Pasted Git credentials leak, or a hostile repo runs code in the platform | credentials exist only in `git-broker` memory per operation, stored encrypted by reference; sandboxes have no route and no creds; hooks and repo config neutralised on every broker invocation; CI greps every log sink for token/key patterns |
++| Pasted Git credentials leak, or a hostile repo runs code in the platform | credentials exist only in `git-broker` memory per operation, stored encrypted by reference under a key no other container holds; sandboxes have no route and no creds; the broker never opens a workspace `.git` (broker-owned mirrors, bundle sync, SHA-pinned gate); the hostile-repository fixture suite and a canary-credential sweep of every sink run in CI |
+ | "Air-gapped" with a proxy search | Option A default; Option B requires an ADR and cannot use the label |
++| The offline bundle cannot be trusted or upgraded | signed manifest verified by `install.sh` and `slas upgrade`; image ids locked; `docs/THIRD_PARTY.md` licence inventory before anything is redistributed |
+ 
+ ## Working rules for every phase
+ - One deliverable per session (see `docs/PROMPTS.md`). Small, reviewable, tested.
+-- Fakes first. Real hardware and displays only in P8 and P10.
++- Fakes first. Real hardware and displays only in P8 and P10, and only through the WebUI
++  approval flow: a Claude Code session never invokes `slas_hal`, ssh, ipmitool or Redfish
++  against a real target or station.
+ - Every phase updates `CLAUDE.md` if it changed an interface, and adds an ADR if it moved a boundary.
+ - Run the phase-end audit prompt before declaring a phase done.
+--- a/docs/PROMPTS.md
++++ b/docs/PROMPTS.md
+@@ -1,7 +1,7 @@
+ # Prompt Pack — SW Local Agent Service
+ 
+-Copy-paste prompts for Claude Code sessions. Every prompt starts with the same preamble so
+-the session reads the SSOT before touching code.
++Companion to `CLAUDE.md` v3.2. Copy-paste prompts for Claude Code sessions. Every prompt
++starts with the same preamble so the session reads the SSOT before touching code.
+ 
+ ## How to run a session well
+ - **One deliverable per session.** "Implement the skill compiler" is a phase; "implement
+@@ -45,32 +45,44 @@
+ Task: create the repository skeleton from CLAUDE.md §13 with uv, pnpm, ruff, mypy --strict,
+ pytest, vitest and Playwright configured; a CI workflow with lint, typecheck, unit tests, and
+ an egress-DROP job that runs the test suite with all outbound network blocked; install.sh
+-with the preflight step only (slas doctor), printing a plain-language report as in §3.
+-Also write docs/adr/0001-agent-kernel.md and docs/adr/0002-screen-worker-not-host-x11.md
+-as accepted ADRs using the template in §15.
++with the preflight step only (slas doctor), printing a plain-language report as in §3; a CI
++build job that proves INV-8 (digest-pinned FROM lines, checked lockfiles, images built with
++egress dropped); and docs/THIRD_PARTY.md listing every component CLAUDE.md names with its
++licence. Also write docs/adr/0001-agent-kernel.md, docs/adr/0002-screen-worker-not-host-x11.md,
++docs/adr/0003-git-broker.md and docs/adr/0004-container-engine.md as accepted ADRs, copied
++from docs/adr/0000-template.md.
+ ```
+ 
+ ### P1 — Quickstart core
+ ```
+ <preamble>
+ Task: implement compose/docker-compose.yml with postgres, redis, minio, api, webui, edge
+-(Caddy, self-signed TLS); apps/api with built-in auth (argon2), sessions, and slas_authz
+-with roles and capabilities from config/rbac-roles.yaml; Admin → People and Admin →
+-Settings pages; `slas user add`; and tests/deploy that installs on a fresh VM under
+-egress-DROP and asserts the login page loads (INV-10). Changing a setting must not restart
+-anything (INV-9).
++(Caddy, self-signed TLS) and backup-runner, with compose file secrets generated by install.sh
++and attached per service as in CLAUDE.md §12 (.env carries no secret); apps/api with
++built-in auth (argon2), sessions, and slas_authz with roles and capabilities from
++config/rbac-roles.yaml; Admin → People and Admin → Settings pages backed by a settings table
++in Postgres that services re-read on change (never by writing .env); `slas user
++add|deactivate` and `slas backup now|restore` per §8.4; the bundle builder
++(bundle/build-bundle.sh → MANIFEST.json, images.lock, detached signature) and the verify and
++seed steps of install.sh; and tests/deploy that installs on a fresh VM under egress-DROP and
++asserts the login page loads (INV-10). Changing a setting must not restart anything (INV-9).
+ ```
+ 
+ ### P2 — Agent Kernel + tickets
+ ```
+ <preamble>
+ Task: implement packages/slas-kernel with the lifecycle in §5.1 (ingest → ticket → plan →
+-act → collect → rca → sop → close), the Agent protocol, write-ahead journal, and
+-packages/slas-schemas for Job, Plan, Step, Ticket, Vote, SopModel, Finding. Add a NullAgent
+-with five fake steps. Implement the Ticket Service in apps/api with the state machine from
+-§5.4 and a Tickets page. Prove crash recovery: a test kills the run after step 3 and a
+-restart resumes at step 4 from the journal. RCA and SOP may be placeholders that still
+-produce both languages (INV-13).
++act → collect → rca → sop → close), the Agent protocol (ingest, plan, iterate, verify,
++sop_template), the write-ahead journal as an importable module with the ACT recovery rules of
++§5.1, packages/slas-redact over config/redaction.yaml, and packages/slas-schemas for Job,
++Plan (with plan_hash), Step, StepResult, Ticket (states of §5.4), Vote, SopModel (RichText
++tokens), Finding, LabelScan, ManualTrigger. Add a NullAgent with five fake steps. Implement
++the ticket store, approvals bound to plan_hash, exclusive leases with heartbeats and quotas
++in apps/api (the kernel is the only ticket writer), services/agent-core-orchestrator as the
++worker that runs the kernel, and the Tickets and Runs pages plus the Home "Needs you" list.
++Prove crash recovery: a test kills the run after step 3 and a restart resumes at step 4 from
++the journal without duplicate entries. RCA and SOP may be placeholders that still produce
++both languages (INV-13).
+ ```
+ 
+ ### P3 — Models, gateway, Consensus Router
+@@ -92,58 +104,76 @@
+ packages/slas-skills: import (schema, primitive whitelist, capability check, risk
+ classification), compile (input binding, secret handles, bounded loop unrolling → StepPlan),
+ run (journal every step), export (secrets stripped, content hash). Implement
+-services/screen-worker (Xvfb, x11vnc, noVNC) and packages/slas-screen (PyAutoGUI + xdotool
+-behind our driver; screenshot before/after; rate limit; window deny-list) plus a screen
+-fake for tests. Build the Skills page. The two example skills in §6.3 must validate,
+-compile and run against fakes; the redfish power_off step must show the approval
+-requirement at import and at run.
++services/screen-worker (Xvfb with openbox, x11vnc, noVNC) and packages/slas-screen
++(PyAutoGUI + xdotool behind our driver; AT-SPI and OCR targeting; screenshot before/after
++with the secret rule of §5.2; rate limit; window deny-list; focus-change hard stop) plus a
++screen fake for tests, and the packages/slas-hal skeleton with the recorded fake the §6.3
++examples need. Build the Skills page. The two example skills in §6.3 must validate,
++compile and run against fakes; the redfish power_off step must show the run-level approval
++requirement at import and at run; a skill whose `when` expression calls a function must be
++refused at import.
+ ```
+ 
+ ### P5 — Knowledge, RCA, dual-language SOP
+ ```
+ <preamble>
+-Task: implement packages/slas-rag (ingest to Qdrant + Postgres FTS, hybrid retrieval with
+-RRF and rerank through the gateway), the Knowledge page, the kernel RCA pipeline from §5.4
+-(normalise → fingerprint → retrieve → draft → consensus → owner routing), and
+-packages/slas-sop (SopModel → sop.en.md and sop.zh-Hant.md with docs/glossary.yaml pinned;
++Task: implement packages/slas-rag (ingest to Qdrant + Postgres FTS with the Chinese-capable
++index chosen in CLAUDE.md open decision 15, hybrid retrieval with RRF and rerank through the
++gateway) exposed as services/local-search-api, the Knowledge page, the kernel RCA pipeline
++from §5.4 (normalise → fingerprint → retrieve → draft → consensus → owner routing from
++config/routing.yaml), and packages/slas-sop (SopModel with RichText tokens → sop.en.md,
++sop.zh-Hant.md and PDF with the bundled Noto Sans CJK TC font, docs/glossary.yaml pinned;
+ identifiers, commands, numbers and versions copied by code, never by the model). Add eval
+-checks for terminology consistency and a back-translation spot check using local judges.
++checks for terminology consistency and a back-translation spot check using local judges on
++the nightly lane.
+ ```
+ 
+ ### P6a — Coding Agent
+ ```
+ <preamble>
+-Task: implement services/sandbox-manager (rootless Podman, gVisor runtime with hardened
+-runc fallback, read-only rootfs, no network, TTL, quotas, git installed with a per-user
+-identity from GIT_CONFIG_GLOBAL), one sandbox image per language, and the toolchain resolver
+-from CLAUDE.md §10.1: the user picks languages only (Python, C, C++, Rust, Shell, Go,
+-TypeScript, YAML/JSON config), version optional; resolve the newest bundled version, honour a
+-pinned version if present, otherwise explain in one sentence and fall back; record the choice
+-on the ticket. Then the Coding Agent on the kernel: plan ingestion →
+-breakdown for user approval → iterate loop (lint, type, build, test) with stall detection
+-after 3 iterations → local commits on a branch in Projects/<slug>/.git with Slas-Agent and
+-Slas-Ticket trailers → consensus on the final diff → code walkthrough SOP → ZIP export.
+-Build the Coding page and the three-step New coding task wizard from §9. The sandbox must
+-never hold Git credentials or have a route to any remote (INV-14).
++Task: implement services/sandbox-manager (engine per ADR-0004, gVisor runtime with the
++visible hardened-runc fallback, read-only rootfs, no network, per-user subordinate uid, idle
++and maximum TTL suspended while the ticket runs, quotas from config/quotas.yaml, the exec API
++contract of CLAUDE.md §11, git thin wrapper installed with a per-user identity from
++GIT_CONFIG_GLOBAL), the read-only offline package cache under Toolchains/ mounted into every
++sandbox, one sandbox image per language, and the toolchain resolver from CLAUDE.md §10.1: the
++user picks languages only (Python, C, C++, Rust, Shell, Go, TypeScript, YAML/JSON config),
++version optional; resolve the newest bundled version, honour a pinned version if present,
++otherwise explain in one sentence and fall back; record the choice on the ticket. Then the
++Coding Agent on the kernel: plan ingestion → ticket → breakdown for user approval →
++iterate() loop (lint, type, build, test) with stall detection after 3 iterations → local
++commits on a branch in Projects/<slug>/.git with Slas-Agent and Slas-Ticket trailers →
++consensus on the final diff → code walkthrough SOP → ZIP export. Build the Coding page with
++New project (init or clone) and the three-step New coding task wizard from §9. The sandbox
++must never hold Git credentials or have a route to any remote (INV-14).
+ ```
+ 
+ ### P6b — Hybrid Git Control Engine
+ ```
+ <preamble>
+-Task: implement services/git-broker and packages/slas-git per CLAUDE.md §5.7: the Remote
+-model with credentials stored encrypted by reference (AES-GCM keyed from SLAS_SECRET_KEY in
+-quickstart, Vault KV behind the same interface for prod); per-operation decryption in memory
+-with GIT_ASKPASS for tokens and a tmpfs 0600 key file for SSH, shredded after; the
+-hostile-repo hardening flags on every git invocation; the host allowlist from
+-config/git-hosts.yaml with the plain-language rejection message; the validation gate (path
+-scope, gitleaks, no new hooks/submodules/escaping symlinks, size, LFS off) and the Consensus
+-Router call for agent-authored diffs; branch push with PR/MR creation for GitLab, Gitea and
+-GitHub APIs; git bundle export/import; one audit row per operation. Build Settings → Git
+-remotes (paste-only fields, fingerprint after save, Test connection), Admin → Git hosts, the
+-per-project Git panel (Status, Commit, History, Push/Pull, Bundle) and the Terminal tab that
+-runs inside the sandbox over WebSocket. Tests: a fake Git server, a repo with a malicious
+-pre-push hook that must not execute, and a CI check that greps every log sink for token and
+-private-key patterns after a full push flow.
++Task: implement services/git-broker and packages/slas-git per CLAUDE.md §5.7 and ADR-0003:
++the Remote model with credentials stored encrypted by reference under the broker-only
++SLAS_GIT_KEK compose secret (Vault KV behind the same interface for prod), pasted through the
++api without persistence there; per-operation decryption in memory with GIT_ASKPASS plus
++credential.username for tokens and a tmpfs 0600 key file with pinned host keys for SSH,
++shredded after; broker-owned bare mirrors with bundle sync, never opening the workspace .git
++and never running a worktree operation; the exclusive project lease; the SHA-pinned
++validation gate over the pushed range (path scope, gitleaks over every blob, hooks,
++submodules, escaping symlinks, size, LFS off) and the Consensus Router call for every commit
++not recorded as user-authored; the host allowlist table seeded from config/git-hosts.yaml,
++enforced in the broker and rendered into the nftables set, with the three-part rejection
++message; branch push with PR/MR creation through api_token_ref for GitLab, Gitea and GitHub
++APIs and the push-option and link fallbacks; git bundle export/import through the same gate;
++Docs/<remote> clones for Publish to repo; one audit row per operation with gated and pushed
++SHA. Build Settings → Git remotes (paste-only fields, fingerprint after save, Test
++connection), Admin → Git hosts, the per-project Git panel (Status, Commit, History,
++Push/Pull, Bundle) and the Terminal tab that runs inside the task's sandbox over WebSocket.
++Tests: a fake Git server with a GitLab-API emulation; the hostile-repository fixture suite
++([include]/[includeIf], url.*.insteadOf, remote.*.pushurl, core.gitProxy, filter/textconv/
++merge drivers, .git as a symlink and as a gitdir: file); a test that moves the workspace ref
++after gating and asserts the pushed SHA is the gated one; a process-spawn assertion during
++push; and a canary PAT and key that must appear in no log sink, workspace file, argv or model
++context after a full clone/push cycle.
+ ```
+ 
+ ### P7 — Validation Agent against fakes
+@@ -167,8 +197,10 @@
+ Task: implement the real Redfish, IPMI and SSH drivers in slas_hal behind the same
+ interface as the fakes, SOL capture, the syslog receiver, and the PDU driver for
+ <PDU model>. Add a quirk-shim layer keyed by BMC vendor/firmware. Add a CI check that greps
+-redacted log bundles for any credential pattern. I will provide one target: <alias>. Do not
+-run any power action until I confirm the target is free.
++redacted log bundles for any credential pattern. I will provide one target: <alias>. Never
++invoke slas_hal, ssh, ipmitool or Redfish against <alias> from this session or from tests; I
++run the real DC and AC cycles myself from the WebUI through the approval dialog and paste the
++journal, SOL capture and logs back to you.
+ ```
+ 
+ ### P9 — Factory Agent against fakes
+@@ -177,20 +209,25 @@
+ Task: implement templates/factory with the "final-test-9-steps" template, the MES adapter
+ interface with a file-drop implementation, services/station-runner (mTLS, signed step
+ batches, screenshots returned) with a runner fake, services/factory-executor with station
+-leases, and the Factory Agent on the kernel using skills for GUI steps: consensus PASS
+-requires 3/3, FAIL holds the station and drafts a line-lead ticket, production line SOP in
+-both languages, station state backup to Backups/stations/<n>. Build the Factory page
+-(test-step map, screenshot strip) and the three-step New factory job wizard.
++leases and the executor-owned journal, station-bound principals set at enrolment, the GATE
++step per template version, and the Factory Agent on the kernel using skills for GUI steps: a
++3/3 vote pre-fills a PASS recommendation that a human confirms on the ticket (§1.3, INV-11),
++FAIL holds the station and drafts a line-lead ticket while MES shows pending_review,
++production line SOP in both languages, station state backup as signed opaque blobs to
++Backups/stations/<n>/<ticket-id>. Build the Factory page (test-step map, screenshot strip)
++and the three-step New factory job wizard with the template policy shown read-only.
+ ```
+ 
+ ### P10 — Factory station
+ ```
+ <preamble>
+-Task: package services/station-runner for installation on a Windows/Linux test station
+-(single binary or venv, mTLS enrolment via a one-time code from Admin → Stations). Tune
+-window matching and timing for the "station-login-burnin" skill against the real station
+-<alias>. Add a screenshot retention setting. The operator must be able to watch and take
+-over through the VNC view at any point.
++Task: package services/station-runner for installation on a Linux test station (single
++binary or venv, mTLS enrolment via a one-time code from Admin → Stations, certificate
++rotation and revocation, per-station executable allowlist, on-screen "under agent control"
++banner). Tune window matching and timing for the "station-login-burnin" skill against the
++real station <alias>, driven by me from the WebUI: never send a step batch to <alias> from
++this session. Apply config/retention.yaml to screenshots. The operator must be able to follow
++the screenshot strip and stop the job from Hold station or at the station itself.
+ ```
+ 
+ ### P11 — Observability
+@@ -235,10 +272,11 @@
+ ```
+ <preamble>
+ Task: add the primitive `<name>` to the skill whitelist in CLAUDE.md §6.2 and
+-skills/schema/skill.schema.json with args <args>, capability <cap>, risk class <class>.
+-Implement it in slas_skills and the matching driver, add fake support, add tests, and update
+-the Skills page help text. If the risk class is destructive, it must appear in the import-time
+-and run-time approval messages.
++skills/schema/skill.schema.json with args <args>, outputs <outputs>, capability <cap>, risk
++class <class>. This is an interface change: write the ADR first (§15) and show me the
++CLAUDE.md diff before applying it. Implement it in slas_skills and the matching driver, add
++fake support, add tests, and update the Skills page help text. If the risk class is
++destructive, it must appear in the import-time and run-time approval messages.
+ ```
+ 
+ ### Add a WebUI page or wizard step
+@@ -268,8 +306,12 @@
+ Read CLAUDE.md. Check the repository for drift: modules that implement tickets, logs, RCA,
+ SOP or skills outside slas_kernel (§5.1); any subprocess call with shell=True; any container
+ that mounts a host socket, X11 socket or /dev/input other than model-manager and
+-sandbox-manager; any test that needs real hardware or a live model; any dependency added
+-without an ADR. Report as a checklist with file paths.
++sandbox-manager (the engine socket), or that uses host pid or SYS_ADMIN other than
++node-exporter and dcgm-exporter; any service other than git-broker that receives
++slas_git_kek, or any secret placed in .env; any git invocation in git-broker whose GIT_DIR is
++under Coding/; any test outside tests/eval that needs real hardware, a physical display or a
++live model; any export control that offers one language; any dependency added without an
++ADR or missing from docs/THIRD_PARTY.md. Report as a checklist with file paths.
+ ```
+ 
+ ## 4. Prompting rules Claude Code should be reminded of
