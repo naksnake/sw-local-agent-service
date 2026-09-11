@@ -8,11 +8,15 @@
 # python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
 .uv/
+.uv-cache/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+.coverage
+coverage.xml
 htmlcov/
 
 # node
@@ -21,6 +25,8 @@ dist/
 .vite/
 playwright-report/
 test-results/
+preflight.txt
+preflight.json
 
 # platform data (never in git)
 /AI/

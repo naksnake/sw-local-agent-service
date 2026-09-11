@@ -29,8 +29,26 @@ One command, one `.env`, one page to manage models. Details in `CLAUDE.md` §3.
 
 ## Status
 
-Pre-Phase 0. The repository currently holds the design documents and the UI demo.
-Follow `docs/DEVELOPMENT_PLAN.md` from P0.
+**Phase 0 — Skeleton.** The repository holds the layout from `CLAUDE.md` §13, the Python
+workspace (`uv`, `ruff`, `mypy --strict`, `pytest`), the WebUI shell (`pnpm`, Vite, React,
+`vitest`, Playwright), CI with an egress-DROP job, `./install.sh` with the preflight step
+(`slas doctor`), and ADR-0001/ADR-0002. Next: `docs/DEVELOPMENT_PLAN.md` P1.
+
+## Developing
+
+```bash
+uv sync                      # Python workspace, locked versions
+uv run pytest                # unit tests with coverage
+uv run ruff check . && uv run ruff format --check . && uv run mypy
+pnpm install --frozen-lockfile
+pnpm typecheck && pnpm test && pnpm build
+pnpm exec playwright install chromium && pnpm e2e
+./install.sh                 # preflight only in Phase 0; prints a plain-language report
+uv run slas doctor --json    # the same report as data
+```
+
+Everything above also runs with the network disabled once the dependencies are installed;
+CI proves it in the `egress-drop` job.
 
 ## Licence
 

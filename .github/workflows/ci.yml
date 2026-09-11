@@ -1,0 +1,165 @@
+# CI for SW Local Agent Service (docs/DEVELOPMENT_PLAN.md P0).
+#
+# Four jobs: Python (lint, types, unit tests), WebUI (types, unit tests, build, e2e), the
+# installer preflight, and an egress-DROP job that repeats every check inside containers
+# with no network at all (INV-1, INV-8: builds succeed with networking disabled).
+#
+# Every action is pinned to a commit and every image to a digest (INV-8). The version tags
+# in comments are for humans; the SHA is what runs.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.8.17"
+  NODE_VERSION: "22.22.2"
+  # ghcr.io/astral-sh/uv:0.8.17-python3.12-bookworm-slim
+  UV_IMAGE: ghcr.io/astral-sh/uv@sha256:c6fad5e08092142ea53fc03cbebb6304c5d06a25dd53ab450114f6c5f03376a7
+  # docker.io/library/node:22.22.2-bookworm-slim
+  NODE_IMAGE: docker.io/library/node@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e
+
+jobs:
+  python:
+    name: Python — lint, types, unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@557e51de59eb14aaaba2ed9621916900a91d50c6 # v6.6.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install the locked environment
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check .
+      - name: Format check
+        run: uv run ruff format --check .
+      - name: Type check (strict)
+        run: uv run mypy
+      - name: Unit tests with coverage
+        run: uv run pytest
+
+  webui:
+    name: WebUI — types, unit tests, build, e2e
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install the locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Type check (strict)
+        run: pnpm typecheck
+      - name: Unit tests
+        run: pnpm test
+      - name: Production build
+        run: pnpm build
+      - name: Install Chromium for Playwright
+        run: pnpm exec playwright install --with-deps chromium
+      - name: End-to-end smoke test
+        run: pnpm e2e
+      - name: Keep the Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  preflight:
+    name: install.sh — preflight prints a report
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run the installer preflight
+        run: |
+          set +e
+          ./install.sh --data-root "$RUNNER_TEMP/slas-data" | tee preflight.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "install.sh exited with $rc (0 = ready, 1 = problems found; a CI runner has no GPU)."
+          test "$rc" -eq 0 -o "$rc" -eq 1
+          grep -q "^Summary: " preflight.txt
+          grep -q "Nothing was changed on this host." preflight.txt
+          test ! -e "$RUNNER_TEMP/slas-data"
+      - name: The JSON form parses
+        run: |
+          ./install.sh --json --data-root "$RUNNER_TEMP/slas-data" > preflight.json || test "$?" -eq 1
+          python3 -m json.tool preflight.json > /dev/null
+
+  egress-drop:
+    name: Egress DROP — everything passes with no network
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # The two steps below are the only ones allowed to reach the network. They populate
+      # .venv, .uv-cache and node_modules inside the checkout, which the offline steps reuse.
+      - name: Install Python dependencies (network allowed, this step only)
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work \
+            -e HOME=/tmp -e UV_CACHE_DIR=/work/.uv-cache -e UV_PROJECT_ENVIRONMENT=/work/.venv \
+            -e UV_PYTHON_DOWNLOADS=never --user "$(id -u):$(id -g)" \
+            "$UV_IMAGE" uv sync --locked
+      - name: Install Node dependencies (network allowed, this step only)
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work -e HOME=/tmp \
+            -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 --user "$(id -u):$(id -g)" \
+            "$NODE_IMAGE" sh -ec '
+              corepack enable --install-directory /tmp/bin
+              export PATH=/tmp/bin:$PATH
+              pnpm install --frozen-lockfile
+            '
+
+      - name: Prove that the network is really blocked
+        run: |
+          if docker run --rm --network none "$UV_IMAGE" \
+               python -c "import urllib.request; urllib.request.urlopen('https://pypi.org', timeout=5)" 2>/dev/null; then
+            echo "The container could reach the internet, so the egress block is not working."
+            exit 1
+          fi
+          echo "Outbound network is blocked inside the test containers."
+
+      - name: Python — lint, types, unit tests, offline
+        run: |
+          docker run --rm --network none -v "$PWD:/work" -w /work \
+            -e HOME=/tmp -e UV_CACHE_DIR=/work/.uv-cache -e UV_PROJECT_ENVIRONMENT=/work/.venv \
+            -e UV_OFFLINE=1 -e UV_PYTHON_DOWNLOADS=never --user "$(id -u):$(id -g)" \
+            "$UV_IMAGE" sh -ec '
+              uv sync --locked
+              uv run --no-sync ruff check .
+              uv run --no-sync ruff format --check .
+              uv run --no-sync mypy
+              uv run --no-sync pytest
+            '
+      - name: WebUI — types, unit tests, build, offline
+        run: |
+          docker run --rm --network none -v "$PWD:/work" -w /work/apps/webui \
+            -e HOME=/tmp --user "$(id -u):$(id -g)" \
+            "$NODE_IMAGE" sh -ec '
+              node_modules/.bin/tsc --noEmit -p tsconfig.json
+              node_modules/.bin/vitest run
+              node_modules/.bin/vite build
+            '
+      - name: install.sh preflight, offline
+        run: |
+          docker run --rm --network none -v "$PWD:/work" -w /work -e HOME=/tmp \
+            --user "$(id -u):$(id -g)" "$UV_IMAGE" sh -ec '
+              ./install.sh --data-root /tmp/slas-data > /tmp/preflight.txt || [ $? -eq 1 ]
+              cat /tmp/preflight.txt
+              grep -q "^Summary: " /tmp/preflight.txt
+            '
