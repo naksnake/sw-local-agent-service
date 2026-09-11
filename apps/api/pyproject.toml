@@ -4,7 +4,17 @@ version = "0.0.0"
 description = "API: authz, tickets, approvals, settings (CLAUDE.md §4.2, §11)"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "alembic==1.19.2",
+    "argon2-cffi==25.1.0",
+    "asyncpg==0.31.0",
+    "fastapi==0.141.1",
+    "slas-authz",
+    "slas-schemas",
+    "sqlalchemy[asyncio]==2.0.52",
+    "structlog==26.1.0",
+    "uvicorn==0.52.4",
+]
 
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9"]
@@ -13,3 +23,7 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "slas_api"
 module-root = ""
+
+[tool.uv.sources]
+slas-authz = { workspace = true }
+slas-schemas = { workspace = true }

@@ -4,7 +4,11 @@ version = "0.0.0"
 description = "Roles and capabilities; authz runs where the action executes (CLAUDE.md §5.7, §11)"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "pydantic>=2.11,<3",
+    "pyyaml==6.0.3",
+    "slas-schemas",
+]
 
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9"]
@@ -13,3 +17,6 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "slas_authz"
 module-root = ""
+
+[tool.uv.sources]
+slas-schemas = { workspace = true }

@@ -1,0 +1,129 @@
+# Roles and capabilities for the SW Local Agent Service (CLAUDE.md §5.7 capabilities, §11
+# "authz runs where the action executes", ADR-0005).
+#
+# A person has exactly one role. A role is a named list of capabilities. Code checks
+# capabilities, never role names, so a site can reshape roles here without a code change.
+# The api re-reads this file when it changes; nothing restarts (INV-9).
+#
+# Capability names are fixed here for every phase so later phases do not invent their own.
+# Phase 1 uses users:manage, settings:manage and settings:read; the rest are declared now and
+# enforced by the phase that builds the feature (the "phase" field says which).
+version: 1
+
+capabilities:
+  users:manage:        { phase: 1, description: "Add people, change roles, deactivate accounts and reset one-time passwords." }
+  settings:read:       { phase: 1, description: "See the installation settings." }
+  settings:manage:     { phase: 1, description: "Change the installation settings." }
+  tickets:read:        { phase: 2, description: "See every ticket, its logs and its reports." }
+  tickets:export:      { phase: 2, description: "Export tickets, reports and SOPs." }
+  runs:start:          { phase: 2, description: "Start coding tasks, validation runs and factory jobs." }
+  runs:abort:          { phase: 2, description: "Pause or abort a running job." }
+  approve:destructive: { phase: 2, description: "Approve destructive steps: firmware flash, secure erase, BIOS reset, AC cycle, RAID change (INV-7)." }
+  approve:factory_verdict: { phase: 9, description: "Confirm or override a factory PASS or FAIL verdict." }
+  models:manage:       { phase: 3, description: "Swap, roll back and configure models." }
+  skills:import:       { phase: 4, description: "Import skills into the library." }
+  skills:enable:       { phase: 4, description: "Enable a skill for an agent." }
+  knowledge:upload:    { phase: 5, description: "Add documents to the knowledge base." }
+  targets:lease:       { phase: 7, description: "Lease a server for a validation run." }
+  stations:lease:      { phase: 9, description: "Lease a test station for a factory job." }
+  screen:              { phase: 4, description: "Run skill steps that drive a screen." }
+  ssh:                 { phase: 4, description: "Run skill steps over SSH on a target or station." }
+  redfish:             { phase: 4, description: "Run skill steps against a BMC." }
+  files:               { phase: 4, description: "Run skill steps that read and write the job's workspace." }
+  git:remote_manage:   { phase: 6, description: "Add, test, rotate and remove your own Git remotes." }
+  git:clone:           { phase: 6, description: "Clone from a saved remote through the Git broker." }
+  git:pull:            { phase: 6, description: "Pull from a saved remote through the Git broker." }
+  git:push_branch:     { phase: 6, description: "Push a branch and open a pull or merge request." }
+  git:push_protected:  { phase: 6, description: "Push directly to a protected branch (off by default)." }
+  git:bundle:          { phase: 6, description: "Export and import Git bundles for offline transfer." }
+  git:terminal:        { phase: 6, description: "Open a terminal inside a coding sandbox." }
+  git:hosts_manage:    { phase: 6, description: "Manage the allowlist of Git hosts." }
+
+roles:
+  administrator:
+    label: Administrator
+    description: Everything, including people, settings and model changes.
+    capabilities:
+      - users:manage
+      - settings:read
+      - settings:manage
+      - tickets:read
+      - tickets:export
+      - runs:start
+      - runs:abort
+      - approve:destructive
+      - approve:factory_verdict
+      - models:manage
+      - skills:import
+      - skills:enable
+      - knowledge:upload
+      - targets:lease
+      - stations:lease
+      - screen
+      - ssh
+      - redfish
+      - files
+      - git:remote_manage
+      - git:clone
+      - git:pull
+      - git:push_branch
+      - git:bundle
+      - git:terminal
+      - git:hosts_manage
+  validation-engineer:
+    label: Validation engineer
+    description: Validation runs on servers, including approval of their destructive steps.
+    capabilities:
+      - settings:read
+      - tickets:read
+      - tickets:export
+      - runs:start
+      - runs:abort
+      - approve:destructive
+      - targets:lease
+      - skills:import
+      - skills:enable
+      - knowledge:upload
+      - screen
+      - ssh
+      - redfish
+      - files
+  factory-lead:
+    label: Factory lead
+    description: Factory jobs, verdicts and station holds.
+    capabilities:
+      - settings:read
+      - tickets:read
+      - tickets:export
+      - runs:start
+      - runs:abort
+      - approve:factory_verdict
+      - stations:lease
+      - skills:enable
+      - screen
+      - ssh
+      - files
+  firmware-engineer:
+    label: Firmware engineer
+    description: Coding tasks, exports and pull requests through the Git broker.
+    capabilities:
+      - settings:read
+      - tickets:read
+      - tickets:export
+      - runs:start
+      - runs:abort
+      - skills:enable
+      - knowledge:upload
+      - files
+      - git:remote_manage
+      - git:clone
+      - git:pull
+      - git:push_branch
+      - git:bundle
+      - git:terminal
+  viewer:
+    label: Viewer
+    description: Read-only access to tickets, reports and settings.
+    capabilities:
+      - settings:read
+      - tickets:read
