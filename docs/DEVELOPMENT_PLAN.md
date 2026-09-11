@@ -1,6 +1,6 @@
 # Development Plan — SW Local Agent Service
 
-Companion to `CLAUDE.md` v3.0. Phases are ordered so that the **shared kernel exists before
+Companion to `CLAUDE.md` v3.2. Phases are ordered so that the **shared kernel exists before
 any agent**, and every agent is built against **fakes before hardware**. Each phase ends
 with something you can click or run. Do not start a phase until the previous one's "Done
 when" is green in CI.
@@ -36,10 +36,14 @@ worker instead of host X11".
 **Done when.** `./install.sh` runs preflight and prints a plain-language report; CI is
 green on an empty repo; `docs/adr/` has two accepted ADRs.
 
-### P1 — Quickstart core (3 sessions)
-**Scope.** Compose with postgres, redis, minio, api, webui shell, edge (self-signed TLS);
-built-in auth (argon2) + RBAC/capabilities in `slas-authz`; Admin → People and Settings
-(writes `.env`); `slas user add`; deploy test (fresh VM → login page under egress-DROP).
+### P1 — Quickstart core (built in one pass on 2026-09-11; the reviewed 22-session decomposition is in `docs/plans/P1-sessions.md`)
+**Scope.** Compose with postgres, redis, minio, api, webui shell, edge (Caddy, self-signed TLS);
+built-in auth (argon2id) + RBAC/capabilities in `slas-authz` from `config/rbac-roles.yaml`;
+Admin → People and Admin → Settings (settings live in Postgres and apply without a restart;
+`.env` holds bootstrap values only and is written by `install.sh` alone — ADR-0006); `slas
+user add|list|deactivate|reset-password` and `slas logs`; the bundle builder, image lock and
+file secrets of ADR-0004; deploy test (bundle → `install.sh` with container egress blocked →
+login page, on a GPU-less runner).
 **Done when.** INV-10 test green; you can log in, add a user, change a setting without a
 restart.
 

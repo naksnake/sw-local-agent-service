@@ -8,3 +8,7 @@ change, and any invariant relaxation. `tests/unit/test_adrs.py` checks the forma
 |---|---|---|
 | 0001 | One Agent Kernel, three thin agents | accepted |
 | 0002 | A dedicated screen worker instead of the host's display | accepted |
+| 0003 | The Phase 1 dependency set | accepted |
+| 0004 | Install contract: file secrets, image lock, bundle | accepted |
+| 0005 | Roles and capability names live in config/rbac-roles.yaml | accepted |
+| 0006 | Settings store and user identity | accepted |

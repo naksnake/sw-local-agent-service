@@ -29,9 +29,12 @@ One command, one `.env`, one page to manage models. Details in `CLAUDE.md` §3.
 
 ## Status
 
-Phase 0 (skeleton) in progress: repository layout, toolchains, CI with an egress-DROP job,
-`slas doctor` and the preflight-only `install.sh`, ADR-0001 and ADR-0002. Follow
-`docs/DEVELOPMENT_PLAN.md`. The design review of 2026-09-10 lives in `docs/reviews/`.
+Phase 0 (skeleton) is merged. Phase 1 (quickstart core) is built: the compose stack
+(postgres, redis, minio, api, webui, edge with self-signed TLS), built-in sign-in with
+argon2id and roles from `config/rbac-roles.yaml`, Admin → People and Admin → Settings, the
+`slas user` and `slas logs` commands, the bundle builder and the full `install.sh`. Follow
+`docs/DEVELOPMENT_PLAN.md`; the Phase 1 interfaces are in `docs/plans/P1-contract.md` and
+ADR-0003 to ADR-0006. The design review of 2026-09-10 lives in `docs/reviews/`.
 
 ## Developing
 
@@ -45,7 +48,8 @@ uv run mypy                          # --strict, configured in pyproject.toml
 uv run pytest                        # tests/unit and tests/deploy, all against fakes
 pnpm install --frozen-lockfile
 pnpm -r typecheck && pnpm -r test    # apps/webui and tests/e2e
-./install.sh                         # preflight only in Phase 0; changes nothing
+./install.sh --preflight-only        # the host check alone; changes nothing
+./install.sh                         # full install from an unpacked bundle (needs Docker or Podman)
 scripts/ci/egress-drop.sh --netns    # the whole suite with outbound traffic blocked
 scripts/ci/no-cloud-ai.sh            # INV-2 grep
 ```

@@ -4,9 +4,11 @@
 > this file first and treats it as authoritative. Where this file conflicts with a
 > request, surface the conflict; never resolve it silently.
 >
-> **Version 3.1 · 2026-09-10** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
+> **Version 3.2 · 2026-09-11** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
 > (phases, done criteria) and `docs/PROMPTS.md` (copy-paste session prompts).
-> 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14).
+> 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14). 3.2 records the Phase 1 install
+> contract: the dependency set (ADR-0003), file secrets, the image lock and the bundle
+> (ADR-0004), roles and capability names (ADR-0005), and the live settings store (ADR-0006).
 
 ---
 
@@ -101,7 +103,7 @@ PASS or merges code without a human · a replacement for engineering judgement.
 | **INV-7** | Destructive actions need per-run human approval: firmware flash, secure erase, BIOS reset, AC cycle, RAID change, factory PASS/FAIL override, station config change. |
 | **INV-8** | No `latest` tags, no unpinned deps; builds succeed with networking disabled. |
 | **INV-9** | Model and user changes never require config edits or restarts. |
-| **INV-10** | `./install.sh` on a fresh GPU host reaches a working login page with no manual steps. CI enforces it. |
+| **INV-10** | `./install.sh` on a fresh GPU host reaches a working login page with no manual steps. CI enforces it. On a host without a usable GPU the login page is still reached and inference is reported as unavailable in a sentence; CI enforces this GPU-less path, the GPU path is a release checklist item (ADR-0004). |
 | **INV-11** | **Cross-check never authorises.** A consensus of models is an extra check on judgement outputs; it never substitutes for INV-3, INV-6 or INV-7, and cannot trigger a hardware or GUI action by itself. |
 | **INV-12** | **Skills are data.** A skill file is validated against the schema, may only use whitelisted primitives, runs with the importing user's capabilities, and cannot escalate them. There is no `shell` primitive. |
 | **INV-13** | **Both languages or neither.** Every SOP, report and ticket export produces English and Chinese together from one structured source. Identifiers, commands, numbers and versions are copied by code, never translated by a model. |
@@ -115,22 +117,29 @@ Two profiles, one bundle, one command. Full detail in `docs/DEVELOPMENT_PLAN.md`
 
 | | `quickstart` (default) | `prod` |
 |---|---|---|
-| Install | `tar xzf slas-bundle.tgz && ./install.sh` | `./install.sh --profile prod` |
+| Install | `tar xzf slas-bundle-<version>.tgz && cd slas-bundle-<version> && ./install.sh` | `./install.sh --profile prod` |
 | Auth | built-in users + roles | + OIDC via local Keycloak |
-| Secrets | generated `.env` + Docker secrets | Vault, injected at dispatch |
+| Secrets | `.env` holds non-secret settings only; passwords are generated once as compose file secrets under `${SLAS_DATA_ROOT}/secrets/`, each attached only to the services that read it (ADR-0004) | Vault, injected at dispatch |
 | Sandbox | rootless Podman + gVisor if present | gVisor required, Kata/Firecracker tier |
 | Screen worker | one Xvfb display per session, VNC for the operator | same, plus per-session display isolation on Kata |
 | Inference | 1 coder + 1 embed + 1 small triage instance | dedicated instance per role, blue/green |
 | Observability | Prometheus + Grafana | + Loki, Tempo, alerting |
 | Backups | nightly dump + snapshots, 14 days | pgBackRest PITR, object-lock, restore drills |
 
-`install.sh`: preflight (`slas doctor`) → generate `.env` → load images → copy models →
-`docker compose up -d` → wait healthy → print URL and one-time admin password. Idempotent.
-Anything mandatory in quickstart has zero manual setup.
+`install.sh`: preflight (`slas doctor`) → configure (`.env` and secrets only if absent, the
+§4.4 layout, installed copies of `compose/` and `config/`, `bin/slas`) → load images and
+verify every image id against `compose/images.lock.json` → copy models → `<engine> compose
+up -d` → wait healthy → create the first administrator → print URL and one-time admin
+password; a re-run prints that the administrator already exists. Idempotent; a re-run never
+rotates a secret. Exit codes: 0 ok · 2 preflight blocked · 3 configuration · 4 image
+verification · 5 services not healthy · 6 administrator bootstrap (ADR-0004). Anything
+mandatory in quickstart has zero manual setup.
 
-The `slas` CLI mirrors the WebUI: `doctor`, `status`, `logs`, `user add`, `model
-scan|fit|swap|test`, `toolchain list|add`, `skill import|export|validate`, `backup now|restore`,
-`upgrade`. The bundle ships the offline **toolchains** (Python 3.11/3.12, gcc/clang, Rust, Go,
+The `slas` CLI mirrors the WebUI: `doctor`, `status`, `logs`, `user add|list|deactivate|reset-password`,
+`model scan|fit|swap|test`, `toolchain list|add`, `skill import|export|validate`, `backup now|restore`,
+`upgrade`. It is standard-library Python, installed as `${SLAS_DATA_ROOT}/bin/slas`; `user` and
+`logs` run inside the api container through `<engine> compose exec`, so no credential is
+needed on the host. The bundle ships the offline **toolchains** (Python 3.11/3.12, gcc/clang, Rust, Go,
 Node, shell tooling, yamllint/jsonschema); `slas toolchain list` shows what is available.
 
 ---
@@ -243,7 +252,11 @@ ${SLAS_DATA_ROOT}/                       # default /AI/Agent
 ├── Models/{models.yaml, <model-id>/}
 ├── Knowledge/{datasheets/,test-specs/,runbooks/,past-reports/,ingest-manifest.yaml}
 ├── Backups/{postgres,qdrant,minio,stations}/
-└── .env
+├── secrets/                             # compose file secrets written once by install.sh (0700 dir, ADR-0004)
+├── compose/  config/                    # installed copies; the api mounts config/ read-only and re-reads it (INV-9)
+├── edge/                                # Caddy's local CA; edge/root.crt is the certificate to trust
+├── bin/slas                             # the CLI launcher (standard-library Python)
+└── .env                                 # non-secret settings only
 ```
 
 ---
@@ -452,6 +465,16 @@ and never has a route to a remote** (INV-14). Both methods operate on the same
   never moves files — it reads the repo the sandbox already committed to.
 - Models see `remote_ref: gitlab-firmware`, never a URI with credentials, never a key.
 
+### 5.8 Roles and capabilities
+
+`config/rbac-roles.yaml` (ADR-0005) holds the capability catalogue for every phase and the
+roles: `administrator`, `validation-engineer`, `factory-lead`, `firmware-engineer`, `viewer`.
+A person has one role; code checks capabilities (`users:manage`, `settings:manage`,
+`approve:destructive`, `git:push_branch`, …), never role names. `packages/slas-authz` loads
+the file, resolves a principal's capabilities at request time and answers `authorize()` with
+a three-part sentence on denial. The api re-reads the file when it changes and keeps the
+last valid copy on a bad edit, so roles change without a restart (INV-9).
+
 ---
 
 ## §6 SKILL RECIPE SPECIFICATION
@@ -589,7 +612,10 @@ Knowledge · Admin. Adding a page needs an ADR. Inside Coding, each project has 
 panel** (Status · Commit · History · Push/Pull · Bundle) and a **Terminal** tab that runs
 inside the sandbox. Users manage their remotes under Settings → Git remotes (paste-only
 fields, fingerprint shown after save, "Test connection"); admins manage the host allowlist
-under Admin → Git hosts.
+under Admin → Git hosts. Admin → People adds people by email with a one-time password shown
+once; Admin → Settings stores installation settings in Postgres and applies them live, each
+field saying whether it applies immediately or is used from a later phase (INV-9, ADR-0006);
+`.env` is written only by `install.sh`.
 
 **Every agent has a "New …" wizard, always three steps, always ending in a sentence that
 says what will happen and a verb button:**
@@ -698,6 +724,13 @@ per §9 · both-language export produced · install.sh still green · ADR if a b
 
 ## §12 DOCKER COMPOSE BLUEPRINT (conceptual; `compose/` holds the real files)
 
+The `@sha256:…` references below state the intent. Digests do not survive an offline image
+load, so `compose/docker-compose.yml` uses immutable version tags (never `latest`) and
+`install.sh` verifies every loaded image id against `compose/images.lock.json` before
+starting anything (ADR-0004). Passwords reach containers as compose file secrets, not through
+`env_file`. In Phase 1 the api mounts only `${SLAS_DATA_ROOT}/config:/etc/slas:ro`; the
+whole-root mount arrives with the ticket service.
+
 ```yaml
 x-airgap: &airgap { DO_NOT_TRACK: "1", HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1", HF_HUB_DISABLE_TELEMETRY: "1" }
 x-common: &common { restart: unless-stopped, env_file: [.env], logging: { driver: json-file, options: { max-size: "50m", max-file: "5" } } }
@@ -771,8 +804,9 @@ sandbox-manager → validation-executor → factory-executor → observability �
 ## §13 REPOSITORY LAYOUT
 ```
 sw-local-agent-service/
-├── CLAUDE.md  README.md  install.sh
-├── docs/{DEVELOPMENT_PLAN.md, PROMPTS.md, adr/, runbooks/, ui/, ui-demo/, golden-set/, glossary.yaml}
+├── CLAUDE.md  README.md  install.sh  VERSION  bin/slas
+├── docs/{DEVELOPMENT_PLAN.md, PROMPTS.md, adr/, plans/, reviews/, runbooks/, ui/, ui-demo/, golden-set/, glossary.yaml}
+├── scripts/{ci/, bundle/}                                # CI egress block, bundle builder
 ├── apps/{webui, api}
 ├── services/{agent-core-orchestrator, llm-gateway, model-manager, sandbox-manager, screen-worker,
 │             git-broker, validation-executor, factory-executor, station-runner, local-search-api, edge}
@@ -782,7 +816,7 @@ sw-local-agent-service/
 ├── skills/{schema/skill.schema.json, library/}           # shipped skills
 ├── templates/factory/                                    # test-loop templates
 ├── images/{sandbox-*, screen-worker, validation-executor, factory-executor}
-├── compose/{docker-compose.yml, prod.override.yml, macvlan.override.yml}
+├── compose/{docker-compose.yml, images.lock.json, postgres-init/, prod.override.yml, macvlan.override.yml}
 ├── config/{.env.example, guardrails.yaml, redaction.yaml, rbac-roles.yaml, consensus.yaml, git-hosts.yaml}
 └── tests/{unit, integration, hal, screen, skills, eval, e2e, deploy}
 ```
