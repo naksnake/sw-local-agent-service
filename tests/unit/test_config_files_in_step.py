@@ -32,6 +32,15 @@ def test_guardrails_yaml_is_in_step() -> None:
     assert "requires_approval: [ac_cycle, firmware_flash, secure_erase, bios_reset, " in expected
 
 
+def test_bmc_quirks_yaml_is_in_step() -> None:
+    from slas_hal.quirks import DEFAULT_QUIRKS, QUIRKS_FILE_HEADER, render_quirks_yaml
+
+    expected = render_quirks_yaml(DEFAULT_QUIRKS, header=QUIRKS_FILE_HEADER)
+    assert (REPO_ROOT / "config" / "bmc-quirks.yaml").read_text(encoding="utf-8") == expected
+    assert "  - id: dmtf-defaults\n" in expected and "  - id: slas-fixture\n" in expected
+    assert '      bdf_path: "Oem.Slas.BDF"\n      sel_page_size: 2\n' in expected
+
+
 def test_plan_schema_and_primitives_are_in_step() -> None:
     schema_path = REPO_ROOT / "plans" / "schema" / "plan.schema.json"
     assert schema_path.read_text(encoding="utf-8") == render_plan_schema()

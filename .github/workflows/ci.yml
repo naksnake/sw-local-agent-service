@@ -49,6 +49,19 @@ jobs:
         run: uv run mypy
       - name: Unit tests with coverage
         run: uv run pytest
+      - name: Credential grep over a full run's log bundles (INV-5, INV-14)
+        # A 25-cycle run through the real drivers against fake hardware, with a fake BMC
+        # password and SSH key in play, leaves its tickets, journals, SOPs, console and
+        # syslog under $SLAS_SINK_DIR; then every file there is grepped for the secrets
+        # and for every credential shape. The git-broker flow test does the same for tokens.
+        env:
+          SLAS_SINK_DIR: ${{ runner.temp }}/slas-sinks
+          SLAS_FAKE_BMC_PASSWORD: "Bmc-Passw0rd-XYZ!"
+        run: |
+          uv run pytest -q --no-cov -p no:cacheprovider \
+            tests/hal/test_real_hal_run.py -k "leaves_no_credential" \
+            tests/unit/test_git_broker_flow.py
+          uv run python -m slas_hal.sinkcheck "$SLAS_SINK_DIR" --known-env SLAS_FAKE_BMC_PASSWORD
 
   webui:
     name: WebUI — types, unit tests, build, e2e

@@ -83,7 +83,21 @@ runs, carrying the diagnosis votes). The Validation page (LED cycle map, finding
 and the three-step New validation run wizard run on an API fake. The done-when is a test: a
 25-cycle DC run with a PCIe degradation planted at cycle 14 yields one deduplicated bug
 ticket with 3 votes and an EN/中文 SOP; a kill mid-cycle resumes at that cycle without a
-second power action; an AC plan is blocked until approved. Real drivers wait for P8.
+second power action; an AC plan is blocked until approved.
+
+**Phase 8, first session: the real drivers, against fake hardware.** `slas_hal.drivers`
+puts Redfish (DMTF URIs discovered from the service root, paged SEL, device links, the reset
+action), `ipmitool` and `ssh` (argv only; password in `IPMI_PASSWORD`, key on tmpfs for one
+command), SOL capture, a syslog receiver and the PDU protocol behind the same `Hal` interface
+the fakes implement. Target records (`slas target add|list|arm|disarm`) carry credential
+references only, and every target starts **disarmed**: no power action reaches hardware until
+a person confirms it is free. A quirk-shim table (`config/bmc-quirks.yaml`) keyed by vendor
+and firmware covers SEL paging, PCIe location, BDF field, reset types, IPMI-for-power and
+unreliable link width (then `lspci` in-band). CI runs the 25-cycle run through the real
+drivers against a fake Redfish service and greps every resulting file for the fake BMC
+password, the fake key and every credential shape. Not done: the PDU model and the target
+alias were not named, so no real hardware was touched and the model-specific PDU driver is
+an explicit TODO.
 
 ## Developing
 

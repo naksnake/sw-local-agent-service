@@ -92,6 +92,36 @@ def build_parser(environ: Mapping[str, str]) -> argparse.ArgumentParser:
     add.add_argument("version", help="The version the archive contains, for example 3.13.1")
     add.add_argument("archive", help="Path to the archive already copied onto this host")
 
+    target = commands.add_parser(
+        "target",
+        help="Register lab servers and arm or disarm power actions on them.",
+        description="A target record carries addresses and credential references, never a "
+        "secret. Power actions on a target stay off until a person confirms it is free and "
+        "arms it.",
+    )
+    target.add_argument(
+        "--data-root",
+        default=environ.get("SLAS_DATA_ROOT") or DEFAULT_DATA_ROOT,
+        help="Where the platform keeps its data (default: $SLAS_DATA_ROOT or "
+        f"{DEFAULT_DATA_ROOT}).",
+    )
+    target_commands = target.add_subparsers(dest="target_command", metavar="<action>")
+    target_commands.add_parser("list", help="Show every registered target and whether it is armed.")
+    show = target_commands.add_parser("show", help="Show one target record (references only).")
+    show.add_argument("alias")
+    add = target_commands.add_parser(
+        "add", help="Register a target from a JSON record (see docs/runbooks/targets.md)."
+    )
+    add.add_argument("file", help="Path to the JSON record")
+    arm = target_commands.add_parser(
+        "arm", help="Allow power actions on a target after confirming it is free."
+    )
+    arm.add_argument("alias")
+    arm.add_argument("--by", required=True, help="Who confirmed the target is free")
+    arm.add_argument("--note", default="", help="What was checked, in a sentence")
+    disarm = target_commands.add_parser("disarm", help="Refuse power actions on a target again.")
+    disarm.add_argument("alias")
+
     for name, phase in NOT_YET.items():
         later = commands.add_parser(name, help=f"Arrives in {phase}.")
         later.add_argument("rest", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
@@ -134,6 +164,80 @@ def run_doctor(args: argparse.Namespace, host: Host, out: TextIO) -> int:
     return exit_code(results)
 
 
+def run_target(args: argparse.Namespace, out: TextIO) -> int:
+    # Imported here: the host CLI stays standard-library-only for `doctor` (install.sh).
+    import json
+    from datetime import UTC, datetime
+
+    from pydantic import ValidationError
+
+    from slas_hal.targets import TargetError, TargetRecord, TargetRegistry
+    from slas_schemas.common import validation_sentence
+
+    registry = TargetRegistry(Path(args.data_root) / "Validation" / "targets.json")
+    try:
+        if args.target_command == "list":
+            records = registry.list()
+            if not records:
+                out.write(
+                    "No target is registered yet. Add one with `slas target add <file.json>`.\n"
+                )
+                return EXIT_OK
+            out.write(f"{len(records)} {'target' if len(records) == 1 else 'targets'}:\n")
+            for record in records:
+                out.write(f"  {record.sentence()}\n")
+            return EXIT_OK
+        if args.target_command == "show":
+            record = registry.get(args.alias)
+            out.write(record.sentence() + "\n")
+            out.write(json.dumps(record.model_dump(mode="json"), indent=2) + "\n")
+            return EXIT_OK
+        if args.target_command == "add":
+            path = Path(args.file)
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except ValueError as exc:
+                out.write(f"{path.name} is not JSON.\nLikely cause: {exc}.\n")
+                out.write("What to do: fix the file; docs/runbooks/targets.md shows the shape.\n")
+                return EXIT_PROBLEMS
+            try:
+                record = TargetRecord.model_validate(data)
+            except ValidationError as exc:
+                out.write(f"{path.name} is not a usable target record.\n")
+                out.write(f"Likely cause: {validation_sentence(exc)}\n")
+                out.write(
+                    "What to do: use credential references (env:NAME, vault:PATH), never a "
+                    "secret; docs/runbooks/targets.md shows the shape.\n"
+                )
+                return EXIT_PROBLEMS
+            record = record.model_copy(update={"power_actions_enabled": False, "armed": None})
+            registry.put(record)
+            out.write(f"Added {record.sentence()}\n")
+            out.write(
+                "Power actions stay off until a person confirms the machine is free and runs "
+                f"`slas target arm {record.alias}`.\n"
+            )
+            return EXIT_OK
+        if args.target_command == "arm":
+            now = datetime.now(UTC)
+            record = registry.arm(args.alias, by=args.by, at=now, note=args.note)
+            out.write(
+                f"Armed {record.alias}: power actions may run. Recorded: {args.by}, "
+                f"{now:%Y-%m-%d %H:%M} UTC" + (f" ({args.note})" if args.note else "") + "\n"
+            )
+            return EXIT_OK
+        if args.target_command == "disarm":
+            record = registry.disarm(args.alias)
+            out.write(
+                f"Disarmed {record.alias}: every power action is refused until it is armed again.\n"
+            )
+            return EXIT_OK
+    except TargetError as exc:
+        out.write(exc.message.render() + "\n")
+        return EXIT_PROBLEMS
+    return EXIT_USAGE
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -155,6 +259,10 @@ def main(
         if args.toolchain_command is None:
             parser.parse_args(["toolchain", "--help"])  # prints help and exits
         return run_toolchain(args, out)
+    if args.command == "target":
+        if args.target_command is None:
+            parser.parse_args(["target", "--help"])  # prints help and exits
+        return run_target(args, out)
     phase = NOT_YET[args.command]
     out.write(
         f"`slas {args.command}` is not available yet. It arrives in {phase} of "

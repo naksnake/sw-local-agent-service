@@ -328,6 +328,7 @@ name = "slas-cli"
 version = "0.0.1"
 source = { editable = "packages/slas-cli" }
 dependencies = [
+    { name = "slas-hal" },
     { name = "slas-kernel" },
     { name = "slas-sandbox-manager" },
     { name = "slas-schemas" },
@@ -335,6 +336,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "slas-hal", editable = "packages/slas-hal" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
     { name = "slas-sandbox-manager", editable = "services/sandbox-manager" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
