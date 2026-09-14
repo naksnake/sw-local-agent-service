@@ -11,6 +11,8 @@ members = [
     "slas-git",
     "slas-hal",
     "slas-kernel",
+    "slas-llm-gateway",
+    "slas-model-manager",
     "slas-rag",
     "slas-schemas",
     "slas-screen",
@@ -363,6 +365,32 @@ dependencies = [
 requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
 
 [[package]]
+name = "slas-llm-gateway"
+version = "0.0.1"
+source = { editable = "services/llm-gateway" }
+dependencies = [
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
+
+[[package]]
+name = "slas-model-manager"
+version = "0.0.1"
+source = { editable = "services/model-manager" }
+dependencies = [
+    { name = "slas-llm-gateway" },
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "slas-llm-gateway", editable = "services/llm-gateway" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+]
+
+[[package]]
 name = "slas-rag"
 version = "0.0.1"
 source = { editable = "packages/slas-rag" }
@@ -410,6 +438,8 @@ dependencies = [
     { name = "slas-git" },
     { name = "slas-hal" },
     { name = "slas-kernel" },
+    { name = "slas-llm-gateway" },
+    { name = "slas-model-manager" },
     { name = "slas-rag" },
     { name = "slas-schemas" },
     { name = "slas-screen" },
@@ -435,6 +465,8 @@ requires-dist = [
     { name = "slas-git", editable = "packages/slas-git" },
     { name = "slas-hal", editable = "packages/slas-hal" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
+    { name = "slas-llm-gateway", editable = "services/llm-gateway" },
+    { name = "slas-model-manager", editable = "services/model-manager" },
     { name = "slas-rag", editable = "packages/slas-rag" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
     { name = "slas-screen", editable = "packages/slas-screen" },

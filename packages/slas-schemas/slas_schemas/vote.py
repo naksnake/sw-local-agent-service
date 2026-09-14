@@ -31,5 +31,9 @@ class ConsensusVerdict(SlasModel):
     rule: ConsensusRule
     votes: list[Vote] = Field(default_factory=list)
     agreed: bool
+    #: Fewer voters than the rule asks for answered, or the budget forced a single model.
     degraded: bool = False
     sentence: str = Field(min_length=1)
+    concerns: list[str] = Field(default_factory=list)
+    undecided_fields: list[str] = Field(default_factory=list)
+    unavailable_voters: list[str] = Field(default_factory=list)

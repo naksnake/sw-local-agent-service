@@ -14,6 +14,8 @@ dependencies = [
   "slas-git",
   "slas-hal",
   "slas-kernel",
+  "slas-llm-gateway",
+  "slas-model-manager",
   "slas-rag",
   "slas-schemas",
   "slas-screen",
@@ -34,8 +36,8 @@ dev = [
 package = false
 
 [tool.uv.workspace]
-# apps/api and services/* join the workspace when they gain a pyproject (P1, P2).
-members = ["packages/*"]
+# apps/api and the remaining services/* join the workspace when they gain a pyproject.
+members = ["packages/*", "services/llm-gateway", "services/model-manager"]
 
 [tool.uv.sources]
 slas-authz = { workspace = true }
@@ -45,6 +47,8 @@ slas-eval = { workspace = true }
 slas-git = { workspace = true }
 slas-hal = { workspace = true }
 slas-kernel = { workspace = true }
+slas-llm-gateway = { workspace = true }
+slas-model-manager = { workspace = true }
 slas-rag = { workspace = true }
 slas-schemas = { workspace = true }
 slas-screen = { workspace = true }
@@ -59,7 +63,7 @@ line-length = 100
 target-version = "py312"
 # Markdown is excluded on purpose: ruff would reformat the code blocks in CLAUDE.md and the
 # ADRs, and CLAUDE.md changes only by decision (CLAUDE.md §15).
-extend-exclude = [".venv", ".uv-cache", "node_modules", "apps/webui", "*.md"]
+extend-exclude = [".venv", ".uv-cache", "node_modules", "apps/webui", "*.md", "*.yaml"]
 
 [tool.ruff.lint]
 select = [
@@ -84,7 +88,8 @@ allowed-confusables = ["：", "（", "）", "；", "，", "。"]
 [tool.ruff.lint.isort]
 known-first-party = [
   "slas_authz", "slas_cli", "slas_diff", "slas_eval", "slas_git", "slas_hal", "slas_kernel",
-  "slas_rag", "slas_schemas", "slas_screen", "slas_skills", "slas_sop", "slas_triage",
+  "slas_llm_gateway", "slas_model_manager", "slas_rag", "slas_schemas", "slas_screen",
+  "slas_skills", "slas_sop", "slas_triage",
 ]
 
 # --- mypy -------------------------------------------------------------------------------
@@ -94,7 +99,7 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 pretty = true
-files = ["packages", "tests"]
+files = ["packages", "services/llm-gateway", "services/model-manager", "tests"]
 plugins = ["pydantic.mypy"]
 
 # --- pytest / coverage ---------------------------------------------------------------------
@@ -107,6 +112,8 @@ addopts = [
   "--cov=slas_authz",
   "--cov=slas_cli",
   "--cov=slas_kernel",
+  "--cov=slas_llm_gateway",
+  "--cov=slas_model_manager",
   "--cov=slas_schemas",
   "--cov-report=term-missing",
   "--cov-fail-under=85",

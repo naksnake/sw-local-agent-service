@@ -1,0 +1,66 @@
+# Example Models/models.yaml for SW Local Agent Service (CLAUDE.md §7).
+# Rendered from slas_model_manager.registry.EXAMPLE_REGISTRY; a unit test keeps file and
+# code in step. Paths are directories under ${SLAS_DATA_ROOT}/Models, never URLs (INV-1).
+# Voters should come from different model families so their errors decorrelate (§5.3).
+# Model ids, sizes and quantisations here are illustrative; `slas model scan` fills in a
+# real installation's registry from the weights on disk.
+version: 1
+models:
+  - id: qwen2.5-coder-32b-awq
+    display_name: "Qwen2.5-Coder-32B"
+    family: "Qwen"
+    path: "qwen2.5-coder-32b-awq"
+    quant: awq4
+    vram_gib: 22
+    context: 32768
+    roles: [coder, planner]
+  - id: deepseek-v3-fp8
+    display_name: "DeepSeek-V3"
+    family: "DeepSeek"
+    path: "deepseek-v3-fp8"
+    quant: fp8
+    vram_gib: 70
+    context: 65536
+    roles: [planner]
+  - id: kimi-k2-awq
+    display_name: "Kimi K2"
+    family: "Kimi"
+    path: "kimi-k2-awq"
+    quant: awq4
+    vram_gib: 60
+    context: 65536
+    roles: [planner]
+  - id: qwen2.5-7b-awq
+    display_name: "Qwen2.5-7B"
+    family: "Qwen"
+    path: "qwen2.5-7b-awq"
+    quant: awq4
+    vram_gib: 7
+    context: 32768
+    roles: [triage]
+  - id: bge-m3
+    display_name: "BGE-M3"
+    family: "BAAI"
+    path: "bge-m3"
+    quant: bf16
+    vram_gib: 3
+    context: 8192
+    roles: [embed]
+  - id: bge-reranker-v2-m3
+    display_name: "BGE Reranker v2 M3"
+    family: "BAAI"
+    path: "bge-reranker-v2-m3"
+    quant: bf16
+    vram_gib: 2
+    context: 8192
+    roles: [rerank]
+roles:
+  coder: qwen2.5-coder-32b-awq
+  planner: deepseek-v3-fp8
+  triage: qwen2.5-7b-awq
+  embed: bge-m3
+  rerank: bge-reranker-v2-m3
+voters:
+  - qwen2.5-coder-32b-awq
+  - deepseek-v3-fp8
+  - kimi-k2-awq
