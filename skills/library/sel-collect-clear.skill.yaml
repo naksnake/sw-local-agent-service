@@ -1,0 +1,19 @@
+# Shipped skill for SW Local Agent Service (CLAUDE.md §6.3).
+# Rendered from slas_skills.library; a unit test keeps this file and the code in step.
+# Skills are data: whitelisted verbs only, run with the importing user's capabilities.
+skill:
+  id: sel-collect-clear
+  name: "Collect and clear the BMC event log"
+  version: 1.2.0
+  agents: [validation, factory]
+  requires: [redfish]
+  inputs:
+    target: { type: target_ref, required: true }
+  steps:
+    - redfish: { target: "{{ target }}", action: get_sel }
+      id: sel
+    - copy: { from: "{{ steps.sel.file }}", to: logs/sel-before.json }
+    - assert: { condition: "{{ steps.sel.count }} < 4000", message: "SEL nearly full before clearing" }
+  outputs:
+    sel_file: { from: sel }
+  on_failure: stop

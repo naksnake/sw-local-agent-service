@@ -19,6 +19,7 @@ dependencies = [
   "slas-rag",
   "slas-schemas",
   "slas-screen",
+  "slas-screen-worker",
   "slas-skills",
   "slas-sop",
   "slas-triage",
@@ -37,7 +38,12 @@ package = false
 
 [tool.uv.workspace]
 # apps/api and the remaining services/* join the workspace when they gain a pyproject.
-members = ["packages/*", "services/llm-gateway", "services/model-manager"]
+members = [
+  "packages/*",
+  "services/llm-gateway",
+  "services/model-manager",
+  "services/screen-worker",
+]
 
 [tool.uv.sources]
 slas-authz = { workspace = true }
@@ -52,6 +58,7 @@ slas-model-manager = { workspace = true }
 slas-rag = { workspace = true }
 slas-schemas = { workspace = true }
 slas-screen = { workspace = true }
+slas-screen-worker = { workspace = true }
 slas-skills = { workspace = true }
 slas-sop = { workspace = true }
 slas-triage = { workspace = true }
@@ -80,7 +87,7 @@ select = [
 ]
 
 # Traditional Chinese copy uses fullwidth punctuation on purpose (INV-13 renderings).
-allowed-confusables = ["：", "（", "）", "；", "，", "。"]
+allowed-confusables = ["：", "（", "）", "；", "，", "。", "×"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S603", "S607"]  # asserts and subprocess in tests are fine
@@ -89,7 +96,7 @@ allowed-confusables = ["：", "（", "）", "；", "，", "。"]
 known-first-party = [
   "slas_authz", "slas_cli", "slas_diff", "slas_eval", "slas_git", "slas_hal", "slas_kernel",
   "slas_llm_gateway", "slas_model_manager", "slas_rag", "slas_schemas", "slas_screen",
-  "slas_skills", "slas_sop", "slas_triage",
+  "slas_screen_worker", "slas_skills", "slas_sop", "slas_triage",
 ]
 
 # --- mypy -------------------------------------------------------------------------------
@@ -99,7 +106,13 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 pretty = true
-files = ["packages", "services/llm-gateway", "services/model-manager", "tests"]
+files = [
+  "packages",
+  "services/llm-gateway",
+  "services/model-manager",
+  "services/screen-worker",
+  "tests",
+]
 plugins = ["pydantic.mypy"]
 
 # --- pytest / coverage ---------------------------------------------------------------------
@@ -115,6 +128,9 @@ addopts = [
   "--cov=slas_llm_gateway",
   "--cov=slas_model_manager",
   "--cov=slas_schemas",
+  "--cov=slas_screen",
+  "--cov=slas_screen_worker",
+  "--cov=slas_skills",
   "--cov-report=term-missing",
   "--cov-fail-under=85",
 ]

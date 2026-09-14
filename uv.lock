@@ -16,6 +16,7 @@ members = [
     "slas-rag",
     "slas-schemas",
     "slas-screen",
+    "slas-screen-worker",
     "slas-skills",
     "slas-sop",
     "slas-triage",
@@ -410,11 +411,44 @@ requires-dist = [{ name = "pydantic", specifier = "==2.13.5" }]
 name = "slas-screen"
 version = "0.0.1"
 source = { editable = "packages/slas-screen" }
+dependencies = [
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
+
+[[package]]
+name = "slas-screen-worker"
+version = "0.0.1"
+source = { editable = "services/screen-worker" }
+dependencies = [
+    { name = "slas-schemas" },
+    { name = "slas-screen" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "slas-screen", editable = "packages/slas-screen" },
+]
 
 [[package]]
 name = "slas-skills"
 version = "0.0.1"
 source = { editable = "packages/slas-skills" }
+dependencies = [
+    { name = "slas-authz" },
+    { name = "slas-schemas" },
+    { name = "slas-screen" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "slas-authz", editable = "packages/slas-authz" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "slas-screen", editable = "packages/slas-screen" },
+]
 
 [[package]]
 name = "slas-sop"
@@ -443,6 +477,7 @@ dependencies = [
     { name = "slas-rag" },
     { name = "slas-schemas" },
     { name = "slas-screen" },
+    { name = "slas-screen-worker" },
     { name = "slas-skills" },
     { name = "slas-sop" },
     { name = "slas-triage" },
@@ -470,6 +505,7 @@ requires-dist = [
     { name = "slas-rag", editable = "packages/slas-rag" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
     { name = "slas-screen", editable = "packages/slas-screen" },
+    { name = "slas-screen-worker", editable = "services/screen-worker" },
     { name = "slas-skills", editable = "packages/slas-skills" },
     { name = "slas-sop", editable = "packages/slas-sop" },
     { name = "slas-triage", editable = "packages/slas-triage" },
