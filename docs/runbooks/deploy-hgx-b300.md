@@ -11,15 +11,34 @@ bundle.
 | Piece | State | Where it stands |
 |---|---|---|
 | `slas doctor` preflight, `slas status`, `slas toolchain`, `slas target`, `slas backup` | runs | stdlib CLI, no virtualenv needed |
-| WebUI pages: Home · Coding · Validation · Factory · Settings (Git remotes) · Admin (Git hosts · Stations) with their three-step wizards | runs on API fakes | `pnpm dev`; sign-in and the live API wait on `apps/api` (ADR-0005 dependency approval) |
+| WebUI in the demo's shell (`docs/ui-demo/slas-ui-demo.html`): rail, health line, Home dashboard; Coding · Validation · Factory with their three-step wizards; Settings (Git remotes); Admin (Git hosts · Stations); Runs · Models · Skills say when they arrive | runs on API fakes | `pnpm dev`; sign-in and the live API wait on `apps/api` (ADR-0005 dependency approval) |
 | Station runner on a physical test station | runs | `deploy/station-runner/`, offline wheels, mTLS enrolment |
-| Kernel, skills, HAL, executors, gateway, model manager, git broker, observability | run against fakes, 783 tests | Python packages in this repository |
+| Kernel (with the ADR-0013 skill gate), skills, HAL, executors, gateway, model manager, git broker, observability | run against fakes, 783 Python tests, 28 WebUI tests | Python packages in this repository |
 | `docker compose up` of the platform stack | **blocked** | first-party images have no Dockerfiles yet except the sandboxes and the screen worker; `compose/images.lock.*` is unpinned, so the installer refuses (INV-8) |
 | vLLM instances started by the model manager | **blocked** | the Podman driver behind `ContainerRuntime` waits on its dependency approval; the registry, fit and swap logic are done |
 | Sign-in, users, Postgres-backed tickets | **blocked** | `apps/api` stack (ADR-0005) not approved |
 
 So: today the box can be prepared, checked and used for development and for the station
 runner. The one-command install becomes real once the three blocked rows land.
+
+## The procedure, in order
+
+Tick each line; every command below is explained in the section it points to.
+
+| # | Where | Do | Done when | Section |
+|---|---|---|---|---|
+| 1 | B300 host | `nvidia-smi` shows 8 GPUs, NVLink up; install Docker, rootless Podman + `uidmap`, gVisor, the NVIDIA container toolkit; boot with cgroups v2 | `./install.sh --preflight-only` shows no ✗ | §1 |
+| 2 | B300 host | Mount ≥ 200 GiB at `/AI/Agent`; a separate volume for `Models/` (≥ 1.5 TB for the plan) | `slas doctor` Disk space is ✓ | §1 |
+| 3 | Connected host | Fetch the weights into directories named after their registry `path`; checksum | checksums recorded | §2 |
+| 4 | Sneakernet → B300 | Copy the weights under `/AI/Agent/Models/<path>/`; verify checksums; write `models.yaml` from §4 | `models.yaml` validates (the registry says so in one sentence) | §2, §4 |
+| 5 | Repository | Decide the three dependency items that block the container stack: `apps/api` stack (ADR-0005), the Podman driver for the model manager, first-party Dockerfiles | ADRs accepted | §0 |
+| 6 | Connected build host | `scripts/lock-images.sh --sign`, `scripts/build-bundle.sh --profile prod`; commit the filled lock | `compose/images.lock.*` has no null digest | §3 |
+| 7 | Sneakernet → B300 | Carry `slas-bundle-<version>.tgz` and `config/cosign.pub` | both files on the host | §3 |
+| 8 | B300 host | `./install.sh --profile prod --dry-run`, then `./install.sh --profile prod` | the sign-in URL and one-time admin password are printed | §3 |
+| 9 | Browser | Sign in, change the password, Admin → People, Admin → Stations → Issue code | first station enrolled | §5 |
+| 10 | B300 host | `slas backup drill` once; record the RTO | a row in `docs/runbooks/restore-drill.md` | prod runbook |
+
+Steps 1 to 4 can be done today. Steps 6 to 10 wait on step 5.
 
 ## 1 · Prepare the host
 
@@ -103,7 +122,10 @@ Quickstart on the same box uses GPUs 4, 5 and 6 only: triage, coder, embed and r
 
 ## 5 · Use it
 
-- **WebUI** at `https://<host>/`: Home · Coding · Validation · Factory · Settings · Admin.
+- **WebUI** at `https://<host>/`: a left rail with Home · Coding · Validation · Factory · Runs ·
+  Models · Skills · Settings · Admin, and one health sentence at the top. Home shows what needs
+  you (three-part notices), what is running, and recent results, all drawn from the agents'
+  own lists.
   Each agent page has one primary button, "New …", a three-step wizard that ends in a
   sentence saying what will happen and a verb button. Every finding is a sentence with a
   ticket link. Settings holds your Git remotes (paste-only credentials, fingerprint shown
