@@ -32,7 +32,6 @@ NOT_YET: dict[str, str] = {
     "user": "Phase 1",
     "model": "Phase 3",
     "skill": "Phase 4",
-    "backup": "a later phase",
     "upgrade": "a later phase",
 }
 
@@ -141,6 +140,10 @@ def build_parser(environ: Mapping[str, str]) -> argparse.ArgumentParser:
         "$SLAS_HOME/compose/docker-compose.yml).",
     )
     status.add_argument("--json", action="store_true", help="Print the report as JSON.")
+
+    from slas_cli.backup import add_backup_parser  # stdlib argparse only; the runner is lazy
+
+    add_backup_parser(commands, environ.get("SLAS_DATA_ROOT") or DEFAULT_DATA_ROOT)
 
     for name, phase in NOT_YET.items():
         later = commands.add_parser(name, help=f"Arrives in {phase}.")
@@ -287,6 +290,18 @@ def main(
         return run_doctor(args, host if host is not None else RealHost(), out)
     if args.command == "status":
         return run_status(args, host if host is not None else RealHost(), out)
+    if args.command == "backup":
+        if args.backup_command is None:
+            parser.parse_args(["backup", "--help"])  # prints help and exits
+        # Imported here: the backup runner needs the platform's packages, `slas doctor` does not.
+        from slas_cli.backup import run_backup
+
+        if args.compose_file is None:
+            home = env.get("SLAS_HOME") or "/opt/slas"
+            args.compose_file = [f"{home}/compose/docker-compose.yml"]
+            if (env.get("SLAS_PROFILE") or "quickstart") == "prod":
+                args.compose_file.append(f"{home}/compose/prod.override.yml")
+        return run_backup(args, host if host is not None else RealHost(), out)
     if args.command == "toolchain":
         if args.toolchain_command is None:
             parser.parse_args(["toolchain", "--help"])  # prints help and exits

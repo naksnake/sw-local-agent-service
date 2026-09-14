@@ -92,7 +92,6 @@ def test_not_yet_covers_every_command_from_claude_md_section_3() -> None:
         "user",
         "model",
         "skill",
-        "backup",
         "upgrade",
     }
 

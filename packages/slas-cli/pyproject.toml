@@ -17,6 +17,7 @@ build-backend = "uv_build"
 module-root = ""
 
 [tool.uv.sources]
+slas-deploy = { workspace = true }
 slas-observability = { workspace = true }
 slas-hal = { workspace = true }
 slas-kernel = { workspace = true }

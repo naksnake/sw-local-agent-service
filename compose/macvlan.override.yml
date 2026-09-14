@@ -1,30 +1,23 @@
-# macvlan overlay for the lab VLAN (CLAUDE.md §4.1 Zone B, §12 `slas-lab`; DEVELOPMENT_PLAN P8).
-#
-# Gives validation-executor its own address on the lab VLAN so BMCs, target OSes and their
-# syslog reach it directly, and nothing else on the platform host is on that VLAN. The
-# values come from .env (SLAS_LAB_*); nothing here is guessed. Apply with:
-#
+# macvlan overlay for the lab VLAN (CLAUDE.md §4.1 Zone B, §12 slas-lab). Gives
+# validation-executor its own address on the lab VLAN so BMCs, target OSes and their syslog
+# reach it directly and nothing else on the platform host is on that VLAN. Values come from
+# .env (SLAS_LAB_*); the parent interface is the host NIC physically on the lab VLAN.
 #   docker compose -f compose/docker-compose.yml -f compose/macvlan.override.yml up -d
-#
-# The parent interface must be the host NIC that is physically on the lab VLAN. The base
-# compose file arrives with Phase 1; this override only adds the network and the address.
-
+# Rendered from slas_deploy.compose; a unit test keeps file and code in step.
 networks:
   slas-lab:
     driver: macvlan
     driver_opts:
-      parent: ${SLAS_LAB_IFACE:?set SLAS_LAB_IFACE to the host NIC on the lab VLAN}
+      parent: "${SLAS_LAB_IFACE:?set SLAS_LAB_IFACE to the host NIC on the lab VLAN}"
     ipam:
       config:
-        - subnet: ${SLAS_LAB_SUBNET:?set SLAS_LAB_SUBNET, e.g. 10.20.30.0/24}
-          gateway: ${SLAS_LAB_GATEWAY:?set SLAS_LAB_GATEWAY}
-
+        - subnet: "${SLAS_LAB_SUBNET:?set SLAS_LAB_SUBNET, e.g. 10.20.30.0/24}"
+          gateway: "${SLAS_LAB_GATEWAY:?set SLAS_LAB_GATEWAY}"
 services:
   validation-executor:
     networks:
       slas-lab:
-        ipv4_address: ${SLAS_LAB_EXECUTOR_IP:?set SLAS_LAB_EXECUTOR_IP, the executor's address on the lab VLAN}
-    environment:
-      # Targets send syslog here (rsyslog: `*.* @${SLAS_LAB_EXECUTOR_IP}:5514`).
-      SYSLOG_LISTEN: "0.0.0.0:5514"
+        ipv4_address: "${SLAS_LAB_EXECUTOR_IP:?set SLAS_LAB_EXECUTOR_IP, the executor's address on the lab VLAN}"
     ports: []
+    environment:
+      SYSLOG_LISTEN: 0.0.0.0:5514

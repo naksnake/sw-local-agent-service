@@ -38,7 +38,7 @@ def bare_host() -> FakeHost:
 
 def test_healthy_host_passes_every_check() -> None:
     results = run_checks(FakeHost.healthy(), SETTINGS)
-    assert len(results) == len(ALL_CHECKS) == 14
+    assert len(results) == len(ALL_CHECKS) == 16
     assert [result.status for result in results] == ["ok"] * len(ALL_CHECKS)
 
 

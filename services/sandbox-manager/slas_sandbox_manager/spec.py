@@ -18,7 +18,9 @@ from pydantic import Field
 from slas_schemas.common import SlasModel
 from slas_schemas.errors import ThreePartMessage
 
-Runtime = Literal["runsc", "runc"]
+#: gVisor (`runsc`), the Kata/Firecracker micro-VM tier (`kata-fc`, prod), hardened runc.
+Runtime = Literal["runsc", "kata-fc", "runc"]
+Tier = Literal["gvisor", "kata"]
 
 WORKSPACE: Final = "/workspace"
 SCRATCH: Final = "/scratch"
@@ -92,7 +94,11 @@ class SandboxSpec(SlasModel):
         check_hardening(self)
 
     def sentence(self) -> str:
-        runtime = "gVisor" if self.runtime == "runsc" else "hardened runc"
+        runtime = {
+            "runsc": "gVisor",
+            "kata-fc": "a Kata micro-VM on Firecracker",
+            "runc": "hardened runc",
+        }[self.runtime]
         return (
             f"Sandbox {self.name} for {self.slug}: {runtime}, no network, read-only system, "
             f"{self.resources.cpus:g} CPUs, {self.resources.memory} memory, "

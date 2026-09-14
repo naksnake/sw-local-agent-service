@@ -29,6 +29,7 @@ from pydantic import Field
 from slas_schemas.common import SlasModel
 from slas_schemas.envfile import write_atomic
 from slas_schemas.errors import ThreePartMessage
+from slas_schemas.vault import VaultError, VaultKv
 
 AuthType = Literal["pat", "ssh_key"]
 KEY_PURPOSE: Final = b"slas-git-broker/credentials/v1"
@@ -281,3 +282,88 @@ def secret_key_from_env(environ: dict[str, str] | os._Environ[str] | None = None
             )
         )
     return value
+
+
+class VaultCredentialStore:
+    """prod (`CRED_STORE=vault`): the secret itself lives in Vault KV under
+    `<mount>/git/<ref>` with the owner and fingerprint as data; git-broker reads it for one
+    operation with its AppRole token. Nothing is written to a workspace or a log (INV-14)."""
+
+    PREFIX = "git"
+
+    def __init__(self, kv: VaultKv) -> None:
+        self.kv = kv
+
+    def _path(self, ref: str) -> str:
+        return f"{self.PREFIX}/{ref}"
+
+    def _read(self, ref: str, owner: str) -> dict[str, str]:
+        try:
+            data = self.kv.read(self._path(ref))
+        except VaultError as exc:
+            raise CredentialError(
+                ThreePartMessage(
+                    "That credential is not available.",
+                    exc.message.likely_cause,
+                    "Add the remote again under Settings → Git remotes.",
+                )
+            ) from None
+        if data.get("owner") != owner:
+            raise CredentialError(
+                ThreePartMessage(
+                    "That credential is not available.",
+                    "It belongs to someone else.",
+                    "Add the remote again under Settings → Git remotes.",
+                )
+            )
+        return data
+
+    def put(
+        self, secret: str, *, owner: str, auth_type: AuthType, fingerprint: str, now: datetime
+    ) -> str:
+        ref = f"cred-{secrets.token_hex(12)}"
+        try:
+            self.kv.write(
+                self._path(ref),
+                {
+                    "secret": secret,
+                    "owner": owner,
+                    "auth_type": auth_type,
+                    "fingerprint": fingerprint,
+                    "created_at": now.isoformat(),
+                },
+            )
+        except VaultError as exc:
+            raise CredentialError(exc.message) from None
+        return ref
+
+    def reveal(self, ref: str, *, owner: str) -> str:
+        return self._read(ref, owner)["secret"]
+
+    def rotate(self, ref: str, secret: str, *, owner: str, fingerprint: str, now: datetime) -> None:
+        current = self._read(ref, owner)
+        try:
+            self.kv.write(
+                self._path(ref),
+                {
+                    **current,
+                    "secret": secret,
+                    "fingerprint": fingerprint,
+                    "rotated_at": now.isoformat(),
+                },
+            )
+        except VaultError as exc:
+            raise CredentialError(exc.message) from None
+
+    def delete(self, ref: str, *, owner: str) -> None:
+        self._read(ref, owner)
+        try:
+            self.kv.delete(self._path(ref))
+        except VaultError as exc:
+            raise CredentialError(exc.message) from None
+
+    def fingerprint_of(self, ref: str) -> str:
+        try:
+            return self.kv.read(self._path(ref)).get("fingerprint", "unknown")
+        except VaultError:
+            return "unknown"

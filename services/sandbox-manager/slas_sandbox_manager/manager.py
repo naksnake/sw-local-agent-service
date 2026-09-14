@@ -27,6 +27,7 @@ from slas_sandbox_manager.spec import (
     Mount,
     Resources,
     SandboxSpec,
+    Tier,
     default_env,
 )
 from slas_schemas.common import SlasModel
@@ -112,6 +113,8 @@ class SandboxManager:
         clock: Clock,
         runsc_available: bool,
         profile: Profile = "quickstart",
+        tier: Tier = "gvisor",
+        kata_available: bool = False,
         max_sessions_per_user: int = 3,
         default_ttl_s: int = 3600,
         resources: Resources | None = None,
@@ -121,6 +124,9 @@ class SandboxManager:
         self.clock = clock
         self.runsc_available = runsc_available
         self.profile = profile
+        #: prod may ask for the Kata/Firecracker tier: a micro-VM per sandbox (CLAUDE.md §3).
+        self.tier = tier
+        self.kata_available = kata_available
         self.max_sessions_per_user = max_sessions_per_user
         self.default_ttl_s = default_ttl_s
         self.resources = resources or Resources()
@@ -157,6 +163,21 @@ class SandboxManager:
     # --- sessions ---------------------------------------------------------------------
 
     def runtime_choice(self) -> tuple[str, str]:
+        if self.tier == "kata":
+            if self.kata_available:
+                return "kata-fc", (
+                    "The sandbox runs in its own Kata micro-VM on Firecracker: a separate "
+                    "kernel, no shared host kernel surface."
+                )
+            raise SandboxError(
+                ThreePartMessage(
+                    "No sandbox can be opened: the Kata/Firecracker tier is not installed.",
+                    "SANDBOX_TIER is kata, but the kata-fc runtime (Kata Containers with the "
+                    "Firecracker hypervisor) is not registered on this host.",
+                    "Install Kata Containers and Firecracker and register the kata-fc runtime "
+                    "(docs/runbooks/prod-profile.md), or set SANDBOX_TIER=gvisor.",
+                )
+            )
         if self.runsc_available:
             return "runsc", "The sandbox runs under gVisor."
         if self.profile == "prod":

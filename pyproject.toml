@@ -9,6 +9,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
   "slas-authz",
   "slas-cli",
+  "slas-deploy",
   "slas-diff",
   "slas-eval",
   "slas-factory-executor",
@@ -61,6 +62,7 @@ members = [
 [tool.uv.sources]
 slas-authz = { workspace = true }
 slas-cli = { workspace = true }
+slas-deploy = { workspace = true }
 slas-diff = { workspace = true }
 slas-eval = { workspace = true }
 slas-factory-executor = { workspace = true }
@@ -118,7 +120,7 @@ allowed-confusables = ["：", "（", "）", "；", "，", "。", "×"]
 
 [tool.ruff.lint.isort]
 known-first-party = [
-  "slas_authz", "slas_cli", "slas_diff", "slas_eval", "slas_factory_executor", "slas_git", "slas_git_broker", "slas_hal",
+  "slas_authz", "slas_cli", "slas_deploy", "slas_diff", "slas_eval", "slas_factory_executor", "slas_git", "slas_git_broker", "slas_hal",
   "slas_kernel", "slas_llm_gateway", "slas_model_manager", "slas_observability", "slas_orchestrator",
   "slas_rag",
   "slas_sandbox_manager", "slas_schemas", "slas_screen", "slas_screen_worker", "slas_skills",

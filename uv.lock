@@ -6,6 +6,7 @@ requires-python = "==3.12.*"
 members = [
     "slas-authz",
     "slas-cli",
+    "slas-deploy",
     "slas-diff",
     "slas-eval",
     "slas-factory-executor",
@@ -344,6 +345,23 @@ requires-dist = [
     { name = "slas-kernel", editable = "packages/slas-kernel" },
     { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-sandbox-manager", editable = "services/sandbox-manager" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+]
+
+[[package]]
+name = "slas-deploy"
+version = "0.0.1"
+source = { editable = "packages/slas-deploy" }
+dependencies = [
+    { name = "slas-hal" },
+    { name = "slas-observability" },
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "slas-hal", editable = "packages/slas-hal" },
+    { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
 ]
 
@@ -695,6 +713,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "slas-authz" },
     { name = "slas-cli" },
+    { name = "slas-deploy" },
     { name = "slas-diff" },
     { name = "slas-eval" },
     { name = "slas-factory-executor" },
@@ -730,6 +749,7 @@ dev = [
 requires-dist = [
     { name = "slas-authz", editable = "packages/slas-authz" },
     { name = "slas-cli", editable = "packages/slas-cli" },
+    { name = "slas-deploy", editable = "packages/slas-deploy" },
     { name = "slas-diff", editable = "packages/slas-diff" },
     { name = "slas-eval", editable = "packages/slas-eval" },
     { name = "slas-factory-executor", editable = "services/factory-executor" },

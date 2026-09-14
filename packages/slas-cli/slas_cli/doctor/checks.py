@@ -517,6 +517,61 @@ def check_web_port(host: Host, settings: DoctorSettings) -> CheckResult:
     )
 
 
+def check_signature_tooling(host: Host, settings: DoctorSettings) -> CheckResult:
+    check_id, title = "signature_tooling", "Image signatures"
+    if settings.profile != "prod":
+        return _ok(
+            check_id,
+            title,
+            "Quickstart verifies bundle image IDs against the lock; cosign is not needed.",
+        )
+    if host.which("cosign") is not None:
+        return _ok(
+            check_id, title, "cosign is installed; images and the bundle manifest will be verified."
+        )
+    return _problem(
+        check_id,
+        title,
+        "fail",
+        "cosign was not found, and the prod profile verifies every image with it.",
+        "The prod profile installs only images and bundles signed by the release key.",
+        "Install cosign (the bundle's tools/ directory carries a pinned build), then run "
+        "./install.sh --profile prod again.",
+    )
+
+
+def check_kata_tier(host: Host, settings: DoctorSettings) -> CheckResult:
+    check_id, title = "kata_tier", "Kata tier"
+    if settings.profile != "prod":
+        return _ok(
+            check_id,
+            title,
+            "Quickstart isolates sandboxes with gVisor; the Kata tier is a prod option.",
+        )
+    kata = host.which("kata-runtime") or host.which("containerd-shim-kata-fc-v2")
+    firecracker = host.which("firecracker")
+    if kata and firecracker:
+        return _ok(
+            check_id,
+            title,
+            "Kata Containers and Firecracker are installed; sandboxes can run in micro-VMs.",
+        )
+    missing = " and ".join(
+        name
+        for name, found in (("Kata Containers", kata), ("Firecracker", firecracker))
+        if not found
+    )
+    return _problem(
+        check_id,
+        title,
+        "warn",
+        f"{missing} not found; sandboxes will use gVisor until the Kata tier is installed.",
+        "SANDBOX_TIER=kata in compose/prod.override.yml asks for a micro-VM per sandbox.",
+        "Install Kata Containers with the Firecracker hypervisor and register the kata-fc "
+        "runtime (docs/runbooks/prod-profile.md), or set SANDBOX_TIER=gvisor in .env.",
+    )
+
+
 ALL_CHECKS: tuple[Check, ...] = (
     check_operating_system,
     check_cpu,
@@ -524,6 +579,8 @@ ALL_CHECKS: tuple[Check, ...] = (
     check_container_runtime,
     check_sandbox_runtime,
     check_sandbox_isolation,
+    check_kata_tier,
+    check_signature_tooling,
     check_user_namespaces,
     check_id_mapping_helpers,
     check_cgroups_v2,

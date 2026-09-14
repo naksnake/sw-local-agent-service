@@ -7,3 +7,5 @@
 
 Operational runbooks (restore drill, upgrade, model swap). P11/P12.
 | [`observability.md`](observability.md) | P11 | `slas status`, the metrics every service exposes, the six Grafana dashboards, the alert rules and the local alert channel, and how one trace id is followed from the WebUI to the executor. |
+| [`prod-profile.md`](prod-profile.md) | P12 | Installing and operating the prod profile: the signed bundle or Harbor, Vault (AppRole per service, where secrets live, rotation), Keycloak beside built-in sign-in, the Kata/Firecracker sandbox tier, backups under object lock, Loki and Tempo. |
+| [`restore-drill.md`](restore-drill.md) | P12 | The restore drill: pick a point in time, run `slas backup drill`, check by hand, and the RTO table every drill adds a row to. |

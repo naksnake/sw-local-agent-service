@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Final, Protocol
 
 from slas_schemas.errors import ThreePartMessage
+from slas_schemas.vault import VaultError, VaultKv
 
 CREDENTIAL_REF: Final = re.compile(r"^(env|vault|file):[A-Za-z0-9_./-]{1,200}$")
 
@@ -142,3 +143,95 @@ class FakeCredentialResolver:
                     "Add it to the resolver in the test.",
                 )
             ) from None
+
+
+class VaultCredentialResolver:
+    """prod: `vault:<mount>/<path>/<key>` is read from Vault KV v2 at dispatch (CLAUDE.md §3,
+    INV-5). The last segment names the key inside the secret, the first the mount, the rest
+    the secret's path: `vault:slas/lab/gx8-01/bmc/password` → mount `slas`, path
+    `lab/gx8-01/bmc`, key `password`. The secret is returned to the driver for one operation
+    and never written anywhere."""
+
+    def __init__(self, kv: VaultKv, *, fallback: CredentialResolver | None = None) -> None:
+        self.kv = kv
+        #: `env:` and `file:` references still resolve (the batch keys the platform wrote).
+        self.fallback = fallback
+        self.asked: list[str] = []
+
+    def resolve(self, ref: str) -> str:
+        check_ref(ref)
+        kind, _, rest = ref.partition(":")
+        if kind != "vault":
+            if self.fallback is None:
+                raise CredentialError(
+                    ThreePartMessage(
+                        f"This installation resolves vault: references only, not {kind}:.",
+                        "The prod profile keeps every credential in Vault.",
+                        "Move the secret into Vault and reference it as "
+                        "vault:<mount>/<path>/<key>.",
+                    )
+                )
+            return self.fallback.resolve(ref)
+        parts = [part for part in rest.split("/") if part]
+        if len(parts) < 3:
+            raise CredentialError(
+                ThreePartMessage(
+                    f"The reference {ref} is too short.",
+                    "A Vault reference is vault:<mount>/<path…>/<key>, at least three parts.",
+                    "Name the mount, the secret's path and the key inside it.",
+                )
+            )
+        mount, key = parts[0], parts[-1]
+        path = "/".join(parts[1:-1])
+        if mount != self.kv.mount:
+            raise CredentialError(
+                ThreePartMessage(
+                    f"The reference {ref} names the mount {mount}, but this service reads "
+                    f"{self.kv.mount}.",
+                    "Each service is logged in to one KV mount (VAULT_KV_MOUNT).",
+                    f"Reference the secret under vault:{self.kv.mount}/…, or move it there.",
+                )
+            )
+        self.asked.append(ref)
+        try:
+            data = self.kv.read(path)
+        except VaultError as exc:
+            raise CredentialError(exc.message) from None
+        value = data.get(key, "")
+        if not value:
+            raise CredentialError(
+                ThreePartMessage(
+                    f"The secret at {mount}/{path} has no {key}.",
+                    "The key is missing or empty in Vault.",
+                    f"Write it: vault kv put {mount}/{path} {key}=…",
+                )
+            )
+        return value
+
+
+def resolver_for(
+    profile: str,
+    *,
+    environ: Mapping[str, str] | None = None,
+    root: Path | None = None,
+    kv: VaultKv | None = None,
+) -> CredentialResolver:
+    """What an executor builds at start: env and file references in quickstart; Vault with
+    the same fallback in prod (`CREDENTIAL_SOURCE=vault`)."""
+    env = dict(os.environ if environ is None else environ)
+    local: CredentialResolver = (
+        LocalCredentialResolver(root=root, environ=env) if root else EnvCredentialResolver(env)
+    )
+    source = env.get("CREDENTIAL_SOURCE", "vault" if profile == "prod" else "env")
+    if source != "vault":
+        return local
+    if kv is None:
+        raise CredentialError(
+            ThreePartMessage(
+                "CREDENTIAL_SOURCE is vault, but this service has no Vault client.",
+                "The prod profile logs each executor in to Vault with AppRole at start.",
+                "Check VAULT_ADDR, VAULT_CACERT, VAULT_ROLE_ID_FILE and VAULT_SECRET_ID_FILE "
+                "in compose/prod.override.yml and the service's start-up log.",
+            )
+        )
+    return VaultCredentialResolver(kv, fallback=local)

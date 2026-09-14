@@ -85,6 +85,25 @@ vLLM and the executor. Live dashboards from a real run wait on apps/api, the bas
 file and a GPU host; prometheus_client, structlog and OpenTelemetry remain unapproved and
 are not needed for the wire formats used here.
 
+**Phase 12: the prod profile.** `packages/slas-deploy` renders every deployment file from
+code: the base `compose/docker-compose.yml` (a Phase 1 deliverable landing here, per
+ADR-0003: no `env_file`, file secrets, hardened services, one member per lab, factory and
+Git network), `prod.override.yml` (Vault at dispatch for the executors and git-broker,
+Keycloak OIDC beside the built-in accounts, the Kata/Firecracker sandbox tier, pgBackRest
+archiving to MinIO under object lock, Loki and Tempo), macvlan overlays for the lab VLAN and
+the factory LAN, the image lock, the Keycloak realm, the Vault server file and per-service
+policies, the pgBackRest and PostgreSQL settings, and the MinIO, backup and Vault bootstrap
+scripts. `install.sh` now runs the whole pipeline — preflight, cosign verification of the
+bundle manifest or of every image in Harbor, the lock and manifest checks, `.env`, secrets,
+images, `compose up`, health — with read-only steps first and `--dry-run`; `slas backup
+now|status|restore|drill` drives pgBackRest and the restore drill records every phase and
+the RTO. The image lock ships **unpinned**, so the installer refuses to start until a
+connected build host runs `scripts/lock-images.sh`; that is INV-8 held by refusal. Nothing
+here has run against Docker, Vault, Keycloak, Harbor or Postgres: the installer is proven
+against stub tools in dry-run, everything else against fakes, and the first real
+`./install.sh --profile prod` and the first measured RTO are release-checklist items named
+in `docs/runbooks/restore-drill.md`.
+
 **Phase 7: the Validation Agent against fakes.** `plans/` (plan schema and primitives
 rendered from `slas_hal.primitives`), the plan compiler (`suite.md`/`suite.xlsx` → `plan.yaml`
 with the §10.2 reject rules), `slas_hal` (models, Redfish parsers that turn malformed and

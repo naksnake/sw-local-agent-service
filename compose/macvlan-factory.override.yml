@@ -1,0 +1,24 @@
+# macvlan overlay for the factory LAN (CLAUDE.md §4.1 Zone B', §12 slas-factory). Gives
+# factory-executor its own address so station runners reach the enrolment endpoint and the
+# executor reaches the runners; nothing else on the platform host is on that LAN. Values
+# come from .env (SLAS_FACTORY_*).
+#   docker compose -f compose/docker-compose.yml -f compose/macvlan-factory.override.yml up -d
+# Rendered from slas_deploy.compose; a unit test keeps file and code in step.
+networks:
+  slas-factory:
+    driver: macvlan
+    driver_opts:
+      parent: "${SLAS_FACTORY_IFACE:?set SLAS_FACTORY_IFACE to the host NIC on the factory LAN}"
+    ipam:
+      config:
+        - subnet: "${SLAS_FACTORY_SUBNET:?set SLAS_FACTORY_SUBNET, e.g. 10.20.30.0/24}"
+          gateway: "${SLAS_FACTORY_GATEWAY:?set SLAS_FACTORY_GATEWAY}"
+services:
+  factory-executor:
+    networks:
+      slas-factory:
+        ipv4_address: "${SLAS_FACTORY_EXECUTOR_IP:?set SLAS_FACTORY_EXECUTOR_IP, the executor's address on the factory LAN}"
+    ports: []
+    environment:
+      ENROLMENT_LISTEN: 0.0.0.0:8444
+      STATION_RUNNER_PORT: "8443"

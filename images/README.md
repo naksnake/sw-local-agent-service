@@ -8,6 +8,7 @@ Container image definitions. Every base image is pinned by digest (INV-8).
 | `sandbox-common/slas-check.sh` | The `slas-check <lint\|type\|build\|test\|validate>` wrapper every plan step calls (argv only). |
 | `screen-worker/` | Xvfb + x11vnc + noVNC + xdotool (P4; lives with its service). |
 | `validation-executor/`, `factory-executor/` | P7 and P9. |
+| `postgres-pgbackrest/` | PostgreSQL 16 with pgBackRest for the prod profile (P12, ADR-0012): the `postgres` service's `archive_command` and the `backup-runner` share it. |
 
 Building the sandbox images needs the bundle's `toolchains/<language>/<version>/` directory
 next to the Dockerfile as build context, and an apt snapshot mirror for the pinned system

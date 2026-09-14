@@ -1,0 +1,104 @@
+{
+  "realm": "slas",
+  "displayName": "SW Local Agent Service",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "rememberMe": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 10,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "ssoSessionIdleTimeout": 28800,
+  "ssoSessionMaxLifespan": 36000,
+  "accessTokenLifespan": 300,
+  "passwordPolicy": "length(12) and notUsername",
+  "defaultRoles": [
+    "engineer"
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "administrator",
+        "description": "Manages people, settings, Git hosts, test stations and models, and can do everything an engineer can.",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "engineer",
+        "description": "Runs coding tasks, validation runs and factory jobs, and approves destructive steps.",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "line_lead",
+        "description": "An engineer who also decides a factory PASS or FAIL when the voters disagree.",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "viewer",
+        "description": "Reads tickets, runs and reports.",
+        "composite": false,
+        "clientRole": false
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "slas-webui",
+      "name": "SW Local Agent Service WebUI",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "https://${SLAS_PUBLIC_HOST}",
+      "redirectUris": [
+        "https://${SLAS_PUBLIC_HOST}/auth/callback"
+      ],
+      "webOrigins": [
+        "https://${SLAS_PUBLIC_HOST}"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://${SLAS_PUBLIC_HOST}/"
+      },
+      "defaultClientScopes": [
+        "openid",
+        "profile",
+        "email",
+        "roles"
+      ],
+      "protocolMappers": [
+        {
+          "name": "slas_roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "slas_roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "identityProviders": [],
+  "eventsEnabled": true,
+  "eventsExpiration": 2592000,
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": false,
+  "attributes": {
+    "frontendUrl": "https://${SLAS_PUBLIC_HOST}/auth"
+  }
+}

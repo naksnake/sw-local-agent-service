@@ -1,0 +1,931 @@
+# The quickstart stack (CLAUDE.md §12, ADR-0003). Rendered from slas_deploy.compose; a
+# unit test keeps file and code in step. No env_file: each service names the install-time
+# keys it reads from .env; secrets are files under ${SLAS_DATA_ROOT}/secrets. Third-party
+# images are pinned by an immutable tag whose digest and image ID live in
+# compose/images.lock.*; install.sh refuses to start an image the lock does not pin.
+name: slas
+networks:
+  slas-edge: {}
+  slas-frontend:
+    internal: true
+  slas-backend:
+    internal: true
+  slas-inference:
+    internal: true
+  slas-knowledge:
+    internal: true
+  slas-observability:
+    internal: true
+  slas-screen:
+    internal: true
+  slas-lab: {}
+  slas-factory: {}
+  slas-git: {}
+volumes:
+  postgres_data: {}
+  redis_data: {}
+  minio_data: {}
+  prometheus_data: {}
+  alertmanager_data: {}
+  grafana_data: {}
+secrets:
+  postgres_password:
+    file: "${SLAS_DATA_ROOT}/secrets/postgres_password"
+  redis_password:
+    file: "${SLAS_DATA_ROOT}/secrets/redis_password"
+  redis.conf:
+    file: "${SLAS_DATA_ROOT}/secrets/redis.conf"
+  minio_root_password:
+    file: "${SLAS_DATA_ROOT}/secrets/minio_root_password"
+  secret_key:
+    file: "${SLAS_DATA_ROOT}/secrets/secret_key"
+  admin-initial-password:
+    file: "${SLAS_DATA_ROOT}/secrets/admin-initial-password"
+  grafana_admin_password:
+    file: "${SLAS_DATA_ROOT}/secrets/grafana_admin_password"
+services:
+  edge:
+    image: "${SLAS_REGISTRY}/slas/edge:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-edge
+      - slas-frontend
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      SLAS_TLS_MODE: "${SLAS_TLS_MODE}"
+      SLAS_TLS_NAMES: "${SLAS_TLS_NAMES}"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - https://127.0.0.1/healthz
+        - "--insecure-local"
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    cap_add:
+      - NET_BIND_SERVICE
+    volumes:
+      - "${SLAS_DATA_ROOT}/tls:/data/tls"
+    depends_on:
+      webui:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    ports:
+      - "${SLAS_HTTPS_PORT}:443"
+  webui:
+    image: "${SLAS_REGISTRY}/slas/webui:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-frontend
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:8000/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+  api:
+    image: "${SLAS_REGISTRY}/slas/api:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-frontend
+      - slas-backend
+      - slas-observability
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      SLAS_PROFILE: "${SLAS_PROFILE}"
+      SLAS_DATA_ROOT: /data
+      SLAS_SOP_CHINESE: "${SLAS_SOP_CHINESE}"
+      SLAS_AUTH_MODES: builtin
+      POSTGRES_DB: "${POSTGRES_DB}"
+      POSTGRES_USER: "${POSTGRES_USER}"
+      SLAS_ROLES_FILE: /etc/slas/rbac-roles.yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:8000/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "${SLAS_DATA_ROOT}:/data"
+      - "../config/rbac-roles.yaml:/etc/slas/rbac-roles.yaml:ro"
+    secrets:
+      - postgres_password
+      - redis_password
+      - secret_key
+      - admin-initial-password
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+  agent-core-orchestrator:
+    image: "${SLAS_REGISTRY}/slas/agent-core-orchestrator:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-backend
+      - slas-inference
+      - slas-knowledge
+      - slas-screen
+      - slas-observability
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      SLAS_DATA_ROOT: /data
+      SLAS_GLOSSARY: /etc/slas/glossary.yaml
+      SLAS_OWNER_ROUTING: /etc/slas/owner-routing.yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:8000/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "${SLAS_DATA_ROOT}:/data"
+      - "../docs/glossary.yaml:/etc/slas/glossary.yaml:ro"
+      - "../config/owner-routing.yaml:/etc/slas/owner-routing.yaml:ro"
+    depends_on:
+      api:
+        condition: service_healthy
+      llm-gateway:
+        condition: service_healthy
+  screen-worker:
+    image: "${SLAS_REGISTRY}/slas/screen-worker:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-screen
+      - slas-frontend
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      DISPLAYS_PER_WORKER: "8"
+      ACTION_RATE_LIMIT: "10"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:8000/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    shm_size: 1g
+  llm-gateway:
+    image: "${SLAS_REGISTRY}/slas/llm-gateway:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-backend
+      - slas-inference
+      - slas-observability
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      SCHEMA_ENFORCE: strict
+      CONSENSUS_DEFAULT_VOTERS: "3"
+      CONSENSUS_TOKEN_BUDGET_PCT: "5"
+      SLAS_CONSENSUS_FILE: /etc/slas/consensus.yaml
+      SLAS_REDACTION_FILE: /etc/slas/redaction.yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:8000/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "../config/consensus.yaml:/etc/slas/consensus.yaml:ro"
+      - "../config/redaction.yaml:/etc/slas/redaction.yaml:ro"
+  model-manager:
+    image: "${SLAS_REGISTRY}/slas/model-manager:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-backend
+      - slas-inference
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      SLAS_GPU_IDS: "${SLAS_GPU_IDS}"
+      VLLM_NO_USAGE_STATS: "1"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:8000/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - /run/podman/podman.sock:/run/podman/podman.sock
+      - "${SLAS_DATA_ROOT}/Models:/data/Models"
+  vector-db:
+    image: "${SLAS_REGISTRY}/qdrant/qdrant:v1.13.4"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-knowledge
+      - slas-observability
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      QDRANT__TELEMETRY_DISABLED: "true"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:6333/readyz
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "${SLAS_DATA_ROOT}/qdrant:/qdrant/storage"
+  local-search-api:
+    image: "${SLAS_REGISTRY}/slas/local-search-api:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-knowledge
+      - slas-inference
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      SEARCH_MODE: internal_corpus
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:8000/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "${SLAS_DATA_ROOT}/Knowledge:/data/Knowledge:ro"
+    depends_on:
+      vector-db:
+        condition: service_healthy
+  sandbox-manager:
+    image: "${SLAS_REGISTRY}/slas/sandbox-manager:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-backend
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      DEFAULT_RUNTIME: runsc
+      SANDBOX_TIER: gvisor
+      DEFAULT_NETWORK: none
+      PIDS_LIMIT: "512"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:8000/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - /run/podman/podman.sock:/run/podman/podman.sock
+      - "${SLAS_DATA_ROOT}/Coding:/data/Coding"
+  git-broker:
+    image: "${SLAS_REGISTRY}/slas/git-broker:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-backend
+      - slas-git
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      GIT_HOSTS_ALLOWLIST: /etc/slas/git-hosts.yaml
+      GIT_CONFIG_NOSYSTEM: "1"
+      GIT_TERMINAL_PROMPT: "0"
+      CRED_STORE: "postgres+aesgcm"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:8000/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    tmpfs:
+      - "/run/slas-keys:mode=700,size=16m"
+    volumes:
+      - "${SLAS_DATA_ROOT}/Coding:/data/Coding"
+      - "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:ro"
+    secrets:
+      - secret_key
+      - postgres_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+  validation-executor:
+    image: "${SLAS_REGISTRY}/slas/validation-executor:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-backend
+      - slas-observability
+      - slas-lab
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      GUARDRAIL_POLICY: /etc/slas/guardrails.yaml
+      BMC_QUIRKS: /etc/slas/bmc-quirks.yaml
+      SYSLOG_LISTEN: 0.0.0.0:5514
+      LLM_IN_CONTROL_LOOP: "false"
+      CREDENTIAL_SOURCE: env
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:8000/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    tmpfs:
+      - "/run/slas-keys:mode=700,size=16m"
+    volumes:
+      - "${SLAS_DATA_ROOT}/Validation:/data/Validation"
+      - "${SLAS_DATA_ROOT}/Tickets:/data/Tickets"
+      - "../config/guardrails.yaml:/etc/slas/guardrails.yaml:ro"
+      - "../config/bmc-quirks.yaml:/etc/slas/bmc-quirks.yaml:ro"
+  factory-executor:
+    image: "${SLAS_REGISTRY}/slas/factory-executor:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-backend
+      - slas-observability
+      - slas-factory
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      MES_ADAPTER: file_drop
+      RUNNER_MTLS_CA: /data/Factory/ca/ca.pem
+      LLM_IN_CONTROL_LOOP: "false"
+      CREDENTIAL_SOURCE: env
+      SLAS_FACTORY_SETTINGS: /etc/slas/factory.yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:8000/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "${SLAS_DATA_ROOT}/Factory:/data/Factory"
+      - "${SLAS_DATA_ROOT}/Backups/stations:/data/Backups/stations"
+      - "${SLAS_DATA_ROOT}/Tickets:/data/Tickets"
+      - "../config/factory.yaml:/etc/slas/factory.yaml:ro"
+  postgres:
+    image: "${SLAS_REGISTRY}/library/postgres:16.6"
+    restart: unless-stopped
+    user: 999:999
+    networks:
+      - slas-backend
+      - slas-knowledge
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      POSTGRES_DB: "${POSTGRES_DB}"
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - pg_isready
+        - "-U"
+        - "${POSTGRES_USER}"
+        - "-d"
+        - "${POSTGRES_DB}"
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
+  redis:
+    image: "${SLAS_REGISTRY}/library/redis:7.4.2"
+    restart: unless-stopped
+    user: 999:999
+    networks:
+      - slas-backend
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - "-a"
+        - "$(cat /run/secrets/redis_password)"
+        - ping
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - redis_data:/data
+    secrets:
+      - redis.conf
+      - redis_password
+    command:
+      - redis-server
+      - /run/secrets/redis.conf
+  minio:
+    image: "${SLAS_REGISTRY}/minio/minio:RELEASE.2025-04-22T22-12-26Z"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-backend
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+      MINIO_UPDATE: "off"
+      MINIO_BROWSER: "off"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - mc
+        - ready
+        - local
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - minio_data:/data
+    secrets:
+      - minio_root_password
+    command:
+      - server
+      - /data
+      - "--console-address"
+      - ":9001"
+  prometheus:
+    image: "${SLAS_REGISTRY}/prom/prometheus:v3.2.1"
+    restart: unless-stopped
+    user: 65534:65534
+    networks:
+      - slas-observability
+      - slas-inference
+      - slas-backend
+      - slas-knowledge
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:9090/-/ready
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+      - "../observability/prometheus/rules.yml:/etc/prometheus/rules.yml:ro"
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+  alertmanager:
+    image: "${SLAS_REGISTRY}/prom/alertmanager:v0.28.1"
+    restart: unless-stopped
+    user: 65534:65534
+    networks:
+      - slas-observability
+      - slas-backend
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:9093/-/ready
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "../observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro"
+      - alertmanager_data:/alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+  grafana:
+    image: "${SLAS_REGISTRY}/grafana/grafana:11.5.2"
+    restart: unless-stopped
+    user: 472:472
+    networks:
+      - slas-frontend
+      - slas-observability
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_INSTALL_PLUGINS: ""
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:3000/api/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "../observability/grafana/provisioning:/etc/grafana/provisioning:ro"
+      - "../observability/grafana/dashboards:/etc/grafana/dashboards:ro"
+      - grafana_data:/var/lib/grafana
+    secrets:
+      - grafana_admin_password
+    depends_on:
+      prometheus:
+        condition: service_healthy
+  dcgm-exporter:
+    image: "${SLAS_REGISTRY}/nvidia/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
+    restart: unless-stopped
+    user: 0:0
+    networks:
+      - slas-observability
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:9400/metrics
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    cap_add:
+      - SYS_ADMIN
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+  node-exporter:
+    image: "${SLAS_REGISTRY}/prom/node-exporter:v1.9.0"
+    restart: unless-stopped
+    user: 65534:65534
+    networks:
+      - slas-observability
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:9100/metrics
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "/:/host:ro,rslave"
+    command:
+      - "--path.rootfs=/host"
+      - "--collector.disable-defaults"
+      - "--collector.cpu"
+      - "--collector.meminfo"
+      - "--collector.filesystem"
+      - "--collector.diskstats"
+      - "--collector.netdev"
+      - "--collector.loadavg"
+    pid: host
+  postgres-exporter:
+    image: "${SLAS_REGISTRY}/prometheuscommunity/postgres-exporter:v0.17.1"
+    restart: unless-stopped
+    user: 65534:65534
+    networks:
+      - slas-observability
+      - slas-backend
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      DATA_SOURCE_URI: "postgres:5432/${POSTGRES_DB}?sslmode=disable"
+      DATA_SOURCE_USER: "${POSTGRES_USER}"
+      DATA_SOURCE_PASS_FILE: /run/secrets/postgres_password
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:9187/metrics
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    secrets:
+      - postgres_password
+    depends_on:
+      postgres:
+        condition: service_healthy
