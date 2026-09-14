@@ -10,6 +10,13 @@ results and screenshots.
 | `runner.py` | `StationRunner`: performs a verified batch — GUI steps through the local `ScreenDriver` (screenshot before and after), `run` steps and commands only from the station's allowlist, never a shell; secret handles are substituted at type time and the journal masks them. `collect_state()` gathers config files, recent logs and application versions for the backup. |
 | `server.py` | mTLS with the standard library: the server requires a client certificate signed by the platform CA; `MtlsRunnerClient` presents the executor's certificate and pins the CA. `InProcessRunnerClient` skips the network for tests. |
 | `fakes.py` | `FakeStation`: a scripted Login → BurnIn screen and a scripted shell (`fixture-ctl`, `burnin-ctl`, `sensors-ctl`, `evlog`, `station-ctl`) with one planted failure at a time. |
+| `enrol.py` | The station side of enrolment (P10): one call with the one-time code from Admin → Stations, over TLS with the bundle's CA pinned, writes `ca.pem`, `client.pem`, `client.key`, `batch.key`, `config.json`, `runner.json` under the state directory, mode 0600. |
+| `control.py` | Watch and take over (P10): `Controller` (pause · resume · abort · status) and `PausableScreen`, which asks the controller before every GUI primitive so a skill stops at the next step boundary and, on abort, ends with `Stopped: <who> took over <station>.` |
+| `cli.py` | `slas-station-runner enrol \| serve \| doctor \| windows \| prune \| show`. `serve` starts the mTLS server, the local VNC server when the record enables it, and relays VNC over `/vnc` to callers with the executor's certificate. Linux drives the display with xdotool; Windows waits on the PyAutoGUI decision and refuses GUI steps with a sentence. |
 
-Installing the runner on a real station, tuning window matching and timing, and the
-screenshot retention policy are P10.
+`runner.py` also carries `ScreenTuning` (window matching mode, settle, timeout scale, rate),
+`VncSettings` and the screenshot `RetentionPolicy` per station; the runner prunes its own
+screenshots after every skill batch. `server.py` adds `relay`, `POST /vnc` and `VncTunnel`
+(the executor side: a loopback port for noVNC, each connection one mTLS stream to the
+runner). Packaging for a station lives in `deploy/station-runner/`; the procedure is
+`docs/runbooks/station-runner.md`.

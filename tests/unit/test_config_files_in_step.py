@@ -69,3 +69,16 @@ def test_models_example_yaml_is_in_step() -> None:
     assert path.read_text(encoding="utf-8") == expected
     assert "roles:\n  coder: qwen2.5-coder-32b-awq" in expected
     assert "voters:\n  - qwen2.5-coder-32b-awq\n  - deepseek-v3-fp8\n  - kimi-k2-awq\n" in expected
+
+
+def test_factory_yaml_is_in_step() -> None:
+    from slas_factory_executor.settings import (
+        DEFAULT_FACTORY_SETTINGS,
+        FACTORY_FILE_HEADER,
+        render_factory_yaml,
+    )
+
+    expected = render_factory_yaml(DEFAULT_FACTORY_SETTINGS, header=FACTORY_FILE_HEADER)
+    assert (REPO_ROOT / "config" / "factory.yaml").read_text(encoding="utf-8") == expected
+    assert "screenshot_retention:\n  keep_days: 30\n  keep_failed_days: 180\n" in expected
+    assert "enrolment_code_ttl_minutes: 15\nenrolment_max_attempts: 5\nvnc_port: 5900\n" in expected

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { type CellStatus, type FactoryApi, type FactoryJob, STATUS_WORD } from "./api";
+import { type CellStatus, type ControlView, type FactoryApi, type FactoryJob, STATUS_WORD } from "./api";
 import { NewFactoryJobWizard } from "./NewFactoryJobWizard";
 
 // The Factory page (CLAUDE.md §9, §10.3): jobs with their test-step map and the station's
@@ -25,6 +25,7 @@ export function FactoryPage({ api, user = "you" }: Props) {
   const [jobs, setJobs] = useState<FactoryJob[] | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [controls, setControls] = useState<Record<string, ControlView>>({});
 
   useEffect(() => {
     void api.listJobs().then(setJobs);
@@ -32,6 +33,17 @@ export function FactoryPage({ api, user = "you" }: Props) {
 
   function replace(job: FactoryJob) {
     setJobs((current) => (current ?? []).map((j) => (j.ticketId === job.ticketId ? job : j)));
+  }
+
+  async function control(job: FactoryJob, verb: "pause" | "resume" | "abort" | "status") {
+    const state = await api.control(job.ticketId, verb, user);
+    setControls((current) => ({ ...current, [job.ticketId]: state }));
+    if (verb === "abort") {
+      const fresh = (await api.listJobs()).find((j) => j.ticketId === job.ticketId);
+      if (fresh) {
+        replace(fresh);
+      }
+    }
   }
 
   return (
@@ -133,6 +145,47 @@ export function FactoryPage({ api, user = "you" }: Props) {
                     </ul>
                   )}
                 </div>
+
+                {job.state === "Running" && (
+                  <div className="mt-3 rounded-md bg-sky-50 p-3 text-sm dark:bg-sky-950" aria-label={`Watch ${job.ticketId}`}>
+                    <h4 className="font-medium">Watch and take over</h4>
+                    {controls[job.ticketId] === undefined ? (
+                      <p>
+                        You can watch {job.station} live and take it over at any point. The runner stops at the
+                        next step boundary and sends no input until you hand it back.
+                      </p>
+                    ) : (
+                      <p data-testid={`${job.ticketId}-control`}>{controls[job.ticketId]?.sentence}</p>
+                    )}
+                    {controls[job.ticketId]?.watchUrl ? (
+                      <p data-testid={`${job.ticketId}-watch`}>Watch the station at {controls[job.ticketId]?.watchUrl}. Read-only until you take over.</p>
+                    ) : controls[job.ticketId]?.watchProblem ? (
+                      <p role="alert" data-testid={`${job.ticketId}-watch`}>{controls[job.ticketId]?.watchProblem}</p>
+                    ) : null}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {controls[job.ticketId] === undefined && (
+                        <button type="button" className="rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700" aria-label={`Watch station ${job.ticketId}`} onClick={() => void control(job, "status")}>
+                          Watch station
+                        </button>
+                      )}
+                      {!controls[job.ticketId]?.paused && !controls[job.ticketId]?.aborted && (
+                        <button type="button" className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-slate-100 dark:text-slate-900" aria-label={`Take over ${job.ticketId}`} onClick={() => void control(job, "pause")}>
+                          Take over
+                        </button>
+                      )}
+                      {controls[job.ticketId]?.paused && (
+                        <button type="button" className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white dark:bg-slate-100 dark:text-slate-900" aria-label={`Resume ${job.ticketId}`} onClick={() => void control(job, "resume")}>
+                          Resume
+                        </button>
+                      )}
+                      {!controls[job.ticketId]?.aborted && (
+                        <button type="button" className="rounded-md border border-red-700 px-3 py-1.5 text-sm text-red-700 dark:border-red-300 dark:text-red-300" aria-label={`Abort ${job.ticketId}`} onClick={() => void control(job, "abort")}>
+                          Abort
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div className="mt-3">
                   <h4 className="text-sm font-medium">Verdict</h4>

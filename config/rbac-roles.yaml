@@ -9,7 +9,7 @@ default_role: engineer
 roles:
   administrator:
     label: "Administrator"
-    description: "Manages people, settings, Git hosts and models, and can do everything an engineer can."
+    description: "Manages people, settings, Git hosts, test stations and models, and can do everything an engineer can."
     capabilities:
       - screen
       - ssh
@@ -27,6 +27,8 @@ roles:
       - admin:settings
       - approve:destructive
       - factory:verdict
+      - factory:control
+      - factory:stations_manage
       - model:manage
   engineer:
     label: "Engineer"
@@ -44,6 +46,7 @@ roles:
       - git:bundle
       - git:terminal
       - approve:destructive
+      - factory:control
   line_lead:
     label: "Line lead"
     description: "An engineer who also decides a factory PASS or FAIL when the voters disagree."
@@ -60,6 +63,7 @@ roles:
       - git:bundle
       - git:terminal
       - approve:destructive
+      - factory:control
       - factory:verdict
   viewer:
     label: "Viewer"

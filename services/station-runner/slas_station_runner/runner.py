@@ -26,11 +26,14 @@ from slas_schemas.common import SlasModel
 from slas_schemas.errors import ThreePartMessage
 from slas_schemas.plan import Step
 from slas_screen.driver import ScreenDriver
+from slas_screen.policy import ScreenPolicy, WindowMatch
+from slas_screen.retention import PruneReport, RetentionPolicy, prune_screenshots
 from slas_skills.compiler import SECRET_PREFIX, CompiledSkill
 from slas_skills.runner import SkillExecutor, SkillRunner, StepOutcome
 from slas_station_runner.protocol import (
     BatchError,
     BatchResult,
+    ControlState,
     Screenshot,
     SignedBatch,
     StateSnapshot,
@@ -43,6 +46,54 @@ class Clock(Protocol):
     def now(self) -> datetime: ...
 
 
+class ScreenTuning(SlasModel):
+    """Per-station knobs for window matching and timing (P10), applied to the screen policy."""
+
+    window_match: WindowMatch = "contains"
+    action_settle_s: float = Field(default=0.0, ge=0, le=10)
+    wait_timeout_scale: float = Field(default=1.0, gt=0, le=10)
+    max_actions_per_second: int = Field(default=10, ge=1, le=60)
+    poll_interval_s: float = Field(default=0.5, gt=0, le=10)
+
+    def policy(self) -> ScreenPolicy:
+        return ScreenPolicy(
+            window_match=self.window_match,
+            action_settle_s=self.action_settle_s,
+            wait_timeout_scale=self.wait_timeout_scale,
+            max_actions_per_second=self.max_actions_per_second,
+            poll_interval_s=self.poll_interval_s,
+        )
+
+    def sentence(self) -> str:
+        return (
+            f"Windows matched by {self.window_match}; {self.action_settle_s:g} s settle after each "
+            f"action; wait timeouts ×{self.wait_timeout_scale:g}; at most "
+            f"{self.max_actions_per_second} actions per second."
+        )
+
+
+class VncSettings(SlasModel):
+    """The station's own VNC server, relayed to the operator over the runner's mTLS channel."""
+
+    enabled: bool = False
+    port: int = Field(default=5900, ge=1, le=65535)
+    #: Started by the runner when enabled; x11vnc on Linux. Windows: the installed TightVNC
+    #: service listens on the port and this stays empty.
+    command: list[str] = Field(
+        default_factory=lambda: [
+            "x11vnc",
+            "-display",
+            ":0",
+            "-localhost",
+            "-rfbport",
+            "5900",
+            "-forever",
+            "-shared",
+            "-nopw",
+        ]
+    )
+
+
 class StationConfig(SlasModel):
     station: str = Field(min_length=1)
     #: Programs a `command` batch or a skill `run` step may start; anything else is refused.
@@ -50,6 +101,9 @@ class StationConfig(SlasModel):
     #: Files the backup collects (config, recent logs) and the command that reports versions.
     state_files: list[str] = Field(default_factory=list)
     versions_command: list[str] = Field(default_factory=list)
+    screen: ScreenTuning = Field(default_factory=ScreenTuning)
+    retention: RetentionPolicy = Field(default_factory=RetentionPolicy)
+    vnc: VncSettings = Field(default_factory=VncSettings)
 
 
 class RunnerJournal:
@@ -149,6 +203,9 @@ class StationRunner:
         self.local: SkillExecutor = StationLocalExecutor(config, processes)
         self.seen: set[str] = set()
         self.handled: list[str] = []
+        #: Set by the CLI when the operator can take over (P10); None means no VNC/control.
+        self.controller: Any = None
+        self.last_prune: PruneReport | None = None
 
     # --- entry ------------------------------------------------------------------------------
 
@@ -167,10 +224,56 @@ class StationRunner:
             {"batch_id": batch.batch_id, "kind": batch.kind, "key_id": signed.key_id},
         )
         if batch.kind == "skill":
-            return self._skill(batch)
+            result = self._skill(batch)
+            self.last_prune = self.prune()
+            return result
         if batch.kind == "command":
             return self._command(batch)
+        if batch.kind == "control":
+            return self._control(batch)
         return self._state(batch)
+
+    def prune(self) -> PruneReport:
+        """Apply the station's screenshot retention to the runner's own copies."""
+        return prune_screenshots(
+            self.state_dir / "screens", self.config.retention, now=self.clock.now()
+        )
+
+    def _control(self, batch: StepBatch) -> BatchResult:
+        if self.controller is None:
+            raise BatchError(
+                ThreePartMessage(
+                    f"{self.config.station} has no operator control enabled.",
+                    "The runner was started without VNC and take-over support.",
+                    "Enable vnc on the station record and re-enrol, then restart the runner.",
+                )
+            )
+        verb = batch.command[0] if batch.command else "status"
+        who = batch.command[1] if len(batch.command) > 1 else "the operator"
+        if verb == "pause":
+            state: ControlState = self.controller.pause(who)
+        elif verb == "resume":
+            state = self.controller.resume(who)
+        elif verb == "abort":
+            state = self.controller.abort(who)
+        elif verb == "status":
+            state = self.controller.status()
+        else:
+            raise BatchError(
+                ThreePartMessage(
+                    f"{verb!r} is not a control verb.",
+                    "Control batches carry pause, resume, abort or status.",
+                    "This is an executor defect; nothing changed on the station.",
+                )
+            )
+        self.journal.append("control", batch.ticket_id, {"verb": verb, "by": who})
+        return BatchResult(
+            batch_id=batch.batch_id,
+            kind="control",
+            ok=True,
+            sentence=state.sentence(),
+            control=state,
+        )
 
     # --- kinds ------------------------------------------------------------------------------
 

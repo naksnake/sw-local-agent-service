@@ -28,3 +28,4 @@ roles:
 
 Unknown capability names, a missing default role or a reserved id make the file unusable;
 the api then keeps the last good set and reports the problem in three parts.
+| `factory.yaml` | P10 | Factory settings (CLAUDE.md §10.3): screenshot retention (days kept, longer for failed or held jobs, most per job), how long a station's one-time enrolment code lives and how many wrong codes lock it, the VNC port stations expose, and the station lease length. Rendered from `slas_factory_executor.settings.DEFAULT_FACTORY_SETTINGS`; a test keeps them in step. Per-station tuning and retention live on the station record under Admin → Stations. |

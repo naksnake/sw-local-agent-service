@@ -1,0 +1,24 @@
+# systemd --user unit for the SW Local Agent Service station runner (installed by install.sh,
+# @STATE@ replaced with the state directory). Runs inside the operator's graphical session so
+# xdotool and x11vnc see the station's display; the platform never receives that display.
+[Unit]
+Description=SW Local Agent Service station runner
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+Environment=SLAS_RUNNER_STATE=@STATE@
+Environment=DISPLAY=:0
+ExecStartPre=@STATE@/venv/bin/slas-station-runner --state-dir @STATE@ doctor
+ExecStart=@STATE@/venv/bin/slas-station-runner --state-dir @STATE@ serve
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=@STATE@
+UMask=0077
+
+[Install]
+WantedBy=graphical-session.target

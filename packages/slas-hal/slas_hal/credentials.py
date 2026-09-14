@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Final, Protocol
 
 from slas_schemas.errors import ThreePartMessage
@@ -73,6 +74,52 @@ class EnvCredentialResolver:
                 )
             )
         return value
+
+
+class LocalCredentialResolver:
+    """`env:NAME` from the environment and `file:PATH` from a file the platform wrote itself
+    (0600, for example a per-station batch key under Factory/keys). Relative paths resolve
+    under `root`."""
+
+    def __init__(self, *, root: Path, environ: Mapping[str, str] | None = None) -> None:
+        self.root = root
+        self.env = EnvCredentialResolver(environ)
+
+    def resolve(self, ref: str) -> str:
+        check_ref(ref)
+        kind, _, name = ref.partition(":")
+        if kind == "env":
+            return self.env.resolve(ref)
+        if kind == "file":
+            path = Path(name)
+            if not path.is_absolute():
+                path = self.root / path
+            try:
+                value = path.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise CredentialError(
+                    ThreePartMessage(
+                        f"The credential {ref} could not be read.",
+                        str(exc),
+                        "Check that the file exists and the executor may read it.",
+                    )
+                ) from None
+            if not value:
+                raise CredentialError(
+                    ThreePartMessage(
+                        f"The credential {ref} is empty.",
+                        "The file exists but holds nothing.",
+                        "Rotate the credential so the file is written again.",
+                    )
+                )
+            return value
+        raise CredentialError(
+            ThreePartMessage(
+                f"This installation cannot resolve {kind}: references.",
+                "Vault arrives with the prod profile.",
+                "Use env:NAME or file:PATH.",
+            )
+        )
 
 
 class FakeCredentialResolver:

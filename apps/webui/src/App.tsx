@@ -3,8 +3,9 @@ import { useState } from "react";
 import { PRODUCT_NAME } from "./branding";
 import type { CodingApi } from "./coding/api";
 import { CodingPage } from "./coding/CodingPage";
-import type { FactoryApi } from "./factory/api";
+import type { FactoryApi, StationsAdminApi } from "./factory/api";
 import { FactoryPage } from "./factory/FactoryPage";
+import { StationsAdmin } from "./factory/StationsAdmin";
 import type { GitApi } from "./git/api";
 import { GitHostsAdmin } from "./git/GitHostsAdmin";
 import { GitRemotesSettings } from "./git/GitRemotesSettings";
@@ -13,21 +14,26 @@ import { ValidationPage } from "./validation/ValidationPage";
 
 // The shell plus the pages built so far (CLAUDE.md §9): Coding (with the per-project Git
 // panel and Terminal), Validation (LED cycle map, console, findings), Factory (test-step
-// map, screenshot strip, line-lead decision), Settings → Git
-// remotes, Admin → Git hosts. Sign-in and the other pages arrive with their phases; until
+// map, screenshot strip, watch and take over, line-lead decision), Settings → Git
+// remotes, Admin → Git hosts, Admin → Stations. Sign-in and the other pages arrive with their phases; until
 // apps/api exists the pages run on the API fakes main.tsx passes in, and the Home page says so.
 
 interface Props {
   codingApi?: CodingApi;
   validationApi?: ValidationApi;
   factoryApi?: FactoryApi;
+  stationsApi?: StationsAdminApi;
   gitApi?: GitApi;
 }
 
+type AdminTab = "git-hosts" | "stations";
+
 type Page = "home" | "coding" | "validation" | "factory" | "settings" | "admin";
 
-export function App({ codingApi, validationApi, factoryApi, gitApi }: Props) {
+export function App({ codingApi, validationApi, factoryApi, stationsApi, gitApi }: Props) {
   const [page, setPage] = useState<Page>("home");
+  const [adminTab, setAdminTab] = useState<AdminTab>(gitApi !== undefined ? "git-hosts" : "stations");
+  const adminAvailable = gitApi !== undefined || stationsApi !== undefined;
   const navItem = (target: Page, label: string) => (
     <button
       type="button"
@@ -54,7 +60,7 @@ export function App({ codingApi, validationApi, factoryApi, gitApi }: Props) {
           {validationApi !== undefined && navItem("validation", "Validation")}
           {factoryApi !== undefined && navItem("factory", "Factory")}
           {gitApi !== undefined && navItem("settings", "Settings")}
-          {gitApi !== undefined && navItem("admin", "Admin")}
+          {adminAvailable && navItem("admin", "Admin")}
         </nav>
 
         {page === "home" && (
@@ -74,7 +80,22 @@ export function App({ codingApi, validationApi, factoryApi, gitApi }: Props) {
         )}
         {page === "factory" && factoryApi !== undefined && <FactoryPage api={factoryApi} />}
         {page === "settings" && gitApi !== undefined && <GitRemotesSettings api={gitApi} />}
-        {page === "admin" && gitApi !== undefined && <GitHostsAdmin api={gitApi} />}
+        {page === "admin" && adminAvailable && (
+          <div className="space-y-6">
+            {gitApi !== undefined && stationsApi !== undefined && (
+              <nav aria-label="Admin sections" className="flex gap-2 border-b border-slate-200 pb-2 text-sm dark:border-slate-800">
+                <button type="button" className={adminTab === "git-hosts" ? "font-semibold underline" : ""} aria-current={adminTab === "git-hosts" ? "page" : undefined} onClick={() => setAdminTab("git-hosts")}>
+                  Git hosts
+                </button>
+                <button type="button" className={adminTab === "stations" ? "font-semibold underline" : ""} aria-current={adminTab === "stations" ? "page" : undefined} onClick={() => setAdminTab("stations")}>
+                  Stations
+                </button>
+              </nav>
+            )}
+            {adminTab === "git-hosts" && gitApi !== undefined && <GitHostsAdmin api={gitApi} />}
+            {(adminTab === "stations" || gitApi === undefined) && stationsApi !== undefined && <StationsAdmin api={stationsApi} />}
+          </div>
+        )}
       </div>
     </main>
   );

@@ -216,6 +216,7 @@ _ENGINEER: Final = _caps(
     Capability.GIT_BUNDLE,
     Capability.GIT_TERMINAL,
     Capability.APPROVE_DESTRUCTIVE,
+    Capability.FACTORY_CONTROL,
 )
 
 #: The role set the platform ships (ADR-0006). `config/rbac-roles.yaml` is rendered from it.
@@ -225,8 +226,8 @@ DEFAULT_ROLES: Final[dict[str, object]] = {
     "roles": {
         "administrator": {
             "label": "Administrator",
-            "description": "Manages people, settings, Git hosts and models, and can do "
-            "everything an engineer can.",
+            "description": "Manages people, settings, Git hosts, test stations and models, "
+            "and can do everything an engineer can.",
             "capabilities": [c.value for c in Capability if c not in DEFAULT_OFF],
         },
         "engineer": {

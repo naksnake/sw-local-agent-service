@@ -30,6 +30,8 @@ class Capability(StrEnum):
     ADMIN_SETTINGS = "admin:settings"
     APPROVE_DESTRUCTIVE = "approve:destructive"
     FACTORY_VERDICT = "factory:verdict"
+    FACTORY_CONTROL = "factory:control"
+    FACTORY_STATIONS_MANAGE = "factory:stations_manage"
     MODEL_MANAGE = "model:manage"
 
 
@@ -55,6 +57,10 @@ DESCRIPTIONS: Final[dict[Capability, str]] = {
         "approve destructive steps such as an AC cycle or a firmware flash"
     ),
     Capability.FACTORY_VERDICT: "decide a factory PASS or FAIL when the voters disagree",
+    Capability.FACTORY_CONTROL: "watch a test station live and take it over from a running job",
+    Capability.FACTORY_STATIONS_MANAGE: (
+        "add test stations, issue their enrolment codes and tune them"
+    ),
     Capability.MODEL_MANAGE: "swap and roll back models",
 }
 

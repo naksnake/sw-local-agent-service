@@ -140,6 +140,7 @@ class ScreenDriver:
     ) -> ScreenResult:
         before = self._shoot("wait-before")
         timeout = timeout_s if timeout_s is not None else self.policy.default_timeout_s
+        timeout *= self.policy.wait_timeout_scale
         deadline = self.clock.now() + timedelta(seconds=timeout)
         wanted = window or text or image or "?"
         while True:
@@ -195,10 +196,12 @@ class ScreenDriver:
         self.limiter.acquire()
         self.actions += 1
         perform()
+        if self.policy.action_settle_s:
+            self._sleep(self.policy.action_settle_s)
 
     def _find_window(self, title: str | None, wm_class: str | None) -> Window | None:
         for window in self.backend.windows():
-            if title is not None and title.lower() in window.title.lower():
+            if title is not None and self.policy.title_matches(title, window.title):
                 return window
             if wm_class is not None and wm_class.lower() == window.wm_class.lower():
                 return window

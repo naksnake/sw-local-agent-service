@@ -41,6 +41,7 @@ from slas_skills.schema import Skill
 from slas_station_runner.protocol import (
     BatchError,
     BatchResult,
+    SignedBatch,
     StepBatch,
     new_batch_id,
     sign_batch,
@@ -109,12 +110,16 @@ class FactoryExecutor:
         lease_hours: int = 8,
         batch_ttl_s: int = 300,
         sleep: Callable[[float], None] | None = None,
+        station_keys: Mapping[str, tuple[str, str]] | None = None,
     ) -> None:
         self.runners = dict(runners)
         self.skills = dict(skills)
         self.resolver = resolver
         self.signing_key_ref = signing_key_ref
         self.signing_key_id = signing_key_id
+        #: Per-station (key_ref, key_id) from enrolment (P10); a station without one uses the
+        #: line-wide key above. Refs resolve at dispatch; the key never lands in a plan or log.
+        self.station_keys = dict(station_keys or {})
         self.data_root = data_root
         self.clock = clock
         self.cross_checker = cross_checker
@@ -210,11 +215,16 @@ class FactoryExecutor:
                 )
             ) from None
 
+    def _sign(self, batch: StepBatch) -> SignedBatch:
+        key_ref, key_id = self.station_keys.get(
+            batch.station, (self.signing_key_ref, self.signing_key_id)
+        )
+        key = self.resolver.resolve(key_ref).encode("utf-8")
+        return sign_batch(batch, key_id=key_id, key=key)
+
     def _send(self, context: ExecutionContext, step: Step, batch: StepBatch) -> BatchResult:
         self._batches += 1
-        key = self.resolver.resolve(self.signing_key_ref).encode("utf-8")
-        signed = sign_batch(batch, key_id=self.signing_key_id, key=key)
-        result = self._runner(batch.station).send(signed)
+        result = self._runner(batch.station).send(self._sign(batch))
         self._journal(
             context.ticket_id,
             {"step": step.id, "batch": batch.batch_id, "kind": batch.kind, "ok": result.ok},
@@ -578,6 +588,30 @@ class FactoryExecutor:
             exit_code=0 if result.ok else 1,
             summary=f"{step.title}: {'done' if result.ok else 'failed'} (approved for this job).",
         )
+
+    # --- the operator: watch and take over (P10) ------------------------------------------
+
+    def control(
+        self, ticket_id: str, verb: Literal["pause", "resume", "abort", "status"], *, by: str
+    ) -> BatchResult:
+        """Pause, resume or abort the runner on the job's station; the operator drives the
+        station through the VNC view in between. Recorded in the job's journal."""
+        state = self.state_for(ticket_id)
+        if state is None:
+            raise KeyError(ticket_id)
+        self._batches += 1
+        batch = StepBatch(
+            batch_id=new_batch_id(ticket_id, f"control-{verb}", self._batches),
+            ticket_id=ticket_id,
+            station=state.station,
+            issued_at=self.clock.now(),
+            ttl_s=self.batch_ttl_s,
+            kind="control",
+            command=[verb, by],
+        )
+        result = self._runner(state.station).send(self._sign(batch))
+        self._journal(ticket_id, {"control": verb, "by": by, "sentence": result.sentence})
+        return result
 
     # --- the line lead --------------------------------------------------------------------------
 

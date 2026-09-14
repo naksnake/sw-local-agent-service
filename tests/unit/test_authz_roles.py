@@ -56,7 +56,7 @@ def test_describe_is_a_sentence_per_role() -> None:
         "Viewer: Reads tickets, runs and reports. This role can only look."
     )
     assert roles.describe("engineer").startswith("Engineer: Runs coding tasks")
-    assert roles.describe("engineer").endswith("Holds 12 capabilities.")
+    assert roles.describe("engineer").endswith("Holds 13 capabilities.")
     assert roles.describe("nope") == "There is no role called nope."
     assert roles.default().id == "engineer"
     assert roles.get("nope") is None

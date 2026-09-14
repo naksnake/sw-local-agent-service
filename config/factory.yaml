@@ -1,0 +1,13 @@
+# Factory settings for SW Local Agent Service (CLAUDE.md §10.3, P10).
+# Rendered from slas_factory_executor.settings.DEFAULT_FACTORY_SETTINGS; a unit test keeps
+# file and code in step. Screenshot retention applies to Factory/Jobs/<ticket>/screens on the
+# platform and, per station, to the runner's own copies.
+version: 1
+screenshot_retention:
+  keep_days: 30
+  keep_failed_days: 180
+  max_per_job: 400
+enrolment_code_ttl_minutes: 15
+enrolment_max_attempts: 5
+vnc_port: 5900
+station_lease_hours: 8

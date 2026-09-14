@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
 import { FakeCodingApi } from "./coding/api";
-import { FakeFactoryApi } from "./factory/api";
+import { FakeFactoryApi, FakeStationsAdminApi } from "./factory/api";
 import { FakeGitApi } from "./git/api";
 import { FakeValidationApi } from "./validation/api";
 import "./index.css";
@@ -22,6 +22,7 @@ createRoot(container).render(
       codingApi={new FakeCodingApi()}
       validationApi={new FakeValidationApi()}
       factoryApi={new FakeFactoryApi()}
+      stationsApi={new FakeStationsAdminApi()}
       gitApi={new FakeGitApi()}
     />
   </StrictMode>,

@@ -35,3 +35,18 @@ decision. Component: `apps/webui/src/factory/FactoryPage.tsx`.
 A PASS/FAIL decision by the line lead needs the `factory:verdict` capability (config/rbac-roles.yaml)
 and is a destructive act in the INV-7 sense: it is a person's, recorded with their name, never
 the voters' (INV-11).
+
+## Watch and take over (P10)
+
+Shown on a running job when the station record has VNC on. Every control action is recorded
+on the job with the operator's name; the runner pauses only at a step boundary, never
+mid-action.
+
+| Element | Text |
+|---|---|
+| Heading | Watch and take over |
+| Before watching | You can watch *station-07* live and take it over at any point. The runner stops at the next step boundary and sends no input until you hand it back. → **Watch station** · **Take over** · **Abort** |
+| Watching | Watch the station at *vnc://127.0.0.1:5901 (relayed over mTLS to https://station-07:8443)*. Read-only until you take over. — The runner drives *station-07*. |
+| Taken over | *lee* has taken over *station-07*; the runner sends no input until it is resumed. → **Resume** · **Abort** |
+| Aborted | *lee* aborted the run on *station-07*. The running step reads: Stopped: *lee* took over *station-07*. The job ends as Failed; the unit stays on and the station is held. |
+| VNC off | VNC is not enabled on *station-07*. The station record has VNC off. Enable it under Admin → Stations and re-enrol. |

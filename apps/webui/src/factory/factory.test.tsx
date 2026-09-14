@@ -138,3 +138,56 @@ describe("New factory job wizard", () => {
     ).toContain("The station state is not backed up.");
   });
 });
+
+describe("Watch and take over", () => {
+  it("shows the VNC sentence, pauses at the next step boundary, resumes and aborts", async () => {
+    const api = new FakeFactoryApi();
+    await api.start({ kind: "mes", ticketNo: "MES-1", station: "station-07", unitSn: "SN-GX8-0200-R" }, "final-test-9-steps", {
+      voters: 3,
+      onFail: "hold_station",
+      exportSop: true,
+      backupStation: true,
+    });
+    render(<FactoryPage api={api} user="lee" />);
+    const card = await screen.findByLabelText("T-factory-0001");
+    expect(within(card).getByText(/3 of 10 steps done\.$/)).toBeTruthy();
+    expect(within(card).getByText(/You can watch station-07 live and take it over at any point/)).toBeTruthy();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Watch station T-factory-0001" }));
+    expect((await screen.findByTestId("T-factory-0001-control")).textContent).toBe("The runner drives station-07.");
+    expect(screen.getByTestId("T-factory-0001-watch").textContent).toBe(
+      "Watch the station at vnc://127.0.0.1:5901 (relayed over mTLS to https://station-07:8443). Read-only until you take over.",
+    );
+
+    fireEvent.click(within(card).getByRole("button", { name: "Take over T-factory-0001" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("T-factory-0001-control").textContent).toBe(
+        "lee has taken over station-07; the runner sends no input until it is resumed.",
+      ),
+    );
+    expect(within(card).queryByRole("button", { name: "Take over T-factory-0001" })).toBeNull();
+    fireEvent.click(within(card).getByRole("button", { name: "Resume T-factory-0001" }));
+    await waitFor(() => expect(screen.getByTestId("T-factory-0001-control").textContent).toBe("The runner drives station-07."));
+
+    fireEvent.click(within(card).getByRole("button", { name: "Abort T-factory-0001" }));
+    await waitFor(() => expect(screen.getByText("Stopped: lee took over station-07.", { selector: "p" })).toBeTruthy());
+    expect(api.jobs[0]?.state).toBe("Failed");
+  });
+
+  it("says when a station has VNC off instead of showing a dead link", async () => {
+    const api = new FakeFactoryApi();
+    api.stations = [{ name: "station-08", free: true, holder: null }];
+    await api.start({ kind: "manual", ticketNo: "manual-1", station: "station-08", unitSn: "SN-1-R" }, "final-test-9-steps", {
+      voters: 3,
+      onFail: "hold_station",
+      exportSop: true,
+      backupStation: false,
+    });
+    render(<FactoryPage api={api} user="lee" />);
+    const card = await screen.findByLabelText("T-factory-0001");
+    fireEvent.click(within(card).getByRole("button", { name: "Watch station T-factory-0001" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "VNC is not enabled on station-08. The station record has VNC off. Enable it under Admin → Stations and re-enrol.",
+    );
+  });
+});

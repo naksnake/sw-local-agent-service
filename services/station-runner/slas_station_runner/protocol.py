@@ -26,7 +26,7 @@ from slas_schemas.errors import ThreePartMessage
 from slas_skills.compiler import CompiledSkill
 from slas_skills.runner import SkillRunResult
 
-BatchKind = Literal["skill", "command", "state"]
+BatchKind = Literal["skill", "command", "state", "control"]
 
 
 class BatchError(RuntimeError):
@@ -48,6 +48,7 @@ class StepBatch(SlasModel):
     #: Secret handle → value, resolved by the executor for this batch only; never journalled.
     secrets: dict[str, str] = Field(default_factory=dict)
     #: kind == "command": argv to run on the station (allowlisted there).
+    #: kind == "control": ["pause"|"resume"|"abort"|"status", <who>].
     command: list[str] = Field(default_factory=list)
     timeout_s: int = Field(default=600, ge=1, le=7200)
 
@@ -141,6 +142,26 @@ class StateSnapshot(SlasModel):
     taken_at: datetime
 
 
+class ControlState(SlasModel):
+    """Whether the operator has taken the station over (P10 watch and take over)."""
+
+    station: str
+    paused: bool = False
+    aborted: bool = False
+    by: str = ""
+    since: datetime | None = None
+
+    def sentence(self) -> str:
+        if self.aborted:
+            return f"{self.by or 'The operator'} aborted the run on {self.station}."
+        if self.paused:
+            return (
+                f"{self.by or 'The operator'} has taken over {self.station}; the runner sends "
+                "no input until it is resumed."
+            )
+        return f"The runner drives {self.station}."
+
+
 class BatchResult(SlasModel):
     batch_id: str
     kind: BatchKind
@@ -149,7 +170,34 @@ class BatchResult(SlasModel):
     skill: SkillRunResult | None = None
     command: CommandResult | None = None
     state: StateSnapshot | None = None
+    control: ControlState | None = None
     screenshots: list[Screenshot] = Field(default_factory=list)
+
+
+# --- enrolment (P10): a one-time code from Admin → Stations becomes the station's identity ------
+
+
+class EnrolmentRequest(SlasModel):
+    station: str = Field(min_length=1)
+    code: str = Field(min_length=8)
+    #: Where the executor will reach this runner afterwards (https://<station host>:<port>).
+    runner_url: str = Field(pattern=r"^https://")
+
+
+class EnrolmentGrant(SlasModel):
+    """What a redeemed code returns: the station's certificate and key (minted by the
+    platform CA), the CA to verify the executor, the batch signing key, and the configuration
+    an administrator wrote for the station. Delivered once, over TLS, never logged."""
+
+    station: str
+    ca_pem: str = Field(min_length=1)
+    client_cert_pem: str = Field(min_length=1)
+    client_key_pem: str = Field(min_length=1)
+    cert_fingerprint: str = Field(min_length=1)
+    batch_key_id: str = Field(min_length=1)
+    batch_key: str = Field(min_length=16)
+    config: dict[str, Any] = Field(default_factory=dict)
+    sentence: str = Field(min_length=1)
 
 
 def new_batch_id(ticket_id: str, step_id: str, n: int) -> str:

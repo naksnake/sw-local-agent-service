@@ -73,6 +73,21 @@ export interface FactoryJob {
   backupPath: string | null;
 }
 
+export type ControlVerb = "pause" | "resume" | "abort" | "status";
+
+/** Mirrors `slas_station_runner.protocol.ControlState` plus where the operator watches. */
+export interface ControlView {
+  station: string;
+  paused: boolean;
+  aborted: boolean;
+  by: string;
+  sentence: string;
+  /** "vnc://127.0.0.1:5901 (relayed over mTLS to https://station-07:8443)"; null when the station has VNC off. */
+  watchUrl: string | null;
+  /** Why watching is not possible, in three parts, when watchUrl is null. */
+  watchProblem: string | null;
+}
+
 export interface FactoryApi {
   listMesTickets(): Promise<MesTicketView[]>;
   parseLabel(text: string): Promise<TriggerView | string>;
@@ -81,6 +96,69 @@ export interface FactoryApi {
   start(trigger: TriggerView, templateId: string, rules: JobRules): Promise<FactoryJob>;
   decide(ticketId: string, verdict: "PASS" | "FAIL", by: string, note: string): Promise<FactoryJob>;
   listJobs(): Promise<FactoryJob[]>;
+  /** Watch and take over (CLAUDE.md §5.2): pause at the next step boundary, resume, abort. */
+  control(ticketId: string, verb: ControlVerb, by: string): Promise<ControlView>;
+}
+
+// --- Admin → Stations (P10) -------------------------------------------------------------------
+
+export type WindowMatch = "contains" | "exact" | "prefix" | "regex";
+
+export interface RetentionView {
+  keepDays: number;
+  keepFailedDays: number;
+  maxPerJob: number;
+}
+
+export interface ScreenTuningView {
+  windowMatch: WindowMatch;
+  actionSettleS: number;
+  waitTimeoutScale: number;
+  maxActionsPerSecond: number;
+}
+
+/** Mirrors `slas_factory_executor.stations.StationRecord`; never a key or a certificate. */
+export interface StationRecordView {
+  name: string;
+  description: string;
+  allowedPrograms: string[];
+  enrolled: boolean;
+  /** "station-07: enrolled 2026-09-14 10:00, runner at https://…, certificate SHA256:…" or "…: not enrolled yet." */
+  sentence: string;
+  runnerUrl: string | null;
+  certFingerprint: string | null;
+  vncEnabled: boolean;
+  vncPort: number;
+  screen: ScreenTuningView;
+  retention: RetentionView;
+}
+
+export interface IssuedCodeView {
+  station: string;
+  code: string;
+  expiresAt: string;
+  /** "Enter this code on station-07 within 15 minutes: XXXX-XXXX-XXXX. It works once; issuing a new code cancels it." */
+  sentence: string;
+}
+
+export interface StationsAdminApi {
+  listStationRecords(): Promise<StationRecordView[]>;
+  addStation(name: string, description: string): Promise<StationRecordView | string>;
+  issueCode(name: string, by: string): Promise<IssuedCodeView>;
+  revoke(name: string): Promise<StationRecordView>;
+  removeStation(name: string): Promise<void>;
+  saveTuning(name: string, screen: ScreenTuningView, retention: RetentionView, vncEnabled: boolean): Promise<StationRecordView>;
+}
+
+export function tuningSentence(screen: ScreenTuningView): string {
+  return (
+    `Windows matched by ${screen.windowMatch}; ${screen.actionSettleS} s settle after each action; ` +
+    `wait timeouts ×${screen.waitTimeoutScale}; at most ${screen.maxActionsPerSecond} actions per second.`
+  );
+}
+
+export function retentionSentence(r: RetentionView): string {
+  return `Screenshots are kept ${r.keepDays} days (${r.keepFailedDays} days for failed or held jobs), at most ${r.maxPerJob} per job.`;
 }
 
 export const STATUS_WORD: Record<CellStatus, string> = {
@@ -174,6 +252,7 @@ export class FakeFactoryApi implements FactoryApi {
     this.counter += 1;
     const ticketId = `T-factory-${String(this.counter).padStart(4, "0")}`;
     const fails = trigger.unitSn.endsWith("-F");
+    const running = trigger.unitSn.endsWith("-R");
     const titles = [...template.steps, `Release ${trigger.station}`];
     const steps: StepCellView[] = titles.map((title, index) => {
       const n = index + 1;
@@ -195,6 +274,12 @@ export class FakeFactoryApi implements FactoryApi {
       if (fails && isRelease) {
         return { n, title, status: "waiting", sentence: "", screenshots: [] };
       }
+      if (running && title.startsWith("Wait")) {
+        return { n, title, status: "running", sentence: "Waiting for BurnIn to report the test complete.", screenshots: [TINY_PNG] };
+      }
+      if (running && n > titles.findIndex((t) => t.startsWith("Wait")) + 1) {
+        return { n, title, status: "waiting", sentence: "", screenshots: [] };
+      }
       return {
         n,
         title,
@@ -210,14 +295,16 @@ export class FakeFactoryApi implements FactoryApi {
       station: trigger.station,
       unitSn: trigger.unitSn,
       mesTicketNo: trigger.ticketNo,
-      state: fails ? "Needs review" : "Done",
-      sentence: fails
-        ? `${done} of ${steps.length} steps done. Verdict: FAIL; the station is held for the line lead.`
-        : `${done} of ${steps.length} steps done. Verdict: PASS (3 of 3 voters).`,
-      verdict: fails ? "FAIL" : "PASS",
+      state: running ? "Running" : fails ? "Needs review" : "Done",
+      sentence: running
+        ? `${done} of ${steps.length} steps done.`
+        : fails
+          ? `${done} of ${steps.length} steps done. Verdict: FAIL; the station is held for the line lead.`
+          : `${done} of ${steps.length} steps done. Verdict: PASS (3 of 3 voters).`,
+      verdict: running ? null : fails ? "FAIL" : "PASS",
       verdictSentence: steps.find((s) => s.title.startsWith("Decide"))?.sentence ?? "",
       held: fails,
-      decidedBy: fails ? "the deterministic gate" : "3 of 3 voters",
+      decidedBy: running ? "" : fails ? "the deterministic gate" : "3 of 3 voters",
       steps,
       draftTicketId: fails ? `T-factory-${String(this.counter + 1).padStart(4, "0")}` : null,
       backupPath: rules.backupStation ? `Backups/stations/${trigger.station}/${ticketId}` : null,
@@ -252,5 +339,162 @@ export class FakeFactoryApi implements FactoryApi {
 
   async listJobs(): Promise<FactoryJob[]> {
     return [...this.jobs];
+  }
+
+  /** Per station: paused/aborted state, as the runner's `ControlState` would report it. */
+  readonly controls: Record<string, { paused: boolean; aborted: boolean; by: string }> = {};
+  /** Stations whose record has VNC on (the fake's station-08 has it off). */
+  vncStations = new Set(["station-07"]);
+
+  async control(ticketId: string, verb: ControlVerb, by: string): Promise<ControlView> {
+    const job = this.jobs.find((j) => j.ticketId === ticketId);
+    if (!job) {
+      throw new Error(`There is no job ${ticketId}.`);
+    }
+    const state = this.controls[job.station] ?? { paused: false, aborted: false, by: "" };
+    if (verb === "pause") {
+      Object.assign(state, { paused: true, aborted: false, by });
+    } else if (verb === "resume") {
+      Object.assign(state, { paused: false, aborted: false, by });
+    } else if (verb === "abort") {
+      Object.assign(state, { paused: false, aborted: true, by });
+      job.state = "Failed";
+      job.sentence = `Stopped: ${by} took over ${job.station}.`;
+      for (const cell of job.steps) {
+        if (cell.status === "running") {
+          cell.status = "failed";
+          cell.sentence = `Stopped: ${by} took over ${job.station}.`;
+        }
+      }
+    }
+    this.controls[job.station] = state;
+    const sentence = state.aborted
+      ? `${state.by} aborted the run on ${job.station}.`
+      : state.paused
+        ? `${state.by} has taken over ${job.station}; the runner sends no input until it is resumed.`
+        : `The runner drives ${job.station}.`;
+    const vnc = this.vncStations.has(job.station);
+    return {
+      station: job.station,
+      paused: state.paused,
+      aborted: state.aborted,
+      by: state.by,
+      sentence,
+      watchUrl: vnc ? `vnc://127.0.0.1:5901 (relayed over mTLS to https://${job.station}:8443)` : null,
+      watchProblem: vnc
+        ? null
+        : `VNC is not enabled on ${job.station}. The station record has VNC off. Enable it under Admin → Stations and re-enrol.`,
+    };
+  }
+}
+
+const DEFAULT_SCREEN: ScreenTuningView = { windowMatch: "contains", actionSettleS: 0, waitTimeoutScale: 1, maxActionsPerSecond: 10 };
+const DEFAULT_RETENTION: RetentionView = { keepDays: 30, keepFailedDays: 180, maxPerJob: 400 };
+const STATION_NAME = /^[a-z][a-z0-9-]{1,62}$/;
+const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+
+function fakeCode(): string {
+  const group = () => Array.from({ length: 4 }, (_, i) => CODE_ALPHABET[(i * 7 + 3) % CODE_ALPHABET.length]).join("");
+  return `${group()}-${group()}-${group()}`;
+}
+
+export class FakeStationsAdminApi implements StationsAdminApi {
+  records: StationRecordView[] = [
+    {
+      name: "station-07",
+      description: "Final test, line 2",
+      allowedPrograms: ["fixture-ctl", "burnin-ctl", "sensors-ctl", "evlog", "station-ctl"],
+      enrolled: true,
+      sentence: "station-07: enrolled 2026-09-14 10:00, runner at https://station-07.factory.internal:8443, certificate SHA256:3F2A…9C1D.",
+      runnerUrl: "https://station-07.factory.internal:8443",
+      certFingerprint: "SHA256:3F2A…9C1D",
+      vncEnabled: true,
+      vncPort: 5900,
+      screen: { ...DEFAULT_SCREEN, windowMatch: "prefix", actionSettleS: 0.3 },
+      retention: { ...DEFAULT_RETENTION },
+    },
+    {
+      name: "station-08",
+      description: "",
+      allowedPrograms: ["fixture-ctl", "burnin-ctl"],
+      enrolled: false,
+      sentence: "station-08: not enrolled yet.",
+      runnerUrl: null,
+      certFingerprint: null,
+      vncEnabled: false,
+      vncPort: 5900,
+      screen: { ...DEFAULT_SCREEN },
+      retention: { ...DEFAULT_RETENTION },
+    },
+  ];
+  issued: IssuedCodeView[] = [];
+
+  async listStationRecords(): Promise<StationRecordView[]> {
+    return this.records.map((r) => ({ ...r }));
+  }
+
+  async addStation(name: string, description: string): Promise<StationRecordView | string> {
+    if (!STATION_NAME.test(name)) {
+      return (
+        `"${name}" is not a station name. Names are lowercase letters, digits and dashes, starting with a letter, ` +
+        `like station-09. Change the name and add the station again.`
+      );
+    }
+    if (this.records.some((r) => r.name === name)) {
+      return `There is already a station called ${name}. Every station has one record; pick another name or issue a code for the existing one.`;
+    }
+    const record: StationRecordView = {
+      name,
+      description,
+      allowedPrograms: [],
+      enrolled: false,
+      sentence: `${name}: not enrolled yet.`,
+      runnerUrl: null,
+      certFingerprint: null,
+      vncEnabled: true,
+      vncPort: 5900,
+      screen: { ...DEFAULT_SCREEN },
+      retention: { ...DEFAULT_RETENTION },
+    };
+    this.records.push(record);
+    return { ...record };
+  }
+
+  async issueCode(name: string, by: string): Promise<IssuedCodeView> {
+    if (!this.records.some((r) => r.name === name)) {
+      throw new Error(`There is no station called ${name}.`);
+    }
+    void by;
+    const code = fakeCode();
+    const issued: IssuedCodeView = {
+      station: name,
+      code,
+      expiresAt: "2026-09-14T10:15:00Z",
+      sentence: `Enter this code on ${name} within 15 minutes: ${code}. It works once; issuing a new code cancels it.`,
+    };
+    this.issued.push(issued);
+    return issued;
+  }
+
+  async revoke(name: string): Promise<StationRecordView> {
+    const record = this.records.find((r) => r.name === name);
+    if (!record) {
+      throw new Error(`There is no station called ${name}.`);
+    }
+    Object.assign(record, { enrolled: false, runnerUrl: null, certFingerprint: null, sentence: `${name}: not enrolled yet.` });
+    return { ...record };
+  }
+
+  async removeStation(name: string): Promise<void> {
+    this.records = this.records.filter((r) => r.name !== name);
+  }
+
+  async saveTuning(name: string, screen: ScreenTuningView, retention: RetentionView, vncEnabled: boolean): Promise<StationRecordView> {
+    const record = this.records.find((r) => r.name === name);
+    if (!record) {
+      throw new Error(`There is no station called ${name}.`);
+    }
+    Object.assign(record, { screen: { ...screen }, retention: { ...retention }, vncEnabled });
+    return { ...record };
   }
 }

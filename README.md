@@ -114,6 +114,23 @@ job wizard. The done-when is a test: a fake MES ticket runs the 9-step loop on t
 station and passes with 3 votes; a planted failure holds the station and drafts the ticket;
 the SOP and the backup land on the ticket. A real station is P10.
 
+**Phase 10: the factory station.** The station runner is packaged for a Linux or Windows
+station (`deploy/station-runner/`: offline wheels, `install.sh` with a systemd `--user`
+unit, `install.ps1` with a logon task, the platform CA in the bundle and nothing secret) and
+enrols with a **one-time code** from Admin → Stations: the code is hashed, lives 15 minutes,
+locks after five wrong tries, and is redeemed once over TLS; the factory executor mints the
+station's certificate with the platform CA (`openssl` argv, created at first start) and a
+per-station batch signing key kept by reference under `Factory/keys/`. Window matching
+(contains · prefix · exact · regex), settle time and timeout scale are tuned per station
+record, never in the skill; screenshot retention is a setting (`config/factory.yaml` and per
+station) applied on the platform and on the runner. The operator watches the station's own
+VNC server relayed over the runner's mTLS channel and takes over at any point: the runner
+pauses at the next step boundary, resumes, or aborts with a sentence on the ticket. Tests
+cover enrolment end to end with a real CA and mTLS on loopback, the relay, the pause and
+the CLI. Tuning against a real station waits on its name; a Windows GUI backend
+(PyAutoGUI), a single binary (PyInstaller) and Ed25519 signatures (`cryptography`) wait on
+dependency decisions.
+
 ## Developing
 
 ```bash

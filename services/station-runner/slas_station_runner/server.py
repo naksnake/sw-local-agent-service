@@ -11,10 +11,14 @@ executor talks to; `InProcessRunnerClient` skips the network for tests and the f
 
 from __future__ import annotations
 
+import contextlib
 import json
+import re
+import socket
 import ssl
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Protocol
@@ -54,8 +58,34 @@ def client_context(*, certfile: str, keyfile: str, cafile: str) -> ssl.SSLContex
     return context
 
 
+def relay(a: socket.socket, b: socket.socket) -> None:
+    """Copy bytes both ways until either side closes (the VNC relay, P10)."""
+
+    def pump(src: socket.socket, dst: socket.socket) -> None:
+        try:
+            while True:
+                data = src.recv(65536)
+                if not data:
+                    break
+                dst.sendall(data)
+        except OSError:
+            pass
+        finally:
+            for sock in (src, dst):
+                with contextlib.suppress(OSError):
+                    sock.shutdown(socket.SHUT_RDWR)
+
+    forward = threading.Thread(target=pump, args=(a, b), daemon=True)
+    backward = threading.Thread(target=pump, args=(b, a), daemon=True)
+    forward.start()
+    backward.start()
+    forward.join()
+    backward.join()
+
+
 class _Handler(BaseHTTPRequestHandler):
     runner: StationRunner  # set on the server class per instance
+    vnc_port: int | None = None
     server_version = "slas-station-runner"
     sys_version = ""
 
@@ -82,6 +112,9 @@ class _Handler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:
+        if self.path == "/vnc":
+            self._vnc()
+            return
         if self.path != "/batch":
             self._json(
                 404,
@@ -119,15 +152,56 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._json(200, result.model_dump(mode="json"))
 
+    def _vnc(self) -> None:
+        """Relay the station's local VNC server to the (mTLS-authenticated) operator side."""
+        if self.vnc_port is None:
+            self._json(
+                404,
+                ThreePartMessage(
+                    "VNC is not enabled on this station.",
+                    "The station record has vnc.enabled false.",
+                    "Enable it under Admin → Stations and re-enrol.",
+                ).as_dict(),
+            )
+            return
+        try:
+            upstream = socket.create_connection(("127.0.0.1", self.vnc_port), timeout=5)
+        except OSError as exc:
+            self._json(
+                502,
+                ThreePartMessage(
+                    "The station's VNC server is not answering.",
+                    str(exc),
+                    "Check that the VNC server runs on the station (x11vnc or TightVNC) on "
+                    "the configured port.",
+                ).as_dict(),
+            )
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.flush()
+        self.close_connection = True
+        upstream.settimeout(None)
+        relay(self.connection, upstream)
+
 
 class RunnerServer:
     """Serves one runner over mTLS in a background thread; `port` is known after `start()`."""
 
     def __init__(
-        self, runner: StationRunner, *, bind: str, certfile: str, keyfile: str, cafile: str
+        self,
+        runner: StationRunner,
+        *,
+        bind: str,
+        certfile: str,
+        keyfile: str,
+        cafile: str,
+        vnc_port: int | None = None,
     ) -> None:
         host, _, port = bind.rpartition(":")
-        handler = type("Handler", (_Handler,), {"runner": runner})
+        handler = type("Handler", (_Handler,), {"runner": runner, "vnc_port": vnc_port})
         self._server = ThreadingHTTPServer((host or "0.0.0.0", int(port)), handler)  # noqa: S104
         self._server.socket = server_context(
             certfile=certfile, keyfile=keyfile, cafile=cafile
@@ -188,3 +262,86 @@ class MtlsRunnerClient:
                     "signed by the platform CA.",
                 )
             ) from None
+
+
+class VncTunnel:
+    """The operator side of the relay: a local port that noVNC (the screen worker) attaches
+    to; every connection becomes one mTLS-authenticated `/vnc` stream to the runner."""
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        certfile: str,
+        keyfile: str,
+        cafile: str,
+        listen: str = "127.0.0.1:0",
+    ) -> None:
+        self.url = url.rstrip("/")
+        self.context = client_context(certfile=certfile, keyfile=keyfile, cafile=cafile)
+        host, _, port = listen.rpartition(":")
+        self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._listener.bind((host or "127.0.0.1", int(port)))
+        self._listener.listen(4)
+        self._listener.settimeout(0.2)
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.connections = 0
+
+    @property
+    def port(self) -> int:
+        return int(self._listener.getsockname()[1])
+
+    def sentence(self) -> str:
+        return (
+            f"Watch the station at vnc://127.0.0.1:{self.port} (relayed over mTLS to {self.url})."
+        )
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._accept_loop, daemon=True)
+        self._thread.start()
+
+    def _accept_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                client, _ = self._listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            self.connections += 1
+            threading.Thread(target=self._serve, args=(client,), daemon=True).start()
+
+    def _serve(self, client: socket.socket) -> None:
+        parts = urllib.parse.urlsplit(self.url)
+        host = parts.hostname or "127.0.0.1"
+        port = parts.port or 443
+        try:
+            raw = socket.create_connection((host, port), timeout=10)
+            upstream = self.context.wrap_socket(raw, server_hostname=host)
+            upstream.sendall(
+                f"POST /vnc HTTP/1.1\r\nHost: {host}\r\nContent-Length: 0\r\n"
+                "Connection: close\r\n\r\n".encode()
+            )
+            head = b""
+            while b"\r\n\r\n" not in head and len(head) < 8192:
+                chunk = upstream.recv(1)
+                if not chunk:
+                    break
+                head += chunk
+            if not re.match(rb"HTTP/1\.[01] 200 ", head):
+                client.close()
+                upstream.close()
+                return
+            upstream.settimeout(None)
+            client.settimeout(None)
+            relay(client, upstream)
+        except OSError:
+            client.close()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+        self._listener.close()
