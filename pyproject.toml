@@ -100,6 +100,7 @@ testpaths = ["tests"]
 addopts = [
   "-q",
   "--strict-markers",
+  "--cov=slas_authz",
   "--cov=slas_cli",
   "--cov=slas_kernel",
   "--cov=slas_schemas",

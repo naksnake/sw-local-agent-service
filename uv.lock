@@ -255,6 +255,12 @@ wheels = [
 name = "slas-authz"
 version = "0.0.1"
 source = { editable = "packages/slas-authz" }
+dependencies = [
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
 
 [[package]]
 name = "slas-cli"

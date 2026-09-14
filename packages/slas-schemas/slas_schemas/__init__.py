@@ -1,6 +1,7 @@
 """Shared schemas: Job, Plan, Step, Ticket, Vote, SopModel, Finding and three-part errors.
 
-Phase 0 ships only `errors`. The remaining models arrive in Phase 2 (CLAUDE.md §5.4, §11).
+Phase 0 shipped `errors`; Phase 1 adds `envfile`. The remaining models arrive in Phase 2
+(CLAUDE.md §5.4, §11).
 """
 
 from slas_schemas.errors import ThreePartMessage
