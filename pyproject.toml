@@ -91,6 +91,9 @@ allowed-confusables = ["：", "（", "）", "；", "，", "。", "×"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S603", "S607"]  # asserts and subprocess in tests are fine
+# Fixtures with Traditional Chinese sentences: ruff counts a CJK character as two columns.
+"tests/unit/test_sop_translation.py" = ["E501"]
+"tests/unit/test_eval_checks.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = [
@@ -124,13 +127,16 @@ addopts = [
   "--strict-markers",
   "--cov=slas_authz",
   "--cov=slas_cli",
+  "--cov=slas_eval",
   "--cov=slas_kernel",
   "--cov=slas_llm_gateway",
   "--cov=slas_model_manager",
+  "--cov=slas_rag",
   "--cov=slas_schemas",
   "--cov=slas_screen",
   "--cov=slas_screen_worker",
   "--cov=slas_skills",
+  "--cov=slas_sop",
   "--cov-report=term-missing",
   "--cov-fail-under=85",
 ]

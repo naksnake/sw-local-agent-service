@@ -1,5 +1,5 @@
-"""Dual-language SOP renderer: SopModel → EN + zh-Hant, identifiers copied by code (CLAUDE.md
-§5.5). Filled in P5.
-"""
+"""slas_sop: SopModel → sop.en.md + sop.zh-Hant.md with the glossary pinned (CLAUDE.md §5.5).
 
-__version__ = "0.0.1"
+Import from the submodules: `slas_sop.glossary`, `slas_sop.protect`, `slas_sop.translate`,
+`slas_sop.render`.
+"""

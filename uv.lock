@@ -343,6 +343,16 @@ source = { editable = "packages/slas-diff" }
 name = "slas-eval"
 version = "0.0.1"
 source = { editable = "packages/slas-eval" }
+dependencies = [
+    { name = "slas-schemas" },
+    { name = "slas-sop" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "slas-sop", editable = "packages/slas-sop" },
+]
 
 [[package]]
 name = "slas-git"
@@ -359,11 +369,17 @@ name = "slas-kernel"
 version = "0.0.1"
 source = { editable = "packages/slas-kernel" }
 dependencies = [
+    { name = "slas-rag" },
     { name = "slas-schemas" },
+    { name = "slas-sop" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
+requires-dist = [
+    { name = "slas-rag", editable = "packages/slas-rag" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "slas-sop", editable = "packages/slas-sop" },
+]
 
 [[package]]
 name = "slas-llm-gateway"
@@ -395,6 +411,12 @@ requires-dist = [
 name = "slas-rag"
 version = "0.0.1"
 source = { editable = "packages/slas-rag" }
+dependencies = [
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
 
 [[package]]
 name = "slas-schemas"
@@ -454,6 +476,12 @@ requires-dist = [
 name = "slas-sop"
 version = "0.0.1"
 source = { editable = "packages/slas-sop" }
+dependencies = [
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
 
 [[package]]
 name = "slas-triage"

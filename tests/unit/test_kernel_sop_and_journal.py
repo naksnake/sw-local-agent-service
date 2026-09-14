@@ -1,4 +1,4 @@
-"""The two-language SOP placeholder (INV-13) and the journal's own behaviour."""
+"""The two-language SOP without a translator (INV-13) and the journal's own behaviour."""
 
 from __future__ import annotations
 
@@ -99,7 +99,7 @@ def test_render_markdown_handles_empty_sections_and_refuses_unrendered_languages
     )
     text = render_markdown(full, "en")
     assert "| 1 | a | e | x, y |" in text and "- k: v" in text and "- baseline" in text
-    with pytest.raises(ValueError, match="zh-Hans arrives with Phase 5"):
+    with pytest.raises(ValueError, match="zh-Hans is not rendered yet"):
         render_markdown(model, "zh-Hans")
 
 

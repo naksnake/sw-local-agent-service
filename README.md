@@ -32,7 +32,19 @@ One command, one `.env`, one page to manage models. Details in `CLAUDE.md` §3.
 **Phase 0 — Skeleton.** The repository holds the layout from `CLAUDE.md` §13, the Python
 workspace (`uv`, `ruff`, `mypy --strict`, `pytest`), the WebUI shell (`pnpm`, Vite, React,
 `vitest`, Playwright), CI with an egress-DROP job, `./install.sh` with the preflight step
-(`slas doctor`), and ADR-0001/ADR-0002. Next: `docs/DEVELOPMENT_PLAN.md` P1.
+(`slas doctor`), and ADR-0001/ADR-0002.
+
+**Core through Phase 5, against fakes.** The Agent Kernel (`slas_kernel`: lifecycle,
+write-ahead journal, crash recovery, NullAgent), the schemas, authz, the LLM gateway with
+the Consensus Router, the model manager, the skills engine and screen driver, and now the
+Phase 5 pieces: hybrid retrieval (`slas_rag`: dense + BM25 → RRF → rerank, cited answers),
+the RCA pipeline (normalise → fingerprint → retrieve → draft → consensus → deterministic
+owner routing from `config/owner-routing.yaml`), the dual-language SOP renderer
+(`slas_sop`: `docs/glossary.yaml` pinned, identifiers protected by code), and the eval
+checks (`slas_eval`: terminology consistency, back-translation spot check, local judges
+only). Everything runs and is tested without a database, a model or a display; the
+Qdrant/Postgres adapters, the gateway-backed embedder, reranker, drafter and translator,
+and the Knowledge page wait on the dependency decisions listed in the phase reports.
 
 ## Developing
 

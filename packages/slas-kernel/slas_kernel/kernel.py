@@ -22,7 +22,7 @@ from slas_kernel.clock import Clock, SystemClock
 from slas_kernel.executor import Executor
 from slas_kernel.journal import Journal
 from slas_kernel.logs import collect_logs
-from slas_kernel.rca import placeholder_rca
+from slas_kernel.rca import RcaPipeline, placeholder_rca
 from slas_kernel.sop import build_sop_model, render_sop
 from slas_kernel.store import TicketStore
 from slas_schemas.job import Job, MesTicket, Upload
@@ -34,6 +34,8 @@ from slas_schemas.ticket import (
     Ticket,
     TicketState,
 )
+from slas_sop.glossary import Glossary
+from slas_sop.translate import Translator
 
 AfterStepHook = Callable[[Ticket, Step], None]
 
@@ -54,12 +56,21 @@ class Kernel:
         store: TicketStore,
         clock: Clock | None = None,
         after_step: AfterStepHook | None = None,
+        rca_pipeline: RcaPipeline | None = None,
+        translator: Translator | None = None,
+        glossary: Glossary | None = None,
     ) -> None:
         self.data_root = data_root
         self.agent = agent
         self.executor = executor
         self.store = store
         self.clock = clock or SystemClock()
+        # RCA (§5.4) and SOP translation (§5.5) talk to models through protocols the
+        # orchestrator wires to the LLM gateway; without them the kernel stays honest:
+        # a placeholder RCA and a Chinese file that keeps the English prose and says so.
+        self.rca_pipeline = rca_pipeline
+        self.translator = translator
+        self.glossary = glossary
         # Test seam: called after each step's observation is journalled and the ticket saved.
         self._after_step = after_step
 
@@ -255,13 +266,45 @@ class Kernel:
         """COLLECT → RCA → SOP → CLOSE."""
         ticket.logs = collect_logs(ticket, self.ticket_dir(ticket.id) / "logs")
         journal.append("note", ticket.id, {"logs": ticket.logs.model_dump(mode="json")})
-        ticket.rca = placeholder_rca(ticket)
-        journal.append("note", ticket.id, {"rca": ticket.rca.model_dump(mode="json")})
+        if self.rca_pipeline is None:
+            ticket.rca = placeholder_rca(ticket)
+            journal.append("note", ticket.id, {"rca": ticket.rca.model_dump(mode="json")})
+        else:
+            result = self.rca_pipeline.analyse(ticket)
+            ticket.rca = result.rca
+            ticket.votes = [*ticket.votes, *result.votes]
+            known = {finding.fingerprint for finding in ticket.findings}
+            ticket.findings = [
+                *ticket.findings,
+                *(f for f in result.findings if f.fingerprint not in known),
+            ]
+            journal.append(
+                "note",
+                ticket.id,
+                {
+                    "rca": ticket.rca.model_dump(mode="json"),
+                    "rca_sentence": result.sentence,
+                    "findings": [f.headline() for f in result.findings],
+                    "votes": len(result.votes),
+                    "citations": result.citations,
+                },
+            )
         failed = any(record.status == "failed" for record in ticket.steps)
         final_state = TicketState.NEEDS_REVIEW if failed else TicketState.DONE
         model = build_sop_model(ticket, self.agent.sop_template(), final_state=final_state)
-        ticket.sop = render_sop(model, self.sop_dir(ticket.id))
-        journal.append("note", ticket.id, {"sop": ticket.sop.model_dump(mode="json")})
+        rendered = render_sop(
+            model, self.sop_dir(ticket.id), translator=self.translator, glossary=self.glossary
+        )
+        ticket.sop = rendered.refs
+        journal.append(
+            "note",
+            ticket.id,
+            {
+                "sop": ticket.sop.model_dump(mode="json"),
+                "translated": rendered.translated,
+                "kept_in_english": rendered.notes,
+            },
+        )
         self.store.save(ticket)
 
         if failed:

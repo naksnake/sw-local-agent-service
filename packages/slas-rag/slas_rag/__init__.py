@@ -1,5 +1,4 @@
-"""Hybrid retrieval over the internal corpus: dense + FTS → RRF → rerank (CLAUDE.md §8.3). Filled
-in P5.
-"""
+"""slas_rag: hybrid retrieval over the internal corpus (CLAUDE.md §8.3 Option A).
 
-__version__ = "0.0.1"
+Import from the submodules: `slas_rag.documents`, `slas_rag.index`, `slas_rag.retrieval`.
+"""

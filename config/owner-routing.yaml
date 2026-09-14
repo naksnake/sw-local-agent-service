@@ -1,0 +1,126 @@
+# Owner routing for RCA findings in SW Local Agent Service (CLAUDE.md §5.4, §10.2).
+# Rendered from slas_kernel.rca.DEFAULT_OWNER_ROUTING; a unit test keeps file and code in
+# step. Deterministic: the first rule whose pattern matches the failure signature or the
+# drafted cause names the owner, component and default severity. A model never assigns an
+# owner; when no rule matches, the finding says the owner is your call.
+version: 1
+owners:
+  EE: "Electrical engineering: boards, PCIe, power, memory hardware."
+  FW: "Firmware: BMC, BIOS, device firmware."
+  SW: "Software: drivers, test tools, agent code."
+  ME: "Mechanical and thermal."
+  TE: "Test engineering: suites, stations, fixtures."
+rules:
+  - id: pcie-link
+    owner: EE
+    component: "PCIe"
+    severity: S2
+    description: "A PCIe link came up narrower or slower than the baseline, or dropped."
+    patterns:
+      - "pcie link"
+      - "lnksta"
+      - "link (?:lost|down|width|speed|degraded)"
+      - "\\baer\\b"
+  - id: gpu-xid
+    owner: SW
+    component: "GPU driver"
+    severity: S2
+    description: "The GPU driver reported an Xid; the driver team triages before hardware does."
+    patterns:
+      - "\\bxid\\b"
+      - "\\bnvrm\\b"
+      - "nvidia-smi"
+  - id: memory
+    owner: EE
+    component: "Memory"
+    severity: S2
+    description: "Correctable or uncorrectable memory errors from EDAC or a machine-check."
+    patterns:
+      - "\\bedac\\b"
+      - "\\bmce\\b"
+      - "uncorrectable"
+      - "\\bdimm\\b"
+  - id: boot
+    owner: FW
+    component: "Boot"
+    severity: S1
+    description: "The target did not reach the OS after a power action."
+    patterns:
+      - "boot timeout"
+      - "failed to boot"
+      - "did not boot"
+      - "no post\\b"
+      - "post code"
+  - id: power
+    owner: EE
+    component: "Power"
+    severity: S1
+    description: "Power delivery: PSU, PDU, voltage rails, unexpected power loss."
+    patterns:
+      - "power (?:loss|fail|fault)"
+      - "\\bpsu\\b"
+      - "\\bpdu\\b"
+      - "voltage"
+  - id: thermal
+    owner: ME
+    component: "Thermal"
+    severity: S2
+    description: "Temperatures, throttling or fan faults."
+    patterns:
+      - "thermal"
+      - "overheat"
+      - "throttl"
+      - "\\bfan\\b"
+  - id: bmc
+    owner: FW
+    component: "BMC"
+    severity: S3
+    description: "The BMC, Redfish, IPMI or the SEL misbehaved."
+    patterns:
+      - "\\bbmc\\b"
+      - "redfish"
+      - "\\bipmi\\b"
+      - "\\bsel\\b"
+  - id: storage
+    owner: FW
+    component: "Storage"
+    severity: S3
+    description: "NVMe, SMART, RAID or block I/O errors."
+    patterns:
+      - "\\bnvme\\b"
+      - "\\bsmart\\b"
+      - "\\braid\\b"
+      - "i/o error"
+  - id: network
+    owner: EE
+    component: "Network"
+    severity: S3
+    description: "NIC or fabric link problems."
+    patterns:
+      - "\\bnic\\b"
+      - "link flap"
+      - "\\beth\\d"
+      - "\\bmlx\\d"
+      - "\\bib\\d"
+  - id: station
+    owner: TE
+    component: "Test station"
+    severity: S3
+    description: "The station GUI, runner or fixture did not behave."
+    patterns:
+      - "station"
+      - "burnin"
+      - "\\bmes\\b"
+      - "fixture"
+      - "window .* not found"
+  - id: software
+    owner: SW
+    component: "Test software"
+    severity: S3
+    description: "A tool or script failed on its own: tracebacks, bad exits, missing commands."
+    patterns:
+      - "traceback"
+      - "segfault"
+      - "exit(?:ed with)? code"
+      - "command not found"
+      - "assertion"

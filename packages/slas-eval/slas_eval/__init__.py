@@ -1,5 +1,5 @@
-"""Eval harness against local judges only; CI asserts no cloud endpoints (CLAUDE.md §8.1). Filled
-in P3.
-"""
+"""slas_eval: evaluation against local judges only (CLAUDE.md §8.1).
 
-__version__ = "0.0.1"
+Import from the submodules: `slas_eval.judges`, `slas_eval.terminology`,
+`slas_eval.back_translation`.
+"""

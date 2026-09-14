@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "Dual-language SOP renderer: SopModel → EN + zh-Hant, identifiers copied by code"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = ["slas-schemas"]
 
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9.0"]
@@ -12,3 +12,6 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
+
+[tool.uv.sources]
+slas-schemas = { workspace = true }
