@@ -46,6 +46,16 @@ only). Everything runs and is tested without a database, a model or a display; t
 Qdrant/Postgres adapters, the gateway-backed embedder, reranker, drafter and translator,
 and the Knowledge page wait on the dependency decisions listed in the phase reports.
 
+**Phase 6, first session: sandboxes and the Coding Agent.** `services/sandbox-manager`
+(hardened sandbox spec — no network, read-only rootfs, no capabilities, three mounts, no
+credential; gVisor with a hardened runc fallback; TTL and quotas; the offline toolchain
+resolver and `slas toolchain list|add`), one sandbox image per language, workspace-local
+Git with `Slas-Agent`/`Slas-Ticket` trailers (`slas_git.workspace`), and the Coding Agent
+on the kernel (`services/agent-core-orchestrator`): plan → breakdown → iterate with stall
+detection → commit → ZIP → 3-voter cross-check → walkthrough SOP. The Coding page and the
+three-step New coding task wizard run on an in-memory API fake until apps/api exists. The
+Podman driver, git-broker, Git panel and Terminal tab are the next P6 sessions.
+
 ## Developing
 
 ```bash

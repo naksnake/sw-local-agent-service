@@ -87,14 +87,26 @@ class Approval(SlasModel):
         return self.approved is None
 
 
+class Export(SlasModel):
+    kind: Literal["zip", "sop", "report", "bundle"]
+    path: str
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
 class Observation(SlasModel):
-    """What the executor saw after performing one step."""
+    """What the executor saw after performing one step.
+
+    `votes` and `exports` let a kernel-side executor hand a cross-check verdict or an
+    artifact back; the kernel copies them onto the ticket (agents never write tickets).
+    """
 
     exit_code: int | None = None
     stdout: str = ""
     stderr: str = ""
     screenshots: list[str] = Field(default_factory=list)
     summary: str = ""
+    votes: list[Vote] = Field(default_factory=list)
+    exports: list[Export] = Field(default_factory=list)
 
 
 class StepVerdict(SlasModel):
@@ -140,12 +152,6 @@ class SopRefs(SlasModel):
     en: str
     zh: str
     data: str
-
-
-class Export(SlasModel):
-    kind: Literal["zip", "sop", "report", "bundle"]
-    path: str
-    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class Ticket(SlasModel):

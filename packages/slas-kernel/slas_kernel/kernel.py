@@ -19,7 +19,7 @@ from pathlib import Path
 
 from slas_kernel.agent import Agent
 from slas_kernel.clock import Clock, SystemClock
-from slas_kernel.executor import Executor
+from slas_kernel.executor import ExecutionContext, Executor
 from slas_kernel.journal import Journal
 from slas_kernel.logs import collect_logs
 from slas_kernel.rca import RcaPipeline, placeholder_rca
@@ -233,7 +233,10 @@ class Kernel:
             payload["note"] = "re-performing after an interruption"
         journal.append("intent", ticket.id, payload, step_id=step.id)
 
-        observation = self.executor.execute(step)  # a crash here leaves an open intent
+        context = ExecutionContext(
+            ticket_id=ticket.id, job_id=ticket.job.id, agent=ticket.agent, user=ticket.user
+        )
+        observation = self.executor.execute(step, context)  # a crash here leaves an open intent
         journal.append(
             "observation",
             ticket.id,
@@ -245,6 +248,7 @@ class Kernel:
         record.verdict = verdict
         record.finished_at = self.clock.now()
         record.status = "done" if verdict.outcome == "ok" else "failed"
+        self._attach(ticket, observation)
         ticket.updated_at = record.finished_at
         self.store.save(ticket)
         if self._after_step is not None:
@@ -261,6 +265,20 @@ class Kernel:
         record.verdict = self.agent.verify(ticket.plan.step(record.step_id), observation)
         record.status = "done" if record.verdict.outcome == "ok" else "failed"
         record.finished_at = record.finished_at or self.clock.now()
+        self._attach(ticket, observation)
+
+    def _attach(self, ticket: Ticket, observation: Observation) -> None:
+        """Votes and exports an executor handed back go onto the ticket, once each."""
+        known_votes = {(v.voter, v.reason) for v in ticket.votes}
+        ticket.votes = [
+            *ticket.votes,
+            *(v for v in observation.votes if (v.voter, v.reason) not in known_votes),
+        ]
+        known_exports = {e.path for e in ticket.exports}
+        ticket.exports = [
+            *ticket.exports,
+            *(e for e in observation.exports if e.path not in known_exports),
+        ]
 
     def _analyse_and_close(self, ticket: Ticket, journal: Journal) -> Ticket:
         """COLLECT → RCA → SOP → CLOSE."""

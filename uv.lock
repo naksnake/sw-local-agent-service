@@ -13,7 +13,9 @@ members = [
     "slas-kernel",
     "slas-llm-gateway",
     "slas-model-manager",
+    "slas-orchestrator",
     "slas-rag",
+    "slas-sandbox-manager",
     "slas-schemas",
     "slas-screen",
     "slas-screen-worker",
@@ -325,12 +327,14 @@ version = "0.0.1"
 source = { editable = "packages/slas-cli" }
 dependencies = [
     { name = "slas-kernel" },
+    { name = "slas-sandbox-manager" },
     { name = "slas-schemas" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "slas-kernel", editable = "packages/slas-kernel" },
+    { name = "slas-sandbox-manager", editable = "services/sandbox-manager" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
 ]
 
@@ -358,6 +362,12 @@ requires-dist = [
 name = "slas-git"
 version = "0.0.1"
 source = { editable = "packages/slas-git" }
+dependencies = [
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
 
 [[package]]
 name = "slas-hal"
@@ -408,9 +418,39 @@ requires-dist = [
 ]
 
 [[package]]
+name = "slas-orchestrator"
+version = "0.0.1"
+source = { editable = "services/agent-core-orchestrator" }
+dependencies = [
+    { name = "slas-git" },
+    { name = "slas-kernel" },
+    { name = "slas-sandbox-manager" },
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "slas-git", editable = "packages/slas-git" },
+    { name = "slas-kernel", editable = "packages/slas-kernel" },
+    { name = "slas-sandbox-manager", editable = "services/sandbox-manager" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+]
+
+[[package]]
 name = "slas-rag"
 version = "0.0.1"
 source = { editable = "packages/slas-rag" }
+dependencies = [
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
+
+[[package]]
+name = "slas-sandbox-manager"
+version = "0.0.1"
+source = { editable = "services/sandbox-manager" }
 dependencies = [
     { name = "slas-schemas" },
 ]
@@ -502,7 +542,9 @@ dependencies = [
     { name = "slas-kernel" },
     { name = "slas-llm-gateway" },
     { name = "slas-model-manager" },
+    { name = "slas-orchestrator" },
     { name = "slas-rag" },
+    { name = "slas-sandbox-manager" },
     { name = "slas-schemas" },
     { name = "slas-screen" },
     { name = "slas-screen-worker" },
@@ -530,7 +572,9 @@ requires-dist = [
     { name = "slas-kernel", editable = "packages/slas-kernel" },
     { name = "slas-llm-gateway", editable = "services/llm-gateway" },
     { name = "slas-model-manager", editable = "services/model-manager" },
+    { name = "slas-orchestrator", editable = "services/agent-core-orchestrator" },
     { name = "slas-rag", editable = "packages/slas-rag" },
+    { name = "slas-sandbox-manager", editable = "services/sandbox-manager" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
     { name = "slas-screen", editable = "packages/slas-screen" },
     { name = "slas-screen-worker", editable = "services/screen-worker" },

@@ -10,7 +10,7 @@ import pytest
 
 from slas_kernel.agent import Agent
 from slas_kernel.clock import FakeClock
-from slas_kernel.executor import FakeExecutor, UnknownPrimitiveError
+from slas_kernel.executor import ExecutionContext, FakeExecutor, UnknownPrimitiveError
 from slas_kernel.kernel import ApprovalPendingError, Kernel
 from slas_kernel.null_agent import NullAgent
 from slas_kernel.store import FileTicketStore, MemoryTicketStore
@@ -204,8 +204,9 @@ def test_destructive_steps_wait_for_a_human_approval(tmp_path: Path) -> None:
 
 def test_unknown_primitive_is_refused_by_the_executor() -> None:
     step = Step(id="s1", n=1, primitive="shell", title="nope")
+    context = ExecutionContext(ticket_id="T-null-0001", job_id="job-1", agent="null", user="pat")
     with pytest.raises(UnknownPrimitiveError, match="primitive 'shell'"):
-        FakeExecutor().execute(step)
+        FakeExecutor().execute(step, context)
 
 
 def test_plan_for_another_job_is_refused(tmp_path: Path) -> None:

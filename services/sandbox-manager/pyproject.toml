@@ -1,7 +1,7 @@
 [project]
-name = "slas-git"
+name = "slas-sandbox-manager"
 version = "0.0.1"
-description = "Git engine shared by the broker and the workspace tooling"
+description = "Rootless Podman + gVisor sandboxes for the Coding Agent; no network, no credentials"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = ["slas-schemas"]

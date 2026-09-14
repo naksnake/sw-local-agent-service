@@ -1,13 +1,10 @@
 [project]
-name = "slas-cli"
+name = "slas-orchestrator"
 version = "0.0.1"
-description = "The `slas` command line, mirroring the WebUI"
+description = "Runs the Agent Kernel and hosts the Coding, Validation and Factory agents"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = ["slas-kernel", "slas-sandbox-manager", "slas-schemas"]
-
-[project.scripts]
-slas = "slas_cli.cli:main"
+dependencies = ["slas-git", "slas-kernel", "slas-sandbox-manager", "slas-schemas"]
 
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9.0"]
@@ -17,6 +14,7 @@ build-backend = "uv_build"
 module-root = ""
 
 [tool.uv.sources]
+slas-git = { workspace = true }
 slas-kernel = { workspace = true }
 slas-sandbox-manager = { workspace = true }
 slas-schemas = { workspace = true }

@@ -1,3 +1,4 @@
-"""Git engine shared by the broker and the workspace tooling (CLAUDE.md §5.7). Filled in P6."""
+"""slas_git: the Git engine shared by the workspace tooling and the broker (CLAUDE.md §5.7).
 
-__version__ = "0.0.1"
+Import from the submodules: `slas_git.workspace` (Method 2, local commits in the sandbox).
+"""

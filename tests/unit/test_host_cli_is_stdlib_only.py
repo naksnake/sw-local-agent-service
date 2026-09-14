@@ -8,11 +8,16 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HOST_CLI_PACKAGES = ("slas-cli", "slas-kernel", "slas-schemas")
+HOST_CLI_PACKAGES = (
+    "packages/slas-cli",
+    "packages/slas-kernel",
+    "packages/slas-schemas",
+    "services/sandbox-manager",  # only its stdlib-only `toolchains` module is imported
+)
 
 
 def test_slas_doctor_imports_with_site_packages_disabled(tmp_path: Path) -> None:
-    pythonpath = os.pathsep.join(str(REPO_ROOT / "packages" / name) for name in HOST_CLI_PACKAGES)
+    pythonpath = os.pathsep.join(str(REPO_ROOT / name) for name in HOST_CLI_PACKAGES)
     result = subprocess.run(
         [
             sys.executable,
@@ -20,6 +25,7 @@ def test_slas_doctor_imports_with_site_packages_disabled(tmp_path: Path) -> None
             "-c",
             "import sys\n"
             "import slas_cli.cli, slas_cli.doctor, slas_schemas, slas_schemas.envfile\n"
+            "import slas_sandbox_manager.toolchains\n"
             "from slas_kernel.branding import PRODUCT_NAME\n"
             "assert 'pydantic' not in sys.modules, 'the host CLI must not import pydantic'\n"
             "print(PRODUCT_NAME)",

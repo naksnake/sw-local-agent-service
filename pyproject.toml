@@ -16,7 +16,9 @@ dependencies = [
   "slas-kernel",
   "slas-llm-gateway",
   "slas-model-manager",
+  "slas-orchestrator",
   "slas-rag",
+  "slas-sandbox-manager",
   "slas-schemas",
   "slas-screen",
   "slas-screen-worker",
@@ -40,8 +42,10 @@ package = false
 # apps/api and the remaining services/* join the workspace when they gain a pyproject.
 members = [
   "packages/*",
+  "services/agent-core-orchestrator",
   "services/llm-gateway",
   "services/model-manager",
+  "services/sandbox-manager",
   "services/screen-worker",
 ]
 
@@ -55,7 +59,9 @@ slas-hal = { workspace = true }
 slas-kernel = { workspace = true }
 slas-llm-gateway = { workspace = true }
 slas-model-manager = { workspace = true }
+slas-orchestrator = { workspace = true }
 slas-rag = { workspace = true }
+slas-sandbox-manager = { workspace = true }
 slas-schemas = { workspace = true }
 slas-screen = { workspace = true }
 slas-screen-worker = { workspace = true }
@@ -98,8 +104,9 @@ allowed-confusables = ["：", "（", "）", "；", "，", "。", "×"]
 [tool.ruff.lint.isort]
 known-first-party = [
   "slas_authz", "slas_cli", "slas_diff", "slas_eval", "slas_git", "slas_hal", "slas_kernel",
-  "slas_llm_gateway", "slas_model_manager", "slas_rag", "slas_schemas", "slas_screen",
-  "slas_screen_worker", "slas_skills", "slas_sop", "slas_triage",
+  "slas_llm_gateway", "slas_model_manager", "slas_orchestrator", "slas_rag",
+  "slas_sandbox_manager", "slas_schemas", "slas_screen", "slas_screen_worker", "slas_skills",
+  "slas_sop", "slas_triage",
 ]
 
 # --- mypy -------------------------------------------------------------------------------
@@ -111,8 +118,10 @@ warn_unreachable = true
 pretty = true
 files = [
   "packages",
+  "services/agent-core-orchestrator",
   "services/llm-gateway",
   "services/model-manager",
+  "services/sandbox-manager",
   "services/screen-worker",
   "tests",
 ]
@@ -128,10 +137,13 @@ addopts = [
   "--cov=slas_authz",
   "--cov=slas_cli",
   "--cov=slas_eval",
+  "--cov=slas_git",
   "--cov=slas_kernel",
   "--cov=slas_llm_gateway",
   "--cov=slas_model_manager",
+  "--cov=slas_orchestrator",
   "--cov=slas_rag",
+  "--cov=slas_sandbox_manager",
   "--cov=slas_schemas",
   "--cov=slas_screen",
   "--cov=slas_screen_worker",
