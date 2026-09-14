@@ -29,8 +29,8 @@ Tick each line; every command below is explained in the section it points to.
 |---|---|---|---|---|
 | 1 | B300 host | `nvidia-smi` shows 8 GPUs, NVLink up; install Docker, rootless Podman + `uidmap`, gVisor, the NVIDIA container toolkit; boot with cgroups v2 | `./install.sh --preflight-only` shows no ✗ | §1 |
 | 2 | B300 host | Mount ≥ 200 GiB at `/AI/Agent`; a separate volume for `Models/` (≥ 1.5 TB for the plan) | `slas doctor` Disk space is ✓ | §1 |
-| 3 | Connected host | Fetch the weights into directories named after their registry `path`; checksum | checksums recorded | §2 |
-| 4 | Sneakernet → B300 | Copy the weights under `/AI/Agent/Models/<path>/`; verify checksums; write `models.yaml` from §4 | `models.yaml` validates (the registry says so in one sentence) | §2, §4 |
+| 3 | Connected host | Fill `config/model-sources.txt`; `scripts/fetch_models.py fetch --sources config/model-sources.txt --dest ./models` | every model's sentence printed, `manifest.json` written | §2 |
+| 4 | Sneakernet → B300 | Copy `models/` to `/AI/Agent/Models/`; `scripts/fetch_models.py verify --dest /AI/Agent/Models`; write `models.yaml` from §4 | `models.yaml` validates (the registry says so in one sentence) | §2, §4 |
 | 5 | Repository | Decide the three dependency items that block the container stack: `apps/api` stack (ADR-0005), the Podman driver for the model manager, first-party Dockerfiles | ADRs accepted | §0 |
 | 6 | Connected build host | `scripts/lock-images.sh --sign`, `scripts/build-bundle.sh --profile prod`; commit the filled lock | `compose/images.lock.*` has no null digest | §3 |
 | 7 | Sneakernet → B300 | Carry `slas-bundle-<version>.tgz` and `config/cosign.pub` | both files on the host | §3 |
@@ -68,14 +68,34 @@ Steps 1 to 4 can be done today. Steps 6 to 10 wait on step 5.
 
 ## 2 · Bring the weights
 
-Weights never download on the box. On a connected build host:
+Weights never download on the box. `scripts/fetch_models.py` does the fetching on a
+connected build host: standard library only, resumable, every large file checked against
+the sha256 the hub publishes, a `SHA256SUMS` beside each model and one `manifest.json` for
+the set. Redundant formats (`.bin`, `.h5`, ONNX) are skipped when safetensors are present.
 
-1. Fetch each model into a directory named after its registry `path`, for example
-   `deepseek-v4-pro-fp4/`, `deepseek-v4-flash-fp4/`, `qwen3.8-27b-fp8/`, `qwen3.8-27b-bf16/`,
-   `bge-m3/`, `bge-reranker-v2-m3/`.
-2. Checksum, copy to the box, and place under `/AI/Agent/Models/<path>/`. Verify the
-   checksums on the box.
-3. Write `/AI/Agent/Models/models.yaml`. The registry format is in
+1. Fill `config/model-sources.txt`: one line per model, `<path> <owner/repo> [revision]`.
+   `<path>` is the directory name under `Models/` and the `path` field of `models.yaml`.
+   The DeepSeek-V4 and Qwen3.8 lines ship as TODO comments because the exact builds are
+   yours to pick (FP8 or FP4 for Blackwell); the script refuses a line that still says TODO.
+2. On the connected host, with a token in the environment only if a repository is gated:
+
+   ```bash
+   export HF_TOKEN=…                      # only for gated repositories; never on argv
+   export HF_ENDPOINT=https://hub.internal # only if a mirror inside the perimeter exists
+   scripts/fetch_models.py fetch --sources config/model-sources.txt --dest ./models
+   ```
+
+   Run it again after any interruption; it resumes and keeps complete files. Pin a build
+   with `[revision]`; the commit fetched is recorded in `manifest.json`.
+3. Copy `./models/` to the box as `/AI/Agent/Models/` (rsync over the sneakernet disk, or
+   `tar`), then verify offline on the box:
+
+   ```bash
+   scripts/fetch_models.py verify --dest /AI/Agent/Models
+   ```
+
+   It names every missing or altered file, or says every model matches.
+4. Write `/AI/Agent/Models/models.yaml`. The registry format is in
    `services/model-manager/models.example.yaml`; the plan for this box is in §4.
 
 ## 3 · Install the platform stack (when the blocked rows land)
