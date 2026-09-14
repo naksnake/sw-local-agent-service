@@ -27,6 +27,9 @@ cd slas-bundle-<version>
 
 One command, one `.env`, one page to manage models. Details in `CLAUDE.md` §3.
 
+Deploying to a specific GPU host, and what runs today versus what still waits on a
+dependency decision: [`docs/runbooks/deploy-hgx-b300.md`](docs/runbooks/deploy-hgx-b300.md).
+
 ## Status
 
 **Phase 0 — Skeleton.** The repository holds the layout from `CLAUDE.md` §13, the Python
