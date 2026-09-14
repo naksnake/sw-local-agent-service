@@ -53,8 +53,22 @@ resolver and `slas toolchain list|add`), one sandbox image per language, workspa
 Git with `Slas-Agent`/`Slas-Ticket` trailers (`slas_git.workspace`), and the Coding Agent
 on the kernel (`services/agent-core-orchestrator`): plan → breakdown → iterate with stall
 detection → commit → ZIP → 3-voter cross-check → walkthrough SOP. The Coding page and the
-three-step New coding task wizard run on an in-memory API fake until apps/api exists. The
-Podman driver, git-broker, Git panel and Terminal tab are the next P6 sessions.
+three-step New coding task wizard run on an in-memory API fake until apps/api exists.
+
+**Phase 6, second session: the Hybrid Git Control Engine.** `packages/slas-git` gains the
+host allowlist (`config/git-hosts.yaml`), credentials sealed by reference (HKDF from
+`SLAS_SECRET_KEY`; AES-GCM binds to `cryptography` once approved, a fake sealer for tests),
+remotes, the validation gate (path scope, hooks, submodules, escaping symlinks, size, LFS,
+secret scan, protected-branch policy, Consensus Router for agent diffs), merge-request
+adapters for GitLab, Gitea and GitHub, bundles, audit rows and redaction.
+`services/git-broker` runs every remote operation with the token on an inherited pipe fd
+(`GIT_ASKPASS`) or an SSH key on tmpfs shredded after use, the hardening flags on every
+`git`, and one audit row each. The Terminal session runs lines inside the sandbox with a
+redacted transcript. Settings → Git remotes, Admin → Git hosts and the per-project Git
+panel (Status · Commit · History · Push/Pull · Bundle · Terminal) run on API fakes. Tests
+push through a fake Git host on loopback with a hostile pre-push hook and grep every sink
+for the token afterwards. The Podman driver, the WebSocket/xterm.js terminal and the
+service's HTTP surface wait on their dependency decisions.
 
 ## Developing
 

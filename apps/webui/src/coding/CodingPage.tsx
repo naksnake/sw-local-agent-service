@@ -1,13 +1,21 @@
 import { useEffect, useState } from "react";
 
+import type { GitApi } from "../git/api";
+import { GitPanel } from "../git/GitPanel";
 import type { CodingApi, CodingTask, StepStatus } from "./api";
 import { NewCodingTaskWizard } from "./NewCodingTaskWizard";
 
 // The Coding page (CLAUDE.md §9): tasks with their plan checklist and activity feed, and
-// one primary action — New coding task. Copy: docs/ui/coding.md.
+// one primary action — New coding task. Each task can open its project's Git panel
+// (Status · Commit · History · Push/Pull · Bundle · Terminal). Copy: docs/ui/coding.md.
 
 interface Props {
   api: CodingApi;
+  gitApi?: GitApi;
+}
+
+function slugOf(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48);
 }
 
 const STATUS_WORD: Record<StepStatus, string> = {
@@ -18,9 +26,10 @@ const STATUS_WORD: Record<StepStatus, string> = {
   skipped: "skipped",
 };
 
-export function CodingPage({ api }: Props) {
+export function CodingPage({ api, gitApi }: Props) {
   const [tasks, setTasks] = useState<CodingTask[] | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [gitOpenFor, setGitOpenFor] = useState<string | null>(null);
 
   useEffect(() => {
     void api.listTasks().then(setTasks);
@@ -107,6 +116,22 @@ export function CodingPage({ api }: Props) {
                   Open the Terminal tab to inspect the branch; push happens from the Git panel,
                   which uses your saved remote.
                 </p>
+                {gitApi !== undefined && (
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700"
+                      onClick={() => setGitOpenFor((current) => (current === task.ticketId ? null : task.ticketId))}
+                    >
+                      {gitOpenFor === task.ticketId ? "Hide Git panel" : "Git panel"}
+                    </button>
+                    {gitOpenFor === task.ticketId && (
+                      <div className="mt-3">
+                        <GitPanel api={gitApi} slug={slugOf(task.title)} />
+                      </div>
+                    )}
+                  </div>
+                )}
               </li>
             ))}
           </ul>

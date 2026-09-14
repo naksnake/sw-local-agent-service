@@ -9,6 +9,7 @@ members = [
     "slas-diff",
     "slas-eval",
     "slas-git",
+    "slas-git-broker",
     "slas-hal",
     "slas-kernel",
     "slas-llm-gateway",
@@ -370,6 +371,23 @@ dependencies = [
 requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
 
 [[package]]
+name = "slas-git-broker"
+version = "0.0.1"
+source = { editable = "services/git-broker" }
+dependencies = [
+    { name = "slas-authz" },
+    { name = "slas-git" },
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "slas-authz", editable = "packages/slas-authz" },
+    { name = "slas-git", editable = "packages/slas-git" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+]
+
+[[package]]
 name = "slas-hal"
 version = "0.0.1"
 source = { editable = "packages/slas-hal" }
@@ -538,6 +556,7 @@ dependencies = [
     { name = "slas-diff" },
     { name = "slas-eval" },
     { name = "slas-git" },
+    { name = "slas-git-broker" },
     { name = "slas-hal" },
     { name = "slas-kernel" },
     { name = "slas-llm-gateway" },
@@ -568,6 +587,7 @@ requires-dist = [
     { name = "slas-diff", editable = "packages/slas-diff" },
     { name = "slas-eval", editable = "packages/slas-eval" },
     { name = "slas-git", editable = "packages/slas-git" },
+    { name = "slas-git-broker", editable = "services/git-broker" },
     { name = "slas-hal", editable = "packages/slas-hal" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
     { name = "slas-llm-gateway", editable = "services/llm-gateway" },

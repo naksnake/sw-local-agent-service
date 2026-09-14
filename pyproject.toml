@@ -12,6 +12,7 @@ dependencies = [
   "slas-diff",
   "slas-eval",
   "slas-git",
+  "slas-git-broker",
   "slas-hal",
   "slas-kernel",
   "slas-llm-gateway",
@@ -43,6 +44,7 @@ package = false
 members = [
   "packages/*",
   "services/agent-core-orchestrator",
+  "services/git-broker",
   "services/llm-gateway",
   "services/model-manager",
   "services/sandbox-manager",
@@ -55,6 +57,7 @@ slas-cli = { workspace = true }
 slas-diff = { workspace = true }
 slas-eval = { workspace = true }
 slas-git = { workspace = true }
+slas-git-broker = { workspace = true }
 slas-hal = { workspace = true }
 slas-kernel = { workspace = true }
 slas-llm-gateway = { workspace = true }
@@ -96,15 +99,16 @@ select = [
 allowed-confusables = ["：", "（", "）", "；", "，", "。", "×"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S603", "S607"]  # asserts and subprocess in tests are fine
+# asserts, subprocess and fake credentials in tests are fine
+"tests/**" = ["S101", "S603", "S607", "S105", "S106"]
 # Fixtures with Traditional Chinese sentences: ruff counts a CJK character as two columns.
 "tests/unit/test_sop_translation.py" = ["E501"]
 "tests/unit/test_eval_checks.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = [
-  "slas_authz", "slas_cli", "slas_diff", "slas_eval", "slas_git", "slas_hal", "slas_kernel",
-  "slas_llm_gateway", "slas_model_manager", "slas_orchestrator", "slas_rag",
+  "slas_authz", "slas_cli", "slas_diff", "slas_eval", "slas_git", "slas_git_broker", "slas_hal",
+  "slas_kernel", "slas_llm_gateway", "slas_model_manager", "slas_orchestrator", "slas_rag",
   "slas_sandbox_manager", "slas_schemas", "slas_screen", "slas_screen_worker", "slas_skills",
   "slas_sop", "slas_triage",
 ]
@@ -119,6 +123,7 @@ pretty = true
 files = [
   "packages",
   "services/agent-core-orchestrator",
+  "services/git-broker",
   "services/llm-gateway",
   "services/model-manager",
   "services/sandbox-manager",
@@ -138,6 +143,7 @@ addopts = [
   "--cov=slas_cli",
   "--cov=slas_eval",
   "--cov=slas_git",
+  "--cov=slas_git_broker",
   "--cov=slas_kernel",
   "--cov=slas_llm_gateway",
   "--cov=slas_model_manager",

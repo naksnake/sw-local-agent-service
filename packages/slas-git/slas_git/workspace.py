@@ -30,7 +30,7 @@ HARDENING_ENV: Final[dict[str, str]] = {
 #: ("relative config includes must come from files"), so includes are neutralised another
 #: way: GIT_CONFIG_NOSYSTEM plus a platform-owned GIT_CONFIG_GLOBAL leave only the repo's own
 #: .git/config, which the broker scans for `include`/`includeIf` before any operation.
-HARDENING_ARGS: Final[tuple[str, ...]] = (
+BASE_HARDENING_ARGS: Final[tuple[str, ...]] = (
     "-c",
     "core.hooksPath=/var/empty",
     "-c",
@@ -41,9 +41,19 @@ HARDENING_ARGS: Final[tuple[str, ...]] = (
     "core.sshCommand=/bin/false",
     "-c",
     "protocol.allow=never",
-    "-c",
-    "protocol.file.allow=always",
 )
+#: The workspace: every transport off except local files (bundles); a push has no route.
+HARDENING_ARGS: Final[tuple[str, ...]] = (*BASE_HARDENING_ARGS, "-c", "protocol.file.allow=always")
+
+
+def transport_args(scheme: str) -> tuple[str, ...]:
+    """The broker's flags for one remote operation: the same hardening, plus exactly the one
+    transport the remote uses (https or ssh; http only for a loopback test host)."""
+    if scheme not in ("https", "ssh", "http"):
+        raise ValueError(f"{scheme!r} is not a transport the broker uses")
+    return (*BASE_HARDENING_ARGS, "-c", f"protocol.{scheme}.allow=always")
+
+
 PUSH_EXPLANATION: Final = "Push happens from the Git panel, which uses your saved remote."
 AGENT_TRAILER: Final = "Slas-Agent"
 TICKET_TRAILER: Final = "Slas-Ticket"
