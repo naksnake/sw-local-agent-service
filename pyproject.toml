@@ -11,6 +11,7 @@ dependencies = [
   "slas-cli",
   "slas-diff",
   "slas-eval",
+  "slas-factory-executor",
   "slas-git",
   "slas-git-broker",
   "slas-hal",
@@ -24,6 +25,7 @@ dependencies = [
   "slas-screen",
   "slas-screen-worker",
   "slas-skills",
+  "slas-station-runner",
   "slas-sop",
   "slas-triage",
   "slas-validation-executor",
@@ -45,11 +47,13 @@ package = false
 members = [
   "packages/*",
   "services/agent-core-orchestrator",
+  "services/factory-executor",
   "services/git-broker",
   "services/llm-gateway",
   "services/model-manager",
   "services/sandbox-manager",
   "services/screen-worker",
+  "services/station-runner",
   "services/validation-executor",
 ]
 
@@ -58,6 +62,7 @@ slas-authz = { workspace = true }
 slas-cli = { workspace = true }
 slas-diff = { workspace = true }
 slas-eval = { workspace = true }
+slas-factory-executor = { workspace = true }
 slas-git = { workspace = true }
 slas-git-broker = { workspace = true }
 slas-hal = { workspace = true }
@@ -72,6 +77,7 @@ slas-screen = { workspace = true }
 slas-screen-worker = { workspace = true }
 slas-skills = { workspace = true }
 slas-sop = { workspace = true }
+slas-station-runner = { workspace = true }
 slas-triage = { workspace = true }
 slas-validation-executor = { workspace = true }
 
@@ -110,10 +116,10 @@ allowed-confusables = ["：", "（", "）", "；", "，", "。", "×"]
 
 [tool.ruff.lint.isort]
 known-first-party = [
-  "slas_authz", "slas_cli", "slas_diff", "slas_eval", "slas_git", "slas_git_broker", "slas_hal",
+  "slas_authz", "slas_cli", "slas_diff", "slas_eval", "slas_factory_executor", "slas_git", "slas_git_broker", "slas_hal",
   "slas_kernel", "slas_llm_gateway", "slas_model_manager", "slas_orchestrator", "slas_rag",
   "slas_sandbox_manager", "slas_schemas", "slas_screen", "slas_screen_worker", "slas_skills",
-  "slas_sop", "slas_triage", "slas_validation_executor",
+  "slas_sop", "slas_station_runner", "slas_triage", "slas_validation_executor",
 ]
 
 # --- mypy -------------------------------------------------------------------------------
@@ -126,11 +132,13 @@ pretty = true
 files = [
   "packages",
   "services/agent-core-orchestrator",
+  "services/factory-executor",
   "services/git-broker",
   "services/llm-gateway",
   "services/model-manager",
   "services/sandbox-manager",
   "services/screen-worker",
+  "services/station-runner",
   "services/validation-executor",
   "tests",
 ]
@@ -147,6 +155,7 @@ addopts = [
   "--cov=slas_cli",
   "--cov=slas_diff",
   "--cov=slas_eval",
+  "--cov=slas_factory_executor",
   "--cov=slas_hal",
   "--cov=slas_git",
   "--cov=slas_git_broker",
@@ -161,6 +170,7 @@ addopts = [
   "--cov=slas_screen_worker",
   "--cov=slas_skills",
   "--cov=slas_sop",
+  "--cov=slas_station_runner",
   "--cov=slas_triage",
   "--cov=slas_validation_executor",
   "--cov-report=term-missing",

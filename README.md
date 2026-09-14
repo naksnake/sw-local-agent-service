@@ -99,6 +99,21 @@ password, the fake key and every credential shape. Not done: the PDU model and t
 alias were not named, so no real hardware was touched and the model-specific PDU driver is
 an explicit TODO.
 
+**Phase 9: the Factory Agent against fakes.** `services/station-runner` (signed step
+batches over mTLS with the standard library, GUI steps through the local screen driver with
+screenshots back, allowlisted commands, state for the backup; a `FakeStation` with a scripted
+Login → BurnIn screen and shell), `services/factory-executor` (the Factory verbs and
+`plans/primitives/factory.yaml`, the `final-test-9-steps` template under `templates/factory/`,
+the MES adapter with a file-drop implementation, station leases, station backups under
+`Backups/stations/<station>/<ticket>/`, and the verdict: deterministic gate, then 3 of 3
+voters for PASS; FAIL or a split vote holds the station and drafts a line-lead ticket), the
+Factory Agent on the kernel (MES ticket, label scan or manual entry → template → plan →
+production line SOP in EN/中文 → verdict back to the MES), and the Factory page with the
+test-step map, the screenshot strip, the line lead's decision and the three-step New factory
+job wizard. The done-when is a test: a fake MES ticket runs the 9-step loop on the fake
+station and passes with 3 votes; a planted failure holds the station and drafts the ticket;
+the SOP and the backup land on the ticket. A real station is P10.
+
 ## Developing
 
 ```bash

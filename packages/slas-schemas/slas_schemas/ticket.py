@@ -88,7 +88,7 @@ class Approval(SlasModel):
 
 
 class Export(SlasModel):
-    kind: Literal["zip", "sop", "report", "bundle"]
+    kind: Literal["zip", "sop", "report", "bundle", "backup"]
     path: str
     sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 

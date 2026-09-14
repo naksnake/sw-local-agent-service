@@ -3,6 +3,8 @@ import { useState } from "react";
 import { PRODUCT_NAME } from "./branding";
 import type { CodingApi } from "./coding/api";
 import { CodingPage } from "./coding/CodingPage";
+import type { FactoryApi } from "./factory/api";
+import { FactoryPage } from "./factory/FactoryPage";
 import type { GitApi } from "./git/api";
 import { GitHostsAdmin } from "./git/GitHostsAdmin";
 import { GitRemotesSettings } from "./git/GitRemotesSettings";
@@ -10,19 +12,21 @@ import type { ValidationApi } from "./validation/api";
 import { ValidationPage } from "./validation/ValidationPage";
 
 // The shell plus the pages built so far (CLAUDE.md §9): Coding (with the per-project Git
-// panel and Terminal), Validation (LED cycle map, console, findings), Settings → Git
+// panel and Terminal), Validation (LED cycle map, console, findings), Factory (test-step
+// map, screenshot strip, line-lead decision), Settings → Git
 // remotes, Admin → Git hosts. Sign-in and the other pages arrive with their phases; until
 // apps/api exists the pages run on the API fakes main.tsx passes in, and the Home page says so.
 
 interface Props {
   codingApi?: CodingApi;
   validationApi?: ValidationApi;
+  factoryApi?: FactoryApi;
   gitApi?: GitApi;
 }
 
-type Page = "home" | "coding" | "validation" | "settings" | "admin";
+type Page = "home" | "coding" | "validation" | "factory" | "settings" | "admin";
 
-export function App({ codingApi, validationApi, gitApi }: Props) {
+export function App({ codingApi, validationApi, factoryApi, gitApi }: Props) {
   const [page, setPage] = useState<Page>("home");
   const navItem = (target: Page, label: string) => (
     <button
@@ -48,6 +52,7 @@ export function App({ codingApi, validationApi, gitApi }: Props) {
           {navItem("home", "Home")}
           {codingApi !== undefined && navItem("coding", "Coding")}
           {validationApi !== undefined && navItem("validation", "Validation")}
+          {factoryApi !== undefined && navItem("factory", "Factory")}
           {gitApi !== undefined && navItem("settings", "Settings")}
           {gitApi !== undefined && navItem("admin", "Admin")}
         </nav>
@@ -67,6 +72,7 @@ export function App({ codingApi, validationApi, gitApi }: Props) {
         {page === "validation" && validationApi !== undefined && (
           <ValidationPage api={validationApi} />
         )}
+        {page === "factory" && factoryApi !== undefined && <FactoryPage api={factoryApi} />}
         {page === "settings" && gitApi !== undefined && <GitRemotesSettings api={gitApi} />}
         {page === "admin" && gitApi !== undefined && <GitHostsAdmin api={gitApi} />}
       </div>

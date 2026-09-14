@@ -1,0 +1,55 @@
+# Factory plan primitives for SW Local Agent Service (CLAUDE.md §10.3).
+# Rendered from slas_factory_executor.primitives.PRIMITIVES; a unit test keeps file and code in step.
+# Every verb acts on a station through the station runner; PASS needs 3 of 3 voters (INV-11);
+# station_config_change is destructive and needs a per-run approval (INV-7).
+version: 1
+primitives:
+  lease_station:
+    description: "Take the exclusive lease on the station and bind the unit's serial number."
+    risk: safe
+    required: [station, unit_sn]
+    optional: [mes_ticket_no]
+  station_command:
+    description: "Run one allowlisted program on the station (fixture power, tool control)."
+    risk: caution
+    required: [station, command]
+    optional: [expect_exit, timeout_s]
+  skill:
+    description: "Run an imported skill's GUI steps on the station through the runner; every step is screenshot before and after."
+    risk: caution
+    required: [station, skill_id]
+    optional: [inputs, secret_refs]
+  wait_for_screen:
+    description: "Wait until a text appears on the station's screen."
+    risk: safe
+    required: [station, text]
+    optional: [timeout_s]
+  read_result:
+    description: "Read the vendor test result as JSON from the station."
+    risk: safe
+    required: [station, command]
+  read_sensors:
+    description: "Read the unit's sensors as JSON and compare them with the limits."
+    risk: safe
+    required: [station, command, limits]
+  check_event_log:
+    description: "Dump the unit's event log; it must be empty."
+    risk: safe
+    required: [station, command]
+  verdict:
+    description: "Decide: the deterministic gate (result, sensors, event log), then 3 of 3 voters for PASS; anything else holds the station for the line lead."
+    risk: safe
+    required: [station]
+  backup_station:
+    description: "Collect the station's config, recent logs and application versions into Backups/stations/<station>/<ticket>."
+    risk: safe
+    required: [station]
+  release_station:
+    description: "Release the station lease."
+    risk: safe
+    required: [station]
+  station_config_change:
+    description: "Change a station setting. Destructive: needs a per-run approval."
+    risk: destructive
+    required: [station, setting, value]
+common_optional: [loop_step, loop_steps]

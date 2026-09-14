@@ -1,17 +1,16 @@
 [project]
-name = "slas-orchestrator"
+name = "slas-factory-executor"
 version = "0.0.1"
-description = "Runs the Agent Kernel and hosts the Coding, Validation and Factory agents"
+description = "Factory executor: deterministic test loop on stations through the station runner"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "slas-factory-executor",
-  "slas-git",
   "slas-hal",
   "slas-kernel",
-  "slas-sandbox-manager",
   "slas-schemas",
-  "slas-validation-executor",
+  "slas-skills",
+  "slas-station-runner",
+  "slas-triage",
 ]
 
 [build-system]
@@ -22,10 +21,9 @@ build-backend = "uv_build"
 module-root = ""
 
 [tool.uv.sources]
-slas-factory-executor = { workspace = true }
-slas-git = { workspace = true }
 slas-hal = { workspace = true }
 slas-kernel = { workspace = true }
-slas-sandbox-manager = { workspace = true }
 slas-schemas = { workspace = true }
-slas-validation-executor = { workspace = true }
+slas-skills = { workspace = true }
+slas-station-runner = { workspace = true }
+slas-triage = { workspace = true }

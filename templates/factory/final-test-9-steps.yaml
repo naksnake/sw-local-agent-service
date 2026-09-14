@@ -1,0 +1,70 @@
+# Factory test-loop template for SW Local Agent Service (CLAUDE.md §10.3).
+# Rendered from slas_factory_executor.templates; a unit test keeps this file and the code in step.
+# $station, $unit_sn and $mes_ticket_no are filled in when a job is planned; the executor adds the
+# lease at the start and the release at the end.
+id: final-test-9-steps
+name: "Final test, 9 steps"
+version: 1.0.0
+description: "Power the unit on, log in to the station and start BurnIn, wait for the test, read the result, the sensors and the event log, back up the station, decide with 3 voters."
+skills: [station-login-burnin]
+steps:
+  - id: lease
+    primitive: lease_station
+    title: "Lease the station and bind the unit"
+    args:
+      station: "$station"
+      unit_sn: "$unit_sn"
+      mes_ticket_no: "$mes_ticket_no"
+  - id: power-on
+    primitive: station_command
+    title: "Power the unit on through the fixture"
+    args:
+      station: "$station"
+      command: ["fixture-ctl", "power", "on"]
+  - id: login-burnin
+    primitive: skill
+    title: "Log in to the station and start BurnIn"
+    args:
+      station: "$station"
+      skill_id: "station-login-burnin"
+      inputs: {"user": "operator"}
+      secret_refs: {"password": "env:STATION_OPERATOR_PASSWORD"}
+  - id: wait-complete
+    primitive: wait_for_screen
+    title: "Wait for BurnIn to report the test complete"
+    args:
+      station: "$station"
+      text: "Test complete"
+      timeout_s: 7200
+  - id: result
+    primitive: read_result
+    title: "Read the BurnIn result"
+    args:
+      station: "$station"
+      command: ["burnin-ctl", "result", "--json"]
+  - id: sensors
+    primitive: read_sensors
+    title: "Read the sensors and compare with the limits"
+    args:
+      station: "$station"
+      command: ["sensors-ctl", "read", "--json"]
+      limits: {"cpu_temp_c": 85, "gpu_temp_c": 85}
+  - id: event-log
+    primitive: check_event_log
+    title: "Check that the event log is empty"
+    args:
+      station: "$station"
+      command: ["evlog", "dump"]
+  - id: backup
+    primitive: backup_station
+    title: "Back up the station state"
+    args:
+      station: "$station"
+  - id: verdict
+    primitive: verdict
+    title: "Decide PASS or FAIL"
+    args:
+      station: "$station"
+sop_summary:
+  en: "One unit through the final test on the station, decided by three voters."
+  zh: "一台機器在測試站完成最終測試，由三位投票者裁定。"

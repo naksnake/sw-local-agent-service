@@ -8,6 +8,7 @@ members = [
     "slas-cli",
     "slas-diff",
     "slas-eval",
+    "slas-factory-executor",
     "slas-git",
     "slas-git-broker",
     "slas-hal",
@@ -22,6 +23,7 @@ members = [
     "slas-screen-worker",
     "slas-skills",
     "slas-sop",
+    "slas-station-runner",
     "slas-triage",
     "slas-validation-executor",
     "slas-workspace",
@@ -373,6 +375,29 @@ requires-dist = [
 ]
 
 [[package]]
+name = "slas-factory-executor"
+version = "0.0.1"
+source = { editable = "services/factory-executor" }
+dependencies = [
+    { name = "slas-hal" },
+    { name = "slas-kernel" },
+    { name = "slas-schemas" },
+    { name = "slas-skills" },
+    { name = "slas-station-runner" },
+    { name = "slas-triage" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "slas-hal", editable = "packages/slas-hal" },
+    { name = "slas-kernel", editable = "packages/slas-kernel" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "slas-skills", editable = "packages/slas-skills" },
+    { name = "slas-station-runner", editable = "services/station-runner" },
+    { name = "slas-triage", editable = "packages/slas-triage" },
+]
+
+[[package]]
 name = "slas-git"
 version = "0.0.1"
 source = { editable = "packages/slas-git" }
@@ -461,6 +486,7 @@ name = "slas-orchestrator"
 version = "0.0.1"
 source = { editable = "services/agent-core-orchestrator" }
 dependencies = [
+    { name = "slas-factory-executor" },
     { name = "slas-git" },
     { name = "slas-hal" },
     { name = "slas-kernel" },
@@ -471,6 +497,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "slas-factory-executor", editable = "services/factory-executor" },
     { name = "slas-git", editable = "packages/slas-git" },
     { name = "slas-hal", editable = "packages/slas-hal" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
@@ -567,6 +594,25 @@ dependencies = [
 requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
 
 [[package]]
+name = "slas-station-runner"
+version = "0.0.1"
+source = { editable = "services/station-runner" }
+dependencies = [
+    { name = "slas-hal" },
+    { name = "slas-schemas" },
+    { name = "slas-screen" },
+    { name = "slas-skills" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "slas-hal", editable = "packages/slas-hal" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "slas-screen", editable = "packages/slas-screen" },
+    { name = "slas-skills", editable = "packages/slas-skills" },
+]
+
+[[package]]
 name = "slas-triage"
 version = "0.0.1"
 source = { editable = "packages/slas-triage" }
@@ -607,6 +653,7 @@ dependencies = [
     { name = "slas-cli" },
     { name = "slas-diff" },
     { name = "slas-eval" },
+    { name = "slas-factory-executor" },
     { name = "slas-git" },
     { name = "slas-git-broker" },
     { name = "slas-hal" },
@@ -621,6 +668,7 @@ dependencies = [
     { name = "slas-screen-worker" },
     { name = "slas-skills" },
     { name = "slas-sop" },
+    { name = "slas-station-runner" },
     { name = "slas-triage" },
     { name = "slas-validation-executor" },
 ]
@@ -639,6 +687,7 @@ requires-dist = [
     { name = "slas-cli", editable = "packages/slas-cli" },
     { name = "slas-diff", editable = "packages/slas-diff" },
     { name = "slas-eval", editable = "packages/slas-eval" },
+    { name = "slas-factory-executor", editable = "services/factory-executor" },
     { name = "slas-git", editable = "packages/slas-git" },
     { name = "slas-git-broker", editable = "services/git-broker" },
     { name = "slas-hal", editable = "packages/slas-hal" },
@@ -653,6 +702,7 @@ requires-dist = [
     { name = "slas-screen-worker", editable = "services/screen-worker" },
     { name = "slas-skills", editable = "packages/slas-skills" },
     { name = "slas-sop", editable = "packages/slas-sop" },
+    { name = "slas-station-runner", editable = "services/station-runner" },
     { name = "slas-triage", editable = "packages/slas-triage" },
     { name = "slas-validation-executor", editable = "services/validation-executor" },
 ]

@@ -334,16 +334,18 @@ class Kernel:
                 continue
             now = self.clock.now()
             child_id = self.store.next_ticket_id(ticket.agent)
+            headline = finding.headline()
+            title = headline if len(headline) <= 200 else headline[:197] + "…"
             child = Ticket(
                 id=child_id,
                 agent=ticket.agent,
                 user=ticket.user,
-                title=finding.headline(),
+                title=title,
                 job=Job(
                     id=f"{ticket.job.id}#bug-{finding.fingerprint[:8]}",
                     agent=ticket.agent,
                     user=ticket.user,
-                    title=finding.headline(),
+                    title=title,
                     target=ticket.job.target,
                     created_at=now,
                 ),
