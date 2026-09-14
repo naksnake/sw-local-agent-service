@@ -4,7 +4,10 @@ version = "0.0.1"
 description = "Shared schemas: Job, Plan, Step, Ticket, Vote, SopModel, Finding, three-part errors"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+# pydantic is the schema layer named in CLAUDE.md §4.3. `slas_schemas.errors` and
+# `slas_schemas.envfile` stay stdlib-only and the package __init__ imports nothing else, so the
+# host CLI (install.sh → slas doctor) runs without a virtualenv; a test proves it.
+dependencies = ["pydantic==2.13.5"]
 
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9.0"]
