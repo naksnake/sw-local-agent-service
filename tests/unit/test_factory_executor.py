@@ -24,8 +24,10 @@ from slas_factory_executor.templates import (
 )
 from slas_hal.credentials import FakeCredentialResolver
 from slas_kernel.clock import FakeClock
+from slas_kernel.executor import ExecutionContext
 from slas_kernel.kernel import Kernel
 from slas_kernel.rca import FakeCrossChecker
+from slas_kernel.skills import SkillGate
 from slas_kernel.store import FileTicketStore
 from slas_orchestrator.factory.agent import FactoryAgent, TriggerError
 from slas_schemas.job import MesTicket, Upload
@@ -33,6 +35,7 @@ from slas_schemas.ticket import Ticket, TicketState
 from slas_schemas.vote import Vote
 from slas_skills.library import LIBRARY
 from slas_skills.schema import parse_skill
+from slas_skills.state import SkillStateStore
 from slas_station_runner.fakes import FakeStation, Plant
 from slas_station_runner.server import InProcessRunnerClient
 
@@ -68,11 +71,20 @@ class Line:
         voters: list[Vote] | None = None,
         agreed: bool = True,
         no_voters: bool = False,
+        skills_on: bool = True,
     ) -> None:
         if voters is None and not no_voters:
             voters = votes("approve", "approve", "approve")
         self.data_root = data_root
         self.clock = FakeClock()
+        # The installation's skill library and its enablement records (ADR-0013): the two
+        # shipped skills, turned on for the Factory Agent unless a test says otherwise.
+        self.skills = {name: parse_skill(data) for name, data in LIBRARY.items()}
+        self.skill_state = SkillStateStore(data_root / "Skills" / "library")
+        for skill in self.skills.values():
+            self.skill_state.record_import(skill, by="platform", now=self.clock.now())
+            if skills_on and "factory" in skill.agents:
+                self.skill_state.enable(skill, "factory", by="lee", now=self.clock.now())
         self.station = FakeStation(
             STATION, state_dir=data_root / "station", clock=self.clock, plant=plant
         )
@@ -80,7 +92,6 @@ class Line:
         self.checker = FakeCrossChecker(voters, agreed=agreed) if voters is not None else None
         self.executor = FactoryExecutor(
             runners={STATION: InProcessRunnerClient(self.station.runner)},
-            skills={name: parse_skill(data) for name, data in LIBRARY.items()},
             resolver=FakeCredentialResolver(SECRETS),
             signing_key_ref="env:FACTORY_BATCH_KEY",
             signing_key_id="factory-2026-09",
@@ -104,6 +115,7 @@ class Line:
             store=self.store,
             clock=FakeClock(),
             plan_checker=self.plan_checker,
+            skill_gate=SkillGate(library=self.skills, state=self.skill_state, clock=self.clock),
         )
         self.mes = FakeMesAdapter([MES])
 
@@ -282,6 +294,50 @@ def test_a_planted_failure_holds_the_station_and_drafts_a_ticket_for_the_line_le
         again.run(MES.model_copy(update={"ticket_no": "MES-88132", "unit_sn": "SN-GX8-0101"})).state
         is TicketState.DONE
     )
+
+
+def test_a_skill_turned_off_stops_the_job_at_plan_and_nothing_reaches_the_station(
+    tmp_path: Path,
+) -> None:
+    """ADR-0013: the kernel's gate, not the executor, decides; the station never hears of it."""
+    line = Line(tmp_path, skills_on=False)
+    ticket = line.kernel.run(MES)
+    assert ticket.state is TicketState.FAILED and ticket.plan is None
+    assert ticket.history[-1].reason == (
+        "Log in to the test station and start BurnIn is not turned on for the Factory Agent."
+    )
+    assert line.station.power == "off" and line.station.login_typed == []
+    assert line.executor.state_for(ticket.id) is None, "no step map: no step ran"
+    assert line.executor.leases.holder(STATION, line.clock.now()) is None
+    assert line.plan_checker.calls == [], "the voters see a plan only after the gate"
+    # Turning the skill on takes effect for the very next job, with nothing restarted.
+    line.skill_state.enable(
+        line.skills["station-login-burnin"], "factory", by="lee", now=line.clock.now()
+    )
+    assert line.run().state is TicketState.DONE
+
+
+def test_the_executor_refuses_a_skill_step_the_kernel_did_not_compile(tmp_path: Path) -> None:
+    line = Line(tmp_path)
+    plan = compile_template(
+        default_templates()["final-test-9-steps"],
+        job_id="job-x",
+        station=STATION,
+        unit_sn="SN-1",
+        mes_ticket_no="MES-1",
+        now=line.clock.now(),
+    )
+    step = next(s for s in plan.steps if s.primitive == "skill")
+    context = ExecutionContext(
+        ticket_id="T-factory-0099", job_id="job-x", agent="factory", user="mes"
+    )
+    observation = line.executor.execute(step, context)
+    assert observation.exit_code == 2
+    assert (
+        observation.summary == "Step login-burnin reached the station without compiled skill steps."
+    )
+    assert "never compiles a skill itself" in observation.stderr
+    assert line.station.login_typed == []
 
 
 def test_sensor_and_event_log_plants_fail_the_gate_too(tmp_path: Path) -> None:

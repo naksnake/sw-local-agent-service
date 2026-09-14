@@ -23,6 +23,7 @@ from slas_kernel.executor import ExecutionContext, Executor
 from slas_kernel.journal import Journal
 from slas_kernel.logs import collect_logs
 from slas_kernel.rca import CrossChecker, RcaPipeline, placeholder_rca
+from slas_kernel.skills import SkillGate, SkillGateError
 from slas_kernel.sop import build_sop_model, render_sop
 from slas_kernel.store import TicketStore
 from slas_observability import metrics
@@ -68,6 +69,7 @@ class Kernel:
         translator: Translator | None = None,
         glossary: Glossary | None = None,
         plan_checker: CrossChecker | None = None,
+        skill_gate: SkillGate | None = None,
     ) -> None:
         self.data_root = data_root
         self.agent = agent
@@ -83,6 +85,9 @@ class Kernel:
         # The Consensus Router on Validation and Factory plans (§5.3). INV-11: its verdict is
         # input to the human approval below, never the approval.
         self.plan_checker = plan_checker
+        # Skill expansion at PLAN (§5.1, ADR-0013): the kernel compiles a plan's `skill`
+        # steps once, after the enablement gate; executors only perform the compiled steps.
+        self.skill_gate = skill_gate
         # Test seam: called after each step's observation is journalled and the ticket saved.
         self._after_step = after_step
 
@@ -114,6 +119,19 @@ class Kernel:
         metrics.add_gauge("slas_tickets_in_state", 1, agent=ticket.agent, state=ticket.state.value)
 
         plan = self.agent.plan(job)
+        if self.skill_gate is not None:
+            try:
+                plan = self.skill_gate.expand(plan, agent=self.agent.name)
+            except SkillGateError as exc:
+                # Nothing has run; the ticket says in one sentence why it stopped at PLAN.
+                journal.append(
+                    "note",
+                    ticket.id,
+                    {"skill_gate": exc.message.as_dict(), "step": exc.step.id},
+                    step_id=exc.step.id,
+                )
+                self._transition(ticket, journal, TicketState.FAILED, exc.message.what_happened)
+                return ticket
         self._attach_plan(ticket, plan)
         if self.plan_checker is not None and self.agent.name in PLAN_CHECKED_AGENTS:
             verdict = self.plan_checker.cross_check(

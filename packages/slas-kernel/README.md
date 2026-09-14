@@ -16,6 +16,7 @@ INGEST → TICKET → PLAN → (human approval for destructive steps) → ACT �
 | `logs.py` | COLLECT: per-step stdout/stderr into `Tickets/<id>/logs/` |
 | `rca.py` | Phase 2 placeholder RCA with a deterministic fingerprint |
 | `sop.py` | SOP model and the EN + zh-Hant renderings, always together (INV-13) |
+| `skills.py` | PLAN: the skill gate — library, author's agents, enablement record (ADR-0013) — then one `compile_skill` per `skill` step; executors only perform the compiled steps |
 | `null_agent.py` | five fake steps that rehearse the whole lifecycle |
 | `branding.py` | the product name (CLAUDE.md §0.1) |
 

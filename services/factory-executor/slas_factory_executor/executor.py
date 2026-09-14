@@ -30,6 +30,7 @@ from slas_hal.credentials import CredentialResolver
 from slas_kernel.executor import ExecutionContext, UnknownPrimitiveError
 from slas_kernel.leases import LeaseError, LeaseTable
 from slas_kernel.rca import CrossChecker
+from slas_kernel.skills import compiled_from_step
 from slas_observability import metrics
 from slas_schemas.common import SlasModel
 from slas_schemas.envfile import write_atomic
@@ -37,8 +38,7 @@ from slas_schemas.errors import ThreePartMessage
 from slas_schemas.finding import Finding
 from slas_schemas.plan import Plan, Step
 from slas_schemas.ticket import Observation
-from slas_skills.compiler import compile_skill
-from slas_skills.schema import Skill
+from slas_skills.compiler import CompiledSkill
 from slas_station_runner.protocol import (
     BatchError,
     BatchResult,
@@ -101,7 +101,6 @@ class FactoryExecutor:
         self,
         *,
         runners: Mapping[str, RunnerClient],
-        skills: Mapping[str, Skill],
         resolver: CredentialResolver,
         signing_key_ref: str,
         signing_key_id: str,
@@ -114,7 +113,6 @@ class FactoryExecutor:
         station_keys: Mapping[str, tuple[str, str]] | None = None,
     ) -> None:
         self.runners = dict(runners)
-        self.skills = dict(skills)
         self.resolver = resolver
         self.signing_key_ref = signing_key_ref
         self.signing_key_id = signing_key_id
@@ -318,28 +316,18 @@ class FactoryExecutor:
         )
 
     def _skill(self, step: Step, context: ExecutionContext, state: JobState) -> Observation:
-        skill_id = str(step.args["skill_id"])
-        skill = self.skills.get(skill_id)
-        if skill is None:
+        # The kernel compiled the skill at PLAN, after the enablement gate (ADR-0013). This
+        # executor only resolves the secret handles for this batch and sends the steps.
+        compiled = compiled_from_step(step)
+        if compiled is None:
             message = ThreePartMessage(
-                f"The skill {skill_id} is not enabled for the Factory Agent.",
-                "The test loop names a skill this installation has not imported or enabled.",
-                "Import the skill on the Skills page and enable it for the Factory Agent.",
+                f"Step {step.id} reached the station without compiled skill steps.",
+                "The kernel's skill gate did not run for this plan, so the skill "
+                f"{step.args.get('skill_id', '(unnamed)')} was never expanded.",
+                "Give the kernel a skill gate; the Factory executor never compiles a skill itself.",
             )
             return Observation(exit_code=2, summary=message.what_happened, stderr=message.render())
-        if "factory" not in [str(a) for a in skill.agents]:
-            message = ThreePartMessage(
-                f"The skill {skill_id} is not enabled for the Factory Agent.",
-                f"It declares agents: {', '.join(str(a) for a in skill.agents)}.",
-                "Enable it for the Factory Agent on the Skills page.",
-            )
-            return Observation(exit_code=2, summary=message.what_happened, stderr=message.render())
-        inputs: dict[str, Any] = {"station": str(step.args["station"])}
-        inputs.update(dict(step.args.get("inputs", {})))
         secret_refs: dict[str, str] = dict(step.args.get("secret_refs", {}))
-        for name in secret_refs:
-            inputs[name] = "resolved-at-dispatch"  # the compiler hands out a handle for it
-        compiled = compile_skill(skill, inputs, job_id=context.job_id, now=self.clock.now())
         secrets = {
             compiled.secret_handles[name]: self.resolver.resolve(ref)
             for name, ref in secret_refs.items()
@@ -360,9 +348,8 @@ class FactoryExecutor:
             screenshots=shots,
         )
 
-    def _single_step_skill(self, step: Step, primitive: str, args: dict[str, Any]) -> Any:
-        from slas_skills.compiler import CompiledSkill
-
+    def _single_step_skill(self, step: Step, primitive: str, args: dict[str, Any]) -> CompiledSkill:
+        """One inline GUI step (`wait_for_screen`) as a batch: not a skill, no expansion."""
         plan = Plan(
             id=f"plan-{step.id}",
             job_id="inline",

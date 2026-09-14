@@ -15,4 +15,5 @@ user's capabilities, never able to escalate them. There is no `shell` primitive.
 | `runner.py` | RUN: every step journalled; screen steps through the screen driver; approvals enforced |
 | `exporter.py` | EXPORT: YAML with secrets stripped and a content hash |
 | `library.py` | the two shipped skills from §6.3, rendered to `skills/library/` |
+| `state.py` | this installation's per-agent on/off record, `Skills/library/<id>.state.json` (ADR-0013): off by default, switches only for the author's agents, kept across a re-import that does not grow, never exported |
 | `yamlout.py` | the YAML renderer; parsing arrives with the approved YAML dependency |

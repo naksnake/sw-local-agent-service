@@ -467,6 +467,7 @@ dependencies = [
     { name = "slas-observability" },
     { name = "slas-rag" },
     { name = "slas-schemas" },
+    { name = "slas-skills" },
     { name = "slas-sop" },
     { name = "slas-triage" },
 ]
@@ -476,6 +477,7 @@ requires-dist = [
     { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-rag", editable = "packages/slas-rag" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "slas-skills", editable = "packages/slas-skills" },
     { name = "slas-sop", editable = "packages/slas-sop" },
     { name = "slas-triage", editable = "packages/slas-triage" },
 ]
