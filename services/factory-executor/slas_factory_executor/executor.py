@@ -30,6 +30,7 @@ from slas_hal.credentials import CredentialResolver
 from slas_kernel.executor import ExecutionContext, UnknownPrimitiveError
 from slas_kernel.leases import LeaseError, LeaseTable
 from slas_kernel.rca import CrossChecker
+from slas_observability import metrics
 from slas_schemas.common import SlasModel
 from slas_schemas.envfile import write_atomic
 from slas_schemas.errors import ThreePartMessage
@@ -224,7 +225,19 @@ class FactoryExecutor:
 
     def _send(self, context: ExecutionContext, step: Step, batch: StepBatch) -> BatchResult:
         self._batches += 1
-        result = self._runner(batch.station).send(self._sign(batch))
+        try:
+            result = self._runner(batch.station).send(self._sign(batch))
+        except BatchError:
+            metrics.inc(
+                "slas_station_batches_total", station=batch.station, kind=batch.kind, ok="false"
+            )
+            raise
+        metrics.inc(
+            "slas_station_batches_total",
+            station=batch.station,
+            kind=batch.kind,
+            ok="true" if result.ok else "false",
+        )
         self._journal(
             context.ticket_id,
             {"step": step.id, "batch": batch.batch_id, "kind": batch.kind, "ok": result.ok},
@@ -492,6 +505,7 @@ class FactoryExecutor:
         if verdict.agreed and passes >= 3 and len(verdict.votes) >= 3:
             state.verdict = "PASS"
             state.decided_by = f"{passes} of {len(verdict.votes)} voters"
+            metrics.inc("slas_factory_verdicts_total", verdict="PASS", decided_by="voters")
             state.verdict_sentence = (
                 f"PASS: {passes} of {len(verdict.votes)} voters say PASS. {verdict.sentence}"
             )
@@ -525,6 +539,12 @@ class FactoryExecutor:
         state.held = True
         state.hold_reason = reason
         state.decided_by = decided_by
+        metrics.inc(
+            "slas_factory_verdicts_total",
+            verdict=verdict,
+            decided_by="gate" if verdict == "FAIL" else "pending",
+        )
+        metrics.add_gauge("slas_factory_stations_held", 1)
         head = "FAIL" if verdict == "FAIL" else "The line lead decides"
         state.verdict_sentence = (
             f"{head}: {reason}. The unit stays on and {state.station} is held; a ticket is drafted "
@@ -625,7 +645,10 @@ class FactoryExecutor:
             raise KeyError(ticket_id)
         state.verdict = verdict
         state.decided_by = f"{by} (line lead)"
+        if state.held:
+            metrics.add_gauge("slas_factory_stations_held", -1)
         state.held = False
+        metrics.inc("slas_factory_verdicts_total", verdict=verdict, decided_by="line_lead")
         state.verdict_sentence = f"{verdict}: decided by {by}. {note}".strip()
         self.leases.release(state.station, ticket_id=ticket_id)
         self._journal(ticket_id, {"line_lead": by, "verdict": verdict, "note": note})

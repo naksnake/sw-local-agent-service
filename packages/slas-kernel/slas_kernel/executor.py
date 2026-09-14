@@ -23,6 +23,8 @@ class ExecutionContext(SlasModel):
     job_id: str = Field(min_length=1)
     agent: AgentName
     user: str = Field(min_length=1)
+    #: The request's trace id, forwarded to every hop the executor makes (CLAUDE.md §8.2).
+    trace_id: str | None = None
 
 
 class UnknownPrimitiveError(ValueError):

@@ -14,6 +14,7 @@ from typing import Final
 
 from pydantic import Field
 
+from slas_observability import metrics
 from slas_schemas.common import Lang, SlasModel
 from slas_schemas.envfile import write_atomic
 from slas_schemas.sop import SopModel
@@ -166,6 +167,8 @@ def render_sop(
         mode=0o644,
     )
     write_atomic(data, source.model_dump_json(indent=2) + "\n", mode=0o644)
+    metrics.inc("slas_sop_exports_total", lang="en")
+    metrics.inc("slas_sop_exports_total", lang="zh-Hant")
     return RenderedSop(
         refs=SopRefs(en=str(en), zh=str(zh), data=str(data)),
         translated=translated,

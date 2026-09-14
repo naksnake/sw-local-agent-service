@@ -46,6 +46,7 @@ class Host(Protocol):
     def is_writable(self, path: str) -> bool: ...
     def disk_free_bytes(self, path: str) -> int | None: ...
     def read_text(self, path: str) -> str | None: ...
+    def list_dir(self, path: str) -> list[str]: ...
     def port_in_use(self, port: int) -> bool | None: ...
     def env(self, name: str) -> str | None: ...
 
@@ -120,6 +121,12 @@ class RealHost:
                 return handle.read()
         except OSError:
             return None
+
+    def list_dir(self, path: str) -> list[str]:
+        try:
+            return sorted(os.listdir(path))
+        except OSError:
+            return []
 
     def port_in_use(self, port: int) -> bool | None:
         """True if something answers on localhost:port, False if refused, None if unknown."""

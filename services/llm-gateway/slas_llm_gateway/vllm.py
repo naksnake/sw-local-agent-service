@@ -7,11 +7,15 @@ vLLM speaks an OpenAI-compatible chat API; these models are the subset the platf
 from __future__ import annotations
 
 import json
+import urllib.error
+import urllib.request
 from collections import deque
+from collections.abc import Mapping
 from typing import Any, Literal, Protocol
 
 from pydantic import Field
 
+from slas_observability.tracing import outbound_headers
 from slas_schemas.common import SlasModel
 
 
@@ -26,6 +30,8 @@ class CompletionRequest(SlasModel):
     guided_json: dict[str, Any] | None = None
     max_tokens: int = Field(default=1024, ge=1)
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    #: The request's trace id; the HTTP client forwards it as `traceparent` (CLAUDE.md §8.2).
+    trace_id: str | None = None
 
 
 class CompletionResponse(SlasModel):
@@ -102,4 +108,57 @@ class FakeVllm:
             text=text,
             prompt_tokens=prompt_tokens,
             completion_tokens=_estimate_tokens(text),
+        )
+
+
+class UrllibVllmClient:
+    """vLLM's OpenAI-compatible chat API over the standard library, one base URL per
+    instance (`http://vllm-coder:8000`). Forwards the trace id as `traceparent` and
+    `X-Slas-Trace-Id`; guided decoding travels as vLLM's `guided_json` field."""
+
+    def __init__(self, base_urls: Mapping[str, str], *, timeout_s: float = 120.0) -> None:
+        self.base_urls = {k: v.rstrip("/") for k, v in base_urls.items()}
+        self.timeout_s = timeout_s
+
+    def complete(self, request: CompletionRequest) -> CompletionResponse:
+        base = self.base_urls.get(request.instance)
+        if base is None:
+            raise InstanceUnavailableError(request.instance)
+        body: dict[str, Any] = {
+            "model": request.instance,
+            "messages": [m.model_dump() for m in request.messages],
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+        }
+        if request.guided_json is not None:
+            body["guided_json"] = request.guided_json
+        headers = {"Content-Type": "application/json", **outbound_headers(request.trace_id)}
+        http_request = urllib.request.Request(  # noqa: S310 — backend network, no egress
+            f"{base}/v1/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(http_request, timeout=self.timeout_s) as response:  # noqa: S310
+                payload = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise InstanceUnavailableError(request.instance) from exc
+        try:
+            choice = payload["choices"][0]
+            text = str(choice["message"]["content"])
+            usage = payload.get("usage", {})
+            finish = str(choice.get("finish_reason") or "stop")
+        except (KeyError, IndexError, TypeError) as exc:
+            raise InstanceUnavailableError(request.instance) from exc
+        return CompletionResponse(
+            instance=request.instance,
+            text=text,
+            prompt_tokens=int(
+                usage.get(
+                    "prompt_tokens", _estimate_tokens(" ".join(m.content for m in request.messages))
+                )
+            ),
+            completion_tokens=int(usage.get("completion_tokens", _estimate_tokens(text))),
+            finish_reason="length" if finish == "length" else "stop",
         )

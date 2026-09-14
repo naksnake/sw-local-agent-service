@@ -23,6 +23,7 @@ from slas_hal.hal import Hal
 from slas_hal.model import Snapshot
 from slas_hal.primitives import PRIMITIVES, approval_kind
 from slas_kernel.executor import ExecutionContext, UnknownPrimitiveError
+from slas_observability import metrics
 from slas_schemas.common import SlasModel
 from slas_schemas.envfile import write_atomic
 from slas_schemas.errors import ThreePartMessage
@@ -237,12 +238,18 @@ class ValidationExecutor:
         else:
             state.consecutive_boot_failures = 0
             cell.status = "finding" if findings else "ok"
+        metrics.inc(
+            "slas_validation_cycles_total",
+            kind=kind,
+            outcome="boot_failed" if not result.booted else "finding" if findings else "clean",
+        )
         cell.sentence = result.sentence
         exit_code = 0
         summary = result.sentence
         if state.consecutive_boot_failures >= self.guardrails.consecutive_failure_abort:
             state.aborted = True
             exit_code = 3
+            metrics.inc("slas_validation_runs_total", outcome="aborted")
             limit = self.guardrails.consecutive_failure_abort
             summary = (
                 f"{result.sentence} That is {state.consecutive_boot_failures} boot failures "

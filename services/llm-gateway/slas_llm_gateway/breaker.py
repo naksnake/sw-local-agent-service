@@ -6,10 +6,13 @@ request is let through (half-open) and its result closes or reopens the breaker.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
+
+from slas_observability import metrics
 
 
 class Clock(Protocol):
@@ -37,6 +40,7 @@ class CircuitBreaker:
         *,
         failure_threshold: int = 2,
         cooldown: timedelta = timedelta(minutes=5),
+        on_trip: Callable[[str, str], None] | None = None,
     ) -> None:
         if failure_threshold < 1:
             raise ValueError("failure_threshold must be at least 1")
@@ -44,6 +48,8 @@ class CircuitBreaker:
         self.failure_threshold = failure_threshold
         self.cooldown = cooldown
         self._entries: dict[str, _Entry] = {}
+        #: Called with (instance, sentence) each time the breaker opens (P11 alerting).
+        self.on_trip = on_trip
 
     def _entry(self, key: str) -> _Entry:
         return self._entries.setdefault(key, _Entry())
@@ -73,14 +79,21 @@ class CircuitBreaker:
 
     def record_success(self, key: str) -> None:
         self._entries[key] = _Entry()
+        metrics.set_gauge("slas_breaker_open", 0, instance=key)
 
     def record_failure(self, key: str, reason: str = "invalid answer") -> None:
         entry = self._entry(key)
         entry.failures += 1
         entry.last_reason = reason
         if entry.state is BreakerState.HALF_OPEN or entry.failures >= self.failure_threshold:
+            was_open = entry.state is BreakerState.OPEN
             entry.state = BreakerState.OPEN
             entry.opened_at = self._clock.now()
+            metrics.set_gauge("slas_breaker_open", 1, instance=key)
+            if not was_open:
+                metrics.inc("slas_breaker_trips_total", instance=key)
+                if self.on_trip is not None:
+                    self.on_trip(key, self.sentence(key))
 
     def failures(self, key: str) -> int:
         return self._entry(key).failures

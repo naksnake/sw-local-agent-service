@@ -18,6 +18,7 @@ from typing import Final, Literal, Protocol
 
 from pydantic import Field
 
+from slas_observability import metrics
 from slas_sandbox_manager.runtime import ExecResult, SandboxHandle, SandboxRuntime
 from slas_sandbox_manager.spec import (
     GITCONFIG_TARGET,
@@ -227,6 +228,7 @@ class SandboxManager:
             runtime_sentence=runtime_sentence,
         )
         self._sessions[session_id] = session
+        metrics.set_gauge("slas_sandbox_sessions_open", len(self._sessions))
         return session
 
     def get(self, session_id: str) -> Session:
@@ -275,6 +277,7 @@ class SandboxManager:
 
     def close(self, session_id: str) -> None:
         session = self._sessions.pop(session_id, None)
+        metrics.set_gauge("slas_sandbox_sessions_open", len(self._sessions))
         if session is None:
             return
         if self.runtime.alive(session.handle):

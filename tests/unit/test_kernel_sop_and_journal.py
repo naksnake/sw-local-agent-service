@@ -133,5 +133,6 @@ def test_journal_append_replays_and_finds_the_open_intent(tmp_path: Path) -> Non
         "ticket_id": "T-null-0001",
         "kind": "observation",
         "step_id": "s1",
+        "trace_id": None,
         "payload": {"exit_code": 0},
     }

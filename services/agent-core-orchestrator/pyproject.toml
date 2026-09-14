@@ -5,10 +5,12 @@ description = "Runs the Agent Kernel and hosts the Coding, Validation and Factor
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "slas-observability",
   "slas-factory-executor",
   "slas-git",
   "slas-hal",
   "slas-kernel",
+  "slas-llm-gateway",
   "slas-sandbox-manager",
   "slas-schemas",
   "slas-validation-executor",
@@ -22,10 +24,12 @@ build-backend = "uv_build"
 module-root = ""
 
 [tool.uv.sources]
+slas-observability = { workspace = true }
 slas-factory-executor = { workspace = true }
 slas-git = { workspace = true }
 slas-hal = { workspace = true }
 slas-kernel = { workspace = true }
+slas-llm-gateway = { workspace = true }
 slas-sandbox-manager = { workspace = true }
 slas-schemas = { workspace = true }
 slas-validation-executor = { workspace = true }

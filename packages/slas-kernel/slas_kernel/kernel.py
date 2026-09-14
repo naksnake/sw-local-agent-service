@@ -25,6 +25,8 @@ from slas_kernel.logs import collect_logs
 from slas_kernel.rca import CrossChecker, RcaPipeline, placeholder_rca
 from slas_kernel.sop import build_sop_model, render_sop
 from slas_kernel.store import TicketStore
+from slas_observability import metrics
+from slas_observability.tracing import current_trace_id, trace
 from slas_schemas.finding import Finding
 from slas_schemas.job import Job, MesTicket, Upload
 from slas_schemas.plan import Plan, Step
@@ -99,10 +101,17 @@ class Kernel:
 
     def run(self, raw: Upload | MesTicket) -> Ticket:
         """INGEST → TICKET → PLAN, then act unless a destructive step needs approval."""
+        # The api's trace id when the request carried one, a new one otherwise; either way
+        # every journal entry, event and downstream call of this run shares it (§8.2).
+        with trace(current_trace_id()):
+            return self._run(raw)
+
+    def _run(self, raw: Upload | MesTicket) -> Ticket:
         job = self.agent.ingest(raw)
         ticket = self._create_ticket(job)
         journal = self.journal_for(ticket.id)
         journal.append("state", ticket.id, {"state": ticket.state.value, "reason": "ingested"})
+        metrics.add_gauge("slas_tickets_in_state", 1, agent=ticket.agent, state=ticket.state.value)
 
         plan = self.agent.plan(job)
         self._attach_plan(ticket, plan)
@@ -156,6 +165,10 @@ class Kernel:
 
     def resume(self, ticket_id: str) -> Ticket:
         """Continue a ticket after a crash or an approval, from the journal."""
+        with trace(current_trace_id()):
+            return self._resume(ticket_id)
+
+    def _resume(self, ticket_id: str) -> Ticket:
         ticket = self.store.load(ticket_id)
         if ticket.finished:
             return ticket
@@ -206,6 +219,11 @@ class Kernel:
             {"from": change.from_state.value, "to": change.to_state.value, "reason": reason},
         )
         self.store.save(ticket)
+        metrics.inc("slas_ticket_state_changes_total", agent=ticket.agent, to=target.value)
+        metrics.add_gauge(
+            "slas_tickets_in_state", -1, agent=ticket.agent, state=change.from_state.value
+        )
+        metrics.add_gauge("slas_tickets_in_state", 1, agent=ticket.agent, state=target.value)
 
     def _act_and_close(self, ticket: Ticket, journal: Journal) -> Ticket:
         if ticket.state is TicketState.APPROVED:
@@ -255,7 +273,11 @@ class Kernel:
         journal.append("intent", ticket.id, payload, step_id=step.id)
 
         context = ExecutionContext(
-            ticket_id=ticket.id, job_id=ticket.job.id, agent=ticket.agent, user=ticket.user
+            ticket_id=ticket.id,
+            job_id=ticket.job.id,
+            agent=ticket.agent,
+            user=ticket.user,
+            trace_id=current_trace_id(),
         )
         observation = self.executor.execute(step, context)  # a crash here leaves an open intent
         journal.append(
@@ -272,6 +294,10 @@ class Kernel:
         self._attach(ticket, observation)
         ticket.updated_at = record.finished_at
         self.store.save(ticket)
+        metrics.inc("slas_agent_turns_total", agent=ticket.agent, outcome=record.status)
+        metrics.observe(
+            "slas_step_seconds", (record.finished_at - started).total_seconds(), agent=ticket.agent
+        )
         if self._after_step is not None:
             self._after_step(ticket, step)
         return record.status == "failed"

@@ -15,6 +15,7 @@ members = [
     "slas-kernel",
     "slas-llm-gateway",
     "slas-model-manager",
+    "slas-observability",
     "slas-orchestrator",
     "slas-rag",
     "slas-sandbox-manager",
@@ -332,6 +333,7 @@ source = { editable = "packages/slas-cli" }
 dependencies = [
     { name = "slas-hal" },
     { name = "slas-kernel" },
+    { name = "slas-observability" },
     { name = "slas-sandbox-manager" },
     { name = "slas-schemas" },
 ]
@@ -340,6 +342,7 @@ dependencies = [
 requires-dist = [
     { name = "slas-hal", editable = "packages/slas-hal" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
+    { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-sandbox-manager", editable = "services/sandbox-manager" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
 ]
@@ -381,6 +384,7 @@ source = { editable = "services/factory-executor" }
 dependencies = [
     { name = "slas-hal" },
     { name = "slas-kernel" },
+    { name = "slas-observability" },
     { name = "slas-schemas" },
     { name = "slas-skills" },
     { name = "slas-station-runner" },
@@ -391,6 +395,7 @@ dependencies = [
 requires-dist = [
     { name = "slas-hal", editable = "packages/slas-hal" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
+    { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
     { name = "slas-skills", editable = "packages/slas-skills" },
     { name = "slas-station-runner", editable = "services/station-runner" },
@@ -441,6 +446,7 @@ name = "slas-kernel"
 version = "0.0.1"
 source = { editable = "packages/slas-kernel" }
 dependencies = [
+    { name = "slas-observability" },
     { name = "slas-rag" },
     { name = "slas-schemas" },
     { name = "slas-sop" },
@@ -449,6 +455,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-rag", editable = "packages/slas-rag" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
     { name = "slas-sop", editable = "packages/slas-sop" },
@@ -460,11 +467,15 @@ name = "slas-llm-gateway"
 version = "0.0.1"
 source = { editable = "services/llm-gateway" }
 dependencies = [
+    { name = "slas-observability" },
     { name = "slas-schemas" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
+requires-dist = [
+    { name = "slas-observability", editable = "packages/slas-observability" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+]
 
 [[package]]
 name = "slas-model-manager"
@@ -482,6 +493,17 @@ requires-dist = [
 ]
 
 [[package]]
+name = "slas-observability"
+version = "0.0.1"
+source = { editable = "packages/slas-observability" }
+dependencies = [
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
+
+[[package]]
 name = "slas-orchestrator"
 version = "0.0.1"
 source = { editable = "services/agent-core-orchestrator" }
@@ -490,6 +512,8 @@ dependencies = [
     { name = "slas-git" },
     { name = "slas-hal" },
     { name = "slas-kernel" },
+    { name = "slas-llm-gateway" },
+    { name = "slas-observability" },
     { name = "slas-sandbox-manager" },
     { name = "slas-schemas" },
     { name = "slas-validation-executor" },
@@ -501,6 +525,8 @@ requires-dist = [
     { name = "slas-git", editable = "packages/slas-git" },
     { name = "slas-hal", editable = "packages/slas-hal" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
+    { name = "slas-llm-gateway", editable = "services/llm-gateway" },
+    { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-sandbox-manager", editable = "services/sandbox-manager" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
     { name = "slas-validation-executor", editable = "services/validation-executor" },
@@ -522,11 +548,15 @@ name = "slas-sandbox-manager"
 version = "0.0.1"
 source = { editable = "services/sandbox-manager" }
 dependencies = [
+    { name = "slas-observability" },
     { name = "slas-schemas" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
+requires-dist = [
+    { name = "slas-observability", editable = "packages/slas-observability" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+]
 
 [[package]]
 name = "slas-schemas"
@@ -544,23 +574,29 @@ name = "slas-screen"
 version = "0.0.1"
 source = { editable = "packages/slas-screen" }
 dependencies = [
+    { name = "slas-observability" },
     { name = "slas-schemas" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
+requires-dist = [
+    { name = "slas-observability", editable = "packages/slas-observability" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+]
 
 [[package]]
 name = "slas-screen-worker"
 version = "0.0.1"
 source = { editable = "services/screen-worker" }
 dependencies = [
+    { name = "slas-observability" },
     { name = "slas-schemas" },
     { name = "slas-screen" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
     { name = "slas-screen", editable = "packages/slas-screen" },
 ]
@@ -571,6 +607,7 @@ version = "0.0.1"
 source = { editable = "packages/slas-skills" }
 dependencies = [
     { name = "slas-authz" },
+    { name = "slas-observability" },
     { name = "slas-schemas" },
     { name = "slas-screen" },
 ]
@@ -578,6 +615,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "slas-authz", editable = "packages/slas-authz" },
+    { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
     { name = "slas-screen", editable = "packages/slas-screen" },
 ]
@@ -587,11 +625,15 @@ name = "slas-sop"
 version = "0.0.1"
 source = { editable = "packages/slas-sop" }
 dependencies = [
+    { name = "slas-observability" },
     { name = "slas-schemas" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
+requires-dist = [
+    { name = "slas-observability", editable = "packages/slas-observability" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+]
 
 [[package]]
 name = "slas-station-runner"
@@ -631,6 +673,7 @@ dependencies = [
     { name = "slas-diff" },
     { name = "slas-hal" },
     { name = "slas-kernel" },
+    { name = "slas-observability" },
     { name = "slas-schemas" },
     { name = "slas-triage" },
 ]
@@ -640,6 +683,7 @@ requires-dist = [
     { name = "slas-diff", editable = "packages/slas-diff" },
     { name = "slas-hal", editable = "packages/slas-hal" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
+    { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
     { name = "slas-triage", editable = "packages/slas-triage" },
 ]
@@ -660,6 +704,7 @@ dependencies = [
     { name = "slas-kernel" },
     { name = "slas-llm-gateway" },
     { name = "slas-model-manager" },
+    { name = "slas-observability" },
     { name = "slas-orchestrator" },
     { name = "slas-rag" },
     { name = "slas-sandbox-manager" },
@@ -694,6 +739,7 @@ requires-dist = [
     { name = "slas-kernel", editable = "packages/slas-kernel" },
     { name = "slas-llm-gateway", editable = "services/llm-gateway" },
     { name = "slas-model-manager", editable = "services/model-manager" },
+    { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-orchestrator", editable = "services/agent-core-orchestrator" },
     { name = "slas-rag", editable = "packages/slas-rag" },
     { name = "slas-sandbox-manager", editable = "services/sandbox-manager" },

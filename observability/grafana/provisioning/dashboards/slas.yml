@@ -1,0 +1,14 @@
+# Rendered from slas_observability (CLAUDE.md §8.2, P11); a unit test keeps file and
+# code in step. Edit the Python, then run `uv run python -m slas_observability.render`.
+apiVersion: 1
+providers:
+  - name: slas
+    orgId: 1
+    folder: "SW Local Agent Service"
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

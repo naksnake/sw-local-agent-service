@@ -85,9 +85,9 @@ def test_not_yet_commands_say_which_phase_brings_them(command: str) -> None:
 
 
 def test_not_yet_covers_every_command_from_claude_md_section_3() -> None:
-    # `doctor` (P0) and `toolchain` (P6) are implemented; the rest still say when they arrive.
+    # `doctor` (P0), `toolchain` (P6), `target` (P8) and `status` (P11) are implemented; the
+    # rest still say when they arrive.
     assert set(NOT_YET) == {
-        "status",
         "logs",
         "user",
         "model",

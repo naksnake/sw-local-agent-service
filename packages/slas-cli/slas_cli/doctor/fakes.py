@@ -116,6 +116,15 @@ class FakeHost:
     def read_text(self, path: str) -> str | None:
         return self.files.get(path)
 
+    def list_dir(self, path: str) -> list[str]:
+        prefix = path.rstrip("/") + "/"
+        names = {
+            candidate[len(prefix) :].split("/", 1)[0]
+            for candidate in {*self.files, *self.existing_paths, *self.directories}
+            if candidate.startswith(prefix) and len(candidate) > len(prefix)
+        }
+        return sorted(names)
+
     def port_in_use(self, port: int) -> bool | None:
         return self.ports.get(port)
 

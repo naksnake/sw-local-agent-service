@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from pydantic import Field
 
+from slas_observability import metrics
 from slas_schemas.common import SlasModel
 from slas_schemas.errors import ThreePartMessage
 from slas_schemas.plan import Step
@@ -148,6 +149,9 @@ class SkillRunner:
                 self.journal.append(
                     "note", self.ticket_id, {"approval_required": step.title}, step_id=step.id
                 )
+                metrics.inc(
+                    "slas_skill_runs_total", skill=compiled.skill_id, outcome="approval_required"
+                )
                 raise ApprovalRequiredError(step)
             run = self._perform(step, compiled, ctx, masked)
             runs.append(run)
@@ -169,6 +173,7 @@ class SkillRunner:
             if status == "done"
             else f"{compiled.plan.summary} {status} after step {len(runs)} of {total}."
         )
+        metrics.inc("slas_skill_runs_total", skill=compiled.skill_id, outcome=status)
         return SkillRunResult(
             skill_id=compiled.skill_id,
             status=status,

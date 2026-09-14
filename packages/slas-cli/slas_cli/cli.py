@@ -28,7 +28,6 @@ EXIT_USAGE = 2
 
 # Commands from CLAUDE.md §3 that later phases bring (docs/DEVELOPMENT_PLAN.md).
 NOT_YET: dict[str, str] = {
-    "status": "Phase 11",
     "logs": "a later phase",
     "user": "Phase 1",
     "model": "Phase 3",
@@ -122,6 +121,27 @@ def build_parser(environ: Mapping[str, str]) -> argparse.ArgumentParser:
     disarm = target_commands.add_parser("disarm", help="Refuse power actions on a target again.")
     disarm.add_argument("alias")
 
+    status = commands.add_parser(
+        "status",
+        help="One page about the platform on this host: services, GPUs, models, work, alerts.",
+        description="Reads the platform's own files and asks docker compose and nvidia-smi. "
+        "Changes nothing. Exit code 1 when something needs a person.",
+    )
+    status.add_argument(
+        "--data-root",
+        default=environ.get("SLAS_DATA_ROOT") or DEFAULT_DATA_ROOT,
+        help="Where the platform keeps its data (default: $SLAS_DATA_ROOT or "
+        f"{DEFAULT_DATA_ROOT}).",
+    )
+    status.add_argument(
+        "--compose-file",
+        default=environ.get("SLAS_COMPOSE_FILE")
+        or f"{environ.get('SLAS_HOME') or '/opt/slas'}/compose/docker-compose.yml",
+        help="The platform's docker-compose.yml (default: $SLAS_COMPOSE_FILE or "
+        "$SLAS_HOME/compose/docker-compose.yml).",
+    )
+    status.add_argument("--json", action="store_true", help="Print the report as JSON.")
+
     for name, phase in NOT_YET.items():
         later = commands.add_parser(name, help=f"Arrives in {phase}.")
         later.add_argument("rest", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
@@ -150,6 +170,16 @@ def run_toolchain(args: argparse.Namespace, out: TextIO) -> int:
             f"{exc.message.what_happened}\n{exc.message.likely_cause}\n{exc.message.what_to_do}\n"
         )
         return EXIT_PROBLEMS
+
+
+def run_status(args: argparse.Namespace, host: Host, out: TextIO) -> int:
+    # Imported here, not at module level: `slas doctor` must run on a bare host with the
+    # standard library only, and the status report needs the platform's schemas.
+    from slas_cli.status import collect_status, render
+
+    report = collect_status(host, data_root=args.data_root, compose_file=args.compose_file)
+    out.write(render(report, as_json=bool(args.json)))
+    return EXIT_OK if report.ok else EXIT_PROBLEMS
 
 
 def run_doctor(args: argparse.Namespace, host: Host, out: TextIO) -> int:
@@ -255,6 +285,8 @@ def main(
         return EXIT_USAGE
     if args.command == "doctor":
         return run_doctor(args, host if host is not None else RealHost(), out)
+    if args.command == "status":
+        return run_status(args, host if host is not None else RealHost(), out)
     if args.command == "toolchain":
         if args.toolchain_command is None:
             parser.parse_args(["toolchain", "--help"])  # prints help and exits

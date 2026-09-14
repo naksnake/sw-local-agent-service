@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from slas_kernel.clock import Clock
+from slas_observability.tracing import current_trace_id
 from slas_schemas.journal import JournalEntry, JournalKind
 
 
@@ -47,6 +48,7 @@ class Journal:
             kind=kind,
             step_id=step_id,
             payload=payload or {},
+            trace_id=current_trace_id(),
         )
         with open(self.path, "a", encoding="utf-8") as handle:
             handle.write(entry.model_dump_json() + "\n")

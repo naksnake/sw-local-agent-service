@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "The `slas` command line, mirroring the WebUI"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = ["slas-hal", "slas-kernel", "slas-sandbox-manager", "slas-schemas"]
+dependencies = ["slas-observability", "slas-hal", "slas-kernel", "slas-sandbox-manager", "slas-schemas"]
 
 [project.scripts]
 slas = "slas_cli.cli:main"
@@ -17,6 +17,7 @@ build-backend = "uv_build"
 module-root = ""
 
 [tool.uv.sources]
+slas-observability = { workspace = true }
 slas-hal = { workspace = true }
 slas-kernel = { workspace = true }
 slas-sandbox-manager = { workspace = true }

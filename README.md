@@ -70,6 +70,21 @@ push through a fake Git host on loopback with a hostile pre-push hook and grep e
 for the token afterwards. The Podman driver, the WebSocket/xterm.js terminal and the
 service's HTTP surface wait on their dependency decisions.
 
+**Phase 11: observability.** `packages/slas-observability` (standard library only): the §8.2
+metrics in a closed catalogue with the Prometheus text format and a `/metrics` server for
+every service; one W3C trace id from the WebUI (`apps/webui/src/trace.ts`) through the api,
+the kernel's journal and executor context, the gateway and the vLLM HTTP client; JSON events
+with the trace id on every line; a **local alert channel** (`Alerts/alerts.json`) written by
+the gateway the moment a breaker trips or voters disagree and by Alertmanager through a
+webhook; Prometheus scrape configuration, 19 alert rules in three parts, the Alertmanager
+configuration and six Grafana dashboards (inference, GPU, agents, sandboxes and screens,
+validation runs, factory) rendered to `observability/` and kept in step by tests that check
+every PromQL name against the catalogue; and `slas status`. A test follows one trace id
+from a WebUI header through the api edge, the kernel, the real gateway over HTTP to a fake
+vLLM and the executor. Live dashboards from a real run wait on apps/api, the base compose
+file and a GPU host; prometheus_client, structlog and OpenTelemetry remain unapproved and
+are not needed for the wire formats used here.
+
 **Phase 7: the Validation Agent against fakes.** `plans/` (plan schema and primitives
 rendered from `slas_hal.primitives`), the plan compiler (`suite.md`/`suite.xlsx` → `plan.yaml`
 with the §10.2 reject rules), `slas_hal` (models, Redfish parsers that turn malformed and

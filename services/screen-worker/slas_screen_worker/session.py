@@ -13,6 +13,7 @@ from typing import Final, Protocol
 
 from pydantic import Field
 
+from slas_observability import metrics
 from slas_schemas.common import SlasModel
 from slas_schemas.errors import ThreePartMessage
 
@@ -167,10 +168,12 @@ class SessionManager:
             self.runner.start(session.novnc_argv(), env=env),
         ]
         self._live[session_id] = _Live(session, processes)
+        metrics.set_gauge("slas_screen_displays_open", len(self._live))
         return session
 
     def close(self, session_id: str) -> None:
         live = self._live.pop(session_id, None)
+        metrics.set_gauge("slas_screen_displays_open", len(self._live))
         if live is None:
             return
         for handle in reversed(live.processes):

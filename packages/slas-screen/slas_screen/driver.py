@@ -11,13 +11,15 @@ Rules enforced here, whatever the backend:
 
 from __future__ import annotations
 
+import functools
 import re
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Protocol
+from typing import Concatenate, Protocol, cast
 
+from slas_observability import metrics
 from slas_schemas.errors import ThreePartMessage
 from slas_screen.backend import ScreenBackend
 from slas_screen.model import Point, ScreenResult, ScreenStopError, Window
@@ -53,6 +55,35 @@ class RateLimiter:
         self._stamps.append(now)
 
 
+def _counted[**P, D](
+    primitive: str,
+) -> Callable[
+    [Callable[Concatenate[D, P], ScreenResult]], Callable[Concatenate[D, P], ScreenResult]
+]:
+    """Count every GUI primitive as ok, failed or stopped (`slas_screen_steps_total`)."""
+
+    def wrap(
+        fn: Callable[Concatenate[D, P], ScreenResult],
+    ) -> Callable[Concatenate[D, P], ScreenResult]:
+        @functools.wraps(fn)
+        def inner(self: D, *args: P.args, **kwargs: P.kwargs) -> ScreenResult:
+            try:
+                result = fn(self, *args, **kwargs)
+            except ScreenStopError:
+                metrics.inc("slas_screen_steps_total", primitive=primitive, outcome="stopped")
+                raise
+            metrics.inc(
+                "slas_screen_steps_total",
+                primitive=primitive,
+                outcome="ok" if result.ok else "failed",
+            )
+            return result
+
+        return cast(Callable[Concatenate[D, P], ScreenResult], inner)
+
+    return wrap
+
+
 class ScreenDriver:
     def __init__(
         self,
@@ -75,6 +106,7 @@ class ScreenDriver:
 
     # --- primitives ------------------------------------------------------------------------
 
+    @_counted("focus_window")
     def focus_window(
         self, *, title: str | None = None, wm_class: str | None = None
     ) -> ScreenResult:
@@ -88,6 +120,7 @@ class ScreenDriver:
         self._expected_focus = match
         return self._result(True, f"Focused {match.title!r}.", before, matched=match.title)
 
+    @_counted("click")
     def click(
         self,
         *,
@@ -110,18 +143,21 @@ class ScreenDriver:
             verb = "Right-clicked"
         return self._result(True, f"{verb} {label}.", before, matched=label)
 
+    @_counted("type")
     def type_text(self, text: str) -> ScreenResult:
         before = self._shoot("type-before")
         self._guard_focus()
         self._action(lambda: self.backend.type_text(text))
         return self._result(True, f"Typed {len(text)} characters.", before)
 
+    @_counted("key")
     def key(self, press: str) -> ScreenResult:
         before = self._shoot("key-before")
         self._guard_focus()
         self._action(lambda: self.backend.press(press))
         return self._result(True, f"Pressed {press}.", before)
 
+    @_counted("scroll")
     def scroll(self, direction: str, amount: int) -> ScreenResult:
         before = self._shoot("scroll-before")
         if direction not in ("up", "down", "left", "right"):
@@ -130,6 +166,7 @@ class ScreenDriver:
         self._action(lambda: self.backend.scroll(direction, amount))
         return self._result(True, f"Scrolled {direction} by {amount}.", before)
 
+    @_counted("wait_for")
     def wait_for(
         self,
         *,
@@ -162,10 +199,12 @@ class ScreenDriver:
                 )
             self._sleep(self.policy.poll_interval_s)
 
+    @_counted("screenshot")
     def screenshot(self, name: str) -> ScreenResult:
         path = self._shoot(name)
         return ScreenResult(ok=True, sentence=f"Screenshot {name} taken.", before=None, after=path)
 
+    @_counted("assert_visible")
     def assert_visible(
         self, *, text: str | None = None, image: str | None = None, message: str
     ) -> ScreenResult:

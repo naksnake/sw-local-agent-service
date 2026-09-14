@@ -19,3 +19,5 @@ class JournalEntry(SlasModel):
     kind: JournalKind
     step_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    #: The trace id bound when the entry was written (CLAUDE.md §8.2): one id per request.
+    trace_id: str | None = None
