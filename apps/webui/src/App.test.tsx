@@ -1,18 +1,40 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import { PRODUCT_NAME } from "./branding";
 
-describe("App shell", () => {
-  it("names the product as a heading", () => {
+describe("App shell (docs/ui/home.md)", () => {
+  it("has the rail with the brand and Home as the page heading", () => {
     render(<App />);
-    const heading = screen.getByRole("heading", { level: 1 });
-    expect(heading.textContent).toBe(PRODUCT_NAME);
+    const rail = screen.getByRole("navigation", { name: "Pages" });
+    expect(within(rail).getByText(PRODUCT_NAME)).toBeTruthy();
+    expect(within(rail).getByText("Self-hosted, no cloud")).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Home");
+    expect(screen.getByText("What is running now, and what needs you.")).toBeTruthy();
   });
 
-  it("tells the visitor what to expect in a sentence, not a code", () => {
+  it("lists only the pages whose API exists, plus the ones that say when they arrive", () => {
     render(<App />);
-    expect(screen.getByText(/being set up on this host/)).toBeTruthy();
+    const rail = screen.getByRole("navigation", { name: "Pages" });
+    const labels = within(rail)
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+    expect(labels).toEqual(["Home", "Runs", "Models", "Skills"]);
+  });
+
+  it("says what is healthy in one sentence and shows the version", async () => {
+    render(<App />);
+    expect(await screen.findByText("Everything is healthy. Nothing is running.")).toBeTruthy();
+    expect(screen.getByText(/Version 0\.0\.1/)).toBeTruthy();
+    expect(screen.getByText("Air-gapped mode is on")).toBeTruthy();
+  });
+
+  it("gives the later pages a sentence, never a blank page", async () => {
+    const { getByRole, findByText } = render(<App />);
+    getByRole("button", { name: "Models" }).click();
+    expect(await findByText(/Models are read from Models\/models\.yaml/)).toBeTruthy();
+    getByRole("button", { name: "Skills" }).click();
+    expect(await findByText(/arrive with Phase 4/)).toBeTruthy();
   });
 });

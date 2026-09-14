@@ -10,6 +10,8 @@ interface Props {
   api: ValidationApi;
   /** Who is signed in; recorded on approvals. */
   user?: string;
+  /** Open the New … wizard on arrival (Home's buttons). */
+  startWizardOpen?: boolean;
 }
 
 const CELL_CLASS: Record<CycleStatus, string> = {
@@ -21,9 +23,9 @@ const CELL_CLASS: Record<CycleStatus, string> = {
   skipped: "bg-slate-400",
 };
 
-export function ValidationPage({ api, user = "you" }: Props) {
+export function ValidationPage({ api, user = "you", startWizardOpen = false }: Props) {
   const [runs, setRuns] = useState<RunView[] | null>(null);
-  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(startWizardOpen);
 
   useEffect(() => {
     void api.listRuns().then(setRuns);

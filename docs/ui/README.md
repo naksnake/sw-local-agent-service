@@ -5,6 +5,7 @@ reviewed before a page is built; the page then imports it from `apps/webui/src/c
 
 | Document | Screens | Phase |
 |---|---|---|
+| [`home.md`](home.md) | Shell (rail, health bar), Home dashboard (needs you, running now, recent results), the placeholders for Runs, Models and Skills | UI follows the demo |
 | [`sign-in.md`](sign-in.md) | Sign in, Choose a new password, Shell, Home, Not allowed, Unknown address | P1 |
 | [`admin-people.md`](admin-people.md) | Admin → People and its dialogs | P1 |
 | [`admin-settings.md`](admin-settings.md) | Admin → Settings | P1 |

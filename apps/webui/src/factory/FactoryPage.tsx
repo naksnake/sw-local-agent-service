@@ -11,6 +11,8 @@ interface Props {
   api: FactoryApi;
   /** Who is signed in; recorded on a line-lead decision. */
   user?: string;
+  /** Open the New … wizard on arrival (Home's buttons). */
+  startWizardOpen?: boolean;
 }
 
 const CELL_CLASS: Record<CellStatus, string> = {
@@ -21,9 +23,9 @@ const CELL_CLASS: Record<CellStatus, string> = {
   skipped: "bg-slate-400",
 };
 
-export function FactoryPage({ api, user = "you" }: Props) {
+export function FactoryPage({ api, user = "you", startWizardOpen = false }: Props) {
   const [jobs, setJobs] = useState<FactoryJob[] | null>(null);
-  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(startWizardOpen);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [controls, setControls] = useState<Record<string, ControlView>>({});
 

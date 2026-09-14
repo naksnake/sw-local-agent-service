@@ -12,6 +12,8 @@ import { NewCodingTaskWizard } from "./NewCodingTaskWizard";
 interface Props {
   api: CodingApi;
   gitApi?: GitApi;
+  /** Open the New … wizard on arrival (Home's buttons). */
+  startWizardOpen?: boolean;
 }
 
 function slugOf(title: string): string {
@@ -26,9 +28,9 @@ const STATUS_WORD: Record<StepStatus, string> = {
   skipped: "skipped",
 };
 
-export function CodingPage({ api, gitApi }: Props) {
+export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
   const [tasks, setTasks] = useState<CodingTask[] | null>(null);
-  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(startWizardOpen);
   const [gitOpenFor, setGitOpenFor] = useState<string | null>(null);
 
   useEffect(() => {
