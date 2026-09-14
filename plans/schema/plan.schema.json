@@ -1,0 +1,579 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://slas.local/schemas/plan.schema.json",
+  "title": "SW Local Agent Service — Validation plan",
+  "description": "A compiled Validation plan: deterministic steps a state machine performs (CLAUDE.md §10.2). Destructive steps need a per-run human approval (INV-7).",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "job_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": {
+        "$ref": "#/$defs/step"
+      }
+    }
+  },
+  "required": [
+    "id",
+    "job_id",
+    "summary",
+    "steps",
+    "created_at"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "step": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "primitive": {
+          "enum": [
+            "lease_target",
+            "console_on",
+            "baseline_snapshot",
+            "power_cycle",
+            "sel_snapshot",
+            "inventory_snapshot",
+            "stress",
+            "run_diag",
+            "firmware_flash",
+            "secure_erase",
+            "bios_reset",
+            "raid_reconfigure",
+            "collect_logs",
+            "release_target"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "args": {
+          "type": "object"
+        },
+        "risk": {
+          "enum": [
+            "safe",
+            "caution",
+            "destructive"
+          ]
+        },
+        "when": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "n",
+        "primitive",
+        "title",
+        "args",
+        "risk"
+      ],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Take the exclusive lease on the target for this run.",
+          "properties": {
+            "primitive": {
+              "const": "lease_target"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                }
+              },
+              "required": [
+                "target"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Start capturing the serial console (SOL) and syslog.",
+          "properties": {
+            "primitive": {
+              "const": "console_on"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                }
+              },
+              "required": [
+                "target"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Record inventory, PCIe link state, firmware, counters and SEL as the baseline.",
+          "properties": {
+            "primitive": {
+              "const": "baseline_snapshot"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                }
+              },
+              "required": [
+                "target"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "One power cycle: ARM → QUIESCE → ACT → SETTLE → VERIFY against the baseline. Kind warm (OS reboot), dc (BMC stays up) or ac (BMC cycles too; destructive).",
+          "properties": {
+            "primitive": {
+              "const": "power_cycle"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                },
+                "kind": {
+                  "enum": [
+                    "warm",
+                    "dc",
+                    "ac"
+                  ]
+                },
+                "cycle": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "settle_s": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "total_cycles": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "How many power cycles the whole plan has, so the cycle map can be drawn."
+                }
+              },
+              "required": [
+                "target",
+                "kind",
+                "cycle"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Read the BMC event log.",
+          "properties": {
+            "primitive": {
+              "const": "sel_snapshot"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                }
+              },
+              "required": [
+                "target"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Read inventory, PCIe link state and firmware versions.",
+          "properties": {
+            "primitive": {
+              "const": "inventory_snapshot"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                }
+              },
+              "required": [
+                "target"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Run a stress tool on the target over SSH for a bounded time.",
+          "properties": {
+            "primitive": {
+              "const": "stress"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                },
+                "tool": {
+                  "type": "string",
+                  "enum": [
+                    "dcgmi",
+                    "fio",
+                    "ipmitool",
+                    "memtester",
+                    "mft",
+                    "nvqual",
+                    "perftest",
+                    "smartctl",
+                    "stress-ng"
+                  ]
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "duration_s": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 86400
+                }
+              },
+              "required": [
+                "target",
+                "tool"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Run a vendor diagnostic on the target over SSH.",
+          "properties": {
+            "primitive": {
+              "const": "run_diag"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                },
+                "tool": {
+                  "type": "string",
+                  "enum": [
+                    "dcgmi",
+                    "fio",
+                    "ipmitool",
+                    "memtester",
+                    "mft",
+                    "nvqual",
+                    "perftest",
+                    "smartctl",
+                    "stress-ng"
+                  ]
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "timeout_s": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 86400
+                }
+              },
+              "required": [
+                "target",
+                "tool"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Flash a firmware image onto a component. Destructive.",
+          "properties": {
+            "primitive": {
+              "const": "firmware_flash"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                },
+                "component": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "image_ref": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "A reference into the firmware store, never a path a model chose."
+                }
+              },
+              "required": [
+                "target",
+                "component",
+                "image_ref"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Securely erase a storage device. Destructive.",
+          "properties": {
+            "primitive": {
+              "const": "secure_erase"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                },
+                "device": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "target",
+                "device"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Reset BIOS settings to defaults. Destructive.",
+          "properties": {
+            "primitive": {
+              "const": "bios_reset"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                }
+              },
+              "required": [
+                "target"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Change the RAID layout. Destructive.",
+          "properties": {
+            "primitive": {
+              "const": "raid_reconfigure"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                },
+                "layout": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "target",
+                "layout"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Collect console, syslog, SEL and tool output onto the ticket.",
+          "properties": {
+            "primitive": {
+              "const": "collect_logs"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                }
+              },
+              "required": [
+                "target"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Release the lease.",
+          "properties": {
+            "primitive": {
+              "const": "release_target"
+            },
+            "args": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "An opaque target reference, never a credential."
+                }
+              },
+              "required": [
+                "target"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "primitive",
+            "args"
+          ]
+        }
+      ]
+    }
+  }
+}

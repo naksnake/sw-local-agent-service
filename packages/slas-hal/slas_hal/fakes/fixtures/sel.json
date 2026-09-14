@@ -1,0 +1,10 @@
+{
+  "@odata.id": "/redfish/v1/Systems/1/LogServices/SEL/Entries",
+  "@odata.type": "#LogEntryCollection.LogEntryCollection",
+  "Members@odata.count": 3,
+  "Members": [
+    { "Id": "1", "Created": "2026-09-10T07:00:00Z", "Severity": "OK", "Message": "System boot initiated", "SensorType": "System Event", "EntryType": "SEL" },
+    { "Id": "2", "Created": "2026-09-10T07:00:12Z", "Severity": "OK", "Message": "BIOS POST completed", "SensorType": "System Firmware Progress", "EntryType": "SEL" },
+    { "Id": "3", "Created": "2026-09-10T07:01:40Z", "Severity": "Warning", "Message": "Fan 3 speed below threshold, recovered", "SensorType": "Fan", "EntryType": "SEL" }
+  ]
+}

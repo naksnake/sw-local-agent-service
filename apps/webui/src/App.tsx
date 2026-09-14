@@ -6,20 +6,23 @@ import { CodingPage } from "./coding/CodingPage";
 import type { GitApi } from "./git/api";
 import { GitHostsAdmin } from "./git/GitHostsAdmin";
 import { GitRemotesSettings } from "./git/GitRemotesSettings";
+import type { ValidationApi } from "./validation/api";
+import { ValidationPage } from "./validation/ValidationPage";
 
 // The shell plus the pages built so far (CLAUDE.md §9): Coding (with the per-project Git
-// panel and Terminal), Settings → Git remotes, Admin → Git hosts. Sign-in and the other
-// pages arrive with their phases; until apps/api exists the pages run on the API fakes
-// main.tsx passes in, and the Home page says so.
+// panel and Terminal), Validation (LED cycle map, console, findings), Settings → Git
+// remotes, Admin → Git hosts. Sign-in and the other pages arrive with their phases; until
+// apps/api exists the pages run on the API fakes main.tsx passes in, and the Home page says so.
 
 interface Props {
   codingApi?: CodingApi;
+  validationApi?: ValidationApi;
   gitApi?: GitApi;
 }
 
-type Page = "home" | "coding" | "settings" | "admin";
+type Page = "home" | "coding" | "validation" | "settings" | "admin";
 
-export function App({ codingApi, gitApi }: Props) {
+export function App({ codingApi, validationApi, gitApi }: Props) {
   const [page, setPage] = useState<Page>("home");
   const navItem = (target: Page, label: string) => (
     <button
@@ -44,6 +47,7 @@ export function App({ codingApi, gitApi }: Props) {
           <span className="mr-4 text-sm font-semibold tracking-tight">{PRODUCT_NAME}</span>
           {navItem("home", "Home")}
           {codingApi !== undefined && navItem("coding", "Coding")}
+          {validationApi !== undefined && navItem("validation", "Validation")}
           {gitApi !== undefined && navItem("settings", "Settings")}
           {gitApi !== undefined && navItem("admin", "Admin")}
         </nav>
@@ -59,6 +63,9 @@ export function App({ codingApi, gitApi }: Props) {
         )}
         {page === "coding" && codingApi !== undefined && (
           <CodingPage api={codingApi} {...(gitApi !== undefined ? { gitApi } : {})} />
+        )}
+        {page === "validation" && validationApi !== undefined && (
+          <ValidationPage api={validationApi} />
         )}
         {page === "settings" && gitApi !== undefined && <GitRemotesSettings api={gitApi} />}
         {page === "admin" && gitApi !== undefined && <GitHostsAdmin api={gitApi} />}

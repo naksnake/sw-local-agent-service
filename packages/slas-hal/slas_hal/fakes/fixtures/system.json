@@ -1,0 +1,16 @@
+{
+  "@odata.id": "/redfish/v1/Systems/1",
+  "@odata.type": "#ComputerSystem.v1_20_0.ComputerSystem",
+  "Id": "1",
+  "Name": "System",
+  "Model": "SLAS-GX8",
+  "Manufacturer": "SW Local Agent Service test fixture",
+  "SerialNumber": "SN-GX8-0001",
+  "PowerState": "On",
+  "BiosVersion": "2.4.1",
+  "ProcessorSummary": { "Count": 2, "Model": "Xeon Platinum 8480+" },
+  "MemorySummary": { "TotalSystemMemoryGiB": 1024 },
+  "Status": { "State": "Enabled", "Health": "OK" },
+  "Links": { "Chassis": [{ "@odata.id": "/redfish/v1/Chassis/1" }] },
+  "Oem": { "Vendor": { "UnknownField": "ignored on purpose" } }
+}

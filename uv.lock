@@ -23,6 +23,7 @@ members = [
     "slas-skills",
     "slas-sop",
     "slas-triage",
+    "slas-validation-executor",
     "slas-workspace",
 ]
 
@@ -343,6 +344,16 @@ requires-dist = [
 name = "slas-diff"
 version = "0.0.1"
 source = { editable = "packages/slas-diff" }
+dependencies = [
+    { name = "slas-hal" },
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "slas-hal", editable = "packages/slas-hal" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+]
 
 [[package]]
 name = "slas-eval"
@@ -391,6 +402,12 @@ requires-dist = [
 name = "slas-hal"
 version = "0.0.1"
 source = { editable = "packages/slas-hal" }
+dependencies = [
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
 
 [[package]]
 name = "slas-kernel"
@@ -400,6 +417,7 @@ dependencies = [
     { name = "slas-rag" },
     { name = "slas-schemas" },
     { name = "slas-sop" },
+    { name = "slas-triage" },
 ]
 
 [package.metadata]
@@ -407,6 +425,7 @@ requires-dist = [
     { name = "slas-rag", editable = "packages/slas-rag" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
     { name = "slas-sop", editable = "packages/slas-sop" },
+    { name = "slas-triage", editable = "packages/slas-triage" },
 ]
 
 [[package]]
@@ -441,17 +460,21 @@ version = "0.0.1"
 source = { editable = "services/agent-core-orchestrator" }
 dependencies = [
     { name = "slas-git" },
+    { name = "slas-hal" },
     { name = "slas-kernel" },
     { name = "slas-sandbox-manager" },
     { name = "slas-schemas" },
+    { name = "slas-validation-executor" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "slas-git", editable = "packages/slas-git" },
+    { name = "slas-hal", editable = "packages/slas-hal" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
     { name = "slas-sandbox-manager", editable = "services/sandbox-manager" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "slas-validation-executor", editable = "services/validation-executor" },
 ]
 
 [[package]]
@@ -545,6 +568,33 @@ requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
 name = "slas-triage"
 version = "0.0.1"
 source = { editable = "packages/slas-triage" }
+dependencies = [
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
+
+[[package]]
+name = "slas-validation-executor"
+version = "0.0.1"
+source = { editable = "services/validation-executor" }
+dependencies = [
+    { name = "slas-diff" },
+    { name = "slas-hal" },
+    { name = "slas-kernel" },
+    { name = "slas-schemas" },
+    { name = "slas-triage" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "slas-diff", editable = "packages/slas-diff" },
+    { name = "slas-hal", editable = "packages/slas-hal" },
+    { name = "slas-kernel", editable = "packages/slas-kernel" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "slas-triage", editable = "packages/slas-triage" },
+]
 
 [[package]]
 name = "slas-workspace"
@@ -570,6 +620,7 @@ dependencies = [
     { name = "slas-skills" },
     { name = "slas-sop" },
     { name = "slas-triage" },
+    { name = "slas-validation-executor" },
 ]
 
 [package.dev-dependencies]
@@ -601,6 +652,7 @@ requires-dist = [
     { name = "slas-skills", editable = "packages/slas-skills" },
     { name = "slas-sop", editable = "packages/slas-sop" },
     { name = "slas-triage", editable = "packages/slas-triage" },
+    { name = "slas-validation-executor", editable = "services/validation-executor" },
 ]
 
 [package.metadata.requires-dev]

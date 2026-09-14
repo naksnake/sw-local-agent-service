@@ -9,7 +9,7 @@ Runtime configuration files.
 | `redaction.yaml`, `consensus.yaml` | P3 | Redaction patterns and Consensus Router rules; rendered from code, tests keep them in step (CLAUDE.md §5.3). |
 | `owner-routing.yaml` | P5 | Deterministic owner / component / severity routing for RCA findings (CLAUDE.md §5.4, §10.2). Rendered from `slas_kernel.rca.DEFAULT_OWNER_ROUTING`; first matching rule wins; no match means the owner is "your call". A model never assigns an owner. |
 | `git-hosts.yaml` | P6 | The only Git hosts `git-broker` may reach (CLAUDE.md §5.7). Rendered from `slas_git.hosts.DEFAULT_GIT_HOSTS`; a test keeps them in step. Each host: name, hostname, kind (gitlab · gitea · github · generic), `api_base` for merge requests, allowed protocols, the account name sent with a token, and a pinned `ssh_host_key` before ssh is allowed. `github.com` or `gitlab.com` need an ADR first. Managed under Admin → Git hosts. |
-| `guardrails.yaml` | P7 | See CLAUDE.md §10.2. |
+| `guardrails.yaml` | P7 | Validation guardrails (CLAUDE.md §10.2): max cycles per run, settle floors for warm/DC and AC, boot timeout, consecutive-failure abort, exclusive lease, max run hours, and which step kinds need a per-run approval. Rendered from `slas_validation_executor.guardrails.DEFAULT_GUARDRAILS`; a test keeps them in step. The plan compiler refuses a plan that exceeds them; the executor checks them again at every cycle. |
 
 ## rbac-roles.yaml format
 

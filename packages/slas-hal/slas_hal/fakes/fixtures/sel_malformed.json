@@ -1,0 +1,6 @@
+{
+  "@odata.id": "/redfish/v1/Systems/1/LogServices/SEL/Entries",
+  "Members@odata.count": 3,
+  "Members": [
+    { "Id": "1", "Created": "2026-09-10T07:00:00Z", "Severity": "OK", "Message": "System boot initiated" },
+    { "Id": "2", "Created": "2026-09-10T07:00:12Z", "Severity": "OK", "Mess

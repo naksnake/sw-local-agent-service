@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from slas_hal.primitives import render_plan_schema, render_primitives_yaml
 from slas_llm_gateway.consensus import (
     CONSENSUS_FILE_HEADER,
     DEFAULT_CONSENSUS,
@@ -15,8 +16,29 @@ from slas_llm_gateway.redaction import (
     render_redaction_yaml,
 )
 from slas_model_manager.registry import EXAMPLE_REGISTRY, REGISTRY_FILE_HEADER, render_registry_yaml
+from slas_validation_executor.guardrails import (
+    DEFAULT_GUARDRAILS,
+    GUARDRAILS_FILE_HEADER,
+    render_guardrails_yaml,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_guardrails_yaml_is_in_step() -> None:
+    expected = render_guardrails_yaml(DEFAULT_GUARDRAILS, header=GUARDRAILS_FILE_HEADER)
+    assert (REPO_ROOT / "config" / "guardrails.yaml").read_text(encoding="utf-8") == expected
+    assert "max_cycles_per_run: 100\nmin_settle_s: 10\nmin_ac_settle_s: 30\n" in expected
+    assert "requires_approval: [ac_cycle, firmware_flash, secure_erase, bios_reset, " in expected
+
+
+def test_plan_schema_and_primitives_are_in_step() -> None:
+    schema_path = REPO_ROOT / "plans" / "schema" / "plan.schema.json"
+    assert schema_path.read_text(encoding="utf-8") == render_plan_schema()
+    primitives_path = REPO_ROOT / "plans" / "primitives" / "validation.yaml"
+    assert primitives_path.read_text(encoding="utf-8") == render_primitives_yaml()
+    assert '"primitive": {\n              "const": "power_cycle"' in render_plan_schema()
+    assert "  power_cycle:\n" in render_primitives_yaml()
 
 
 def test_consensus_yaml_is_in_step() -> None:

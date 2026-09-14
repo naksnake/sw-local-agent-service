@@ -1,5 +1,5 @@
-"""Hardware abstraction: Redfish, IPMI, SSH, PDU drivers and recorded fakes (CLAUDE.md §5.2).
-Filled in P7/P8.
-"""
+"""slas_hal: the hardware abstraction every physical action goes through (CLAUDE.md §5.2).
 
-__version__ = "0.0.1"
+Import from the submodules: `slas_hal.model`, `slas_hal.hal`, `slas_hal.redfish`,
+`slas_hal.primitives`, `slas_hal.fakes.bmc`.
+"""

@@ -107,6 +107,8 @@ class Observation(SlasModel):
     summary: str = ""
     votes: list[Vote] = Field(default_factory=list)
     exports: list[Export] = Field(default_factory=list)
+    #: Findings a VERIFY produced; the kernel deduplicates them by fingerprint onto the ticket.
+    findings: list[Finding] = Field(default_factory=list)
 
 
 class StepVerdict(SlasModel):

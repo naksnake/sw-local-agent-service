@@ -1,0 +1,7 @@
+{
+  "@odata.id": "/redfish/v1/Chassis/1/PCIeDevices",
+  "Members@odata.count": 1,
+  "Members": [
+    { "Id": "GPU0", "Name": "NVIDIA H100 SXM", "PCIeInterface": { "MaxLanes": 16 } }
+  ]
+}

@@ -26,6 +26,7 @@ dependencies = [
   "slas-skills",
   "slas-sop",
   "slas-triage",
+  "slas-validation-executor",
 ]
 
 [dependency-groups]
@@ -49,6 +50,7 @@ members = [
   "services/model-manager",
   "services/sandbox-manager",
   "services/screen-worker",
+  "services/validation-executor",
 ]
 
 [tool.uv.sources]
@@ -71,6 +73,7 @@ slas-screen-worker = { workspace = true }
 slas-skills = { workspace = true }
 slas-sop = { workspace = true }
 slas-triage = { workspace = true }
+slas-validation-executor = { workspace = true }
 
 # --- ruff -------------------------------------------------------------------------------
 
@@ -99,8 +102,8 @@ select = [
 allowed-confusables = ["：", "（", "）", "；", "，", "。", "×"]
 
 [tool.ruff.lint.per-file-ignores]
-# asserts, subprocess and fake credentials in tests are fine
-"tests/**" = ["S101", "S603", "S607", "S105", "S106"]
+# asserts, subprocess, fake credentials and seeded `random` generators in tests are fine
+"tests/**" = ["S101", "S603", "S607", "S105", "S106", "S311"]
 # Fixtures with Traditional Chinese sentences: ruff counts a CJK character as two columns.
 "tests/unit/test_sop_translation.py" = ["E501"]
 "tests/unit/test_eval_checks.py" = ["E501"]
@@ -110,7 +113,7 @@ known-first-party = [
   "slas_authz", "slas_cli", "slas_diff", "slas_eval", "slas_git", "slas_git_broker", "slas_hal",
   "slas_kernel", "slas_llm_gateway", "slas_model_manager", "slas_orchestrator", "slas_rag",
   "slas_sandbox_manager", "slas_schemas", "slas_screen", "slas_screen_worker", "slas_skills",
-  "slas_sop", "slas_triage",
+  "slas_sop", "slas_triage", "slas_validation_executor",
 ]
 
 # --- mypy -------------------------------------------------------------------------------
@@ -128,6 +131,7 @@ files = [
   "services/model-manager",
   "services/sandbox-manager",
   "services/screen-worker",
+  "services/validation-executor",
   "tests",
 ]
 plugins = ["pydantic.mypy"]
@@ -141,7 +145,9 @@ addopts = [
   "--strict-markers",
   "--cov=slas_authz",
   "--cov=slas_cli",
+  "--cov=slas_diff",
   "--cov=slas_eval",
+  "--cov=slas_hal",
   "--cov=slas_git",
   "--cov=slas_git_broker",
   "--cov=slas_kernel",
@@ -155,6 +161,8 @@ addopts = [
   "--cov=slas_screen_worker",
   "--cov=slas_skills",
   "--cov=slas_sop",
+  "--cov=slas_triage",
+  "--cov=slas_validation_executor",
   "--cov-report=term-missing",
   "--cov-fail-under=85",
 ]

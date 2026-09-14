@@ -70,6 +70,21 @@ push through a fake Git host on loopback with a hostile pre-push hook and grep e
 for the token afterwards. The Podman driver, the WebSocket/xterm.js terminal and the
 service's HTTP surface wait on their dependency decisions.
 
+**Phase 7: the Validation Agent against fakes.** `plans/` (plan schema and primitives
+rendered from `slas_hal.primitives`), the plan compiler (`suite.md`/`suite.xlsx` → `plan.yaml`
+with the §10.2 reject rules), `slas_hal` (models, Redfish parsers that turn malformed and
+truncated answers into three-part errors, and recorded fakes with planted failures),
+`slas_diff` (device counts, PCIe width AND speed, firmware, AER/EDAC/MCE/Xid, new SEL),
+`services/validation-executor` (ARM/QUIESCE/ACT/SETTLE/VERIFY/GATE with fence markers, the
+guardrails from `config/guardrails.yaml`, exclusive leases and per-cycle crash recovery),
+`slas_triage` (fingerprint, dedup, owner routing, the durable bug index) and bug-ticket
+spawning in the kernel (`[Issue] … | [Owner] EE`, one child ticket per fingerprint across
+runs, carrying the diagnosis votes). The Validation page (LED cycle map, findings, console)
+and the three-step New validation run wizard run on an API fake. The done-when is a test: a
+25-cycle DC run with a PCIe degradation planted at cycle 14 yields one deduplicated bug
+ticket with 3 votes and an EN/中文 SOP; a kill mid-cycle resumes at that cycle without a
+second power action; an AC plan is blocked until approved. Real drivers wait for P8.
+
 ## Developing
 
 ```bash

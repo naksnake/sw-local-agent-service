@@ -1,0 +1,66 @@
+# Validation plan primitives for SW Local Agent Service (CLAUDE.md §10.2).
+# Rendered from slas_hal.primitives.PRIMITIVES; a unit test keeps file and code in step.
+# Destructive steps (and power_cycle kind: ac) need a per-run human approval (INV-7).
+version: 1
+primitives:
+  lease_target:
+    description: "Take the exclusive lease on the target for this run."
+    risk: safe
+    required: [target]
+  console_on:
+    description: "Start capturing the serial console (SOL) and syslog."
+    risk: safe
+    required: [target]
+  baseline_snapshot:
+    description: "Record inventory, PCIe link state, firmware, counters and SEL as the baseline."
+    risk: safe
+    required: [target]
+  power_cycle:
+    description: "One power cycle: ARM → QUIESCE → ACT → SETTLE → VERIFY against the baseline. Kind warm (OS reboot), dc (BMC stays up) or ac (BMC cycles too; destructive)."
+    risk: caution
+    required: [target, kind, cycle]
+    optional: [settle_s, total_cycles]
+    destructive_when: { kind: [ac] }
+  sel_snapshot:
+    description: "Read the BMC event log."
+    risk: safe
+    required: [target]
+  inventory_snapshot:
+    description: "Read inventory, PCIe link state and firmware versions."
+    risk: safe
+    required: [target]
+  stress:
+    description: "Run a stress tool on the target over SSH for a bounded time."
+    risk: caution
+    required: [target, tool]
+    optional: [args, duration_s]
+  run_diag:
+    description: "Run a vendor diagnostic on the target over SSH."
+    risk: caution
+    required: [target, tool]
+    optional: [args, timeout_s]
+  firmware_flash:
+    description: "Flash a firmware image onto a component. Destructive."
+    risk: destructive
+    required: [target, component, image_ref]
+  secure_erase:
+    description: "Securely erase a storage device. Destructive."
+    risk: destructive
+    required: [target, device]
+  bios_reset:
+    description: "Reset BIOS settings to defaults. Destructive."
+    risk: destructive
+    required: [target]
+  raid_reconfigure:
+    description: "Change the RAID layout. Destructive."
+    risk: destructive
+    required: [target, layout]
+  collect_logs:
+    description: "Collect console, syslog, SEL and tool output onto the ticket."
+    risk: safe
+    required: [target]
+  release_target:
+    description: "Release the lease."
+    risk: safe
+    required: [target]
+approval_kinds: [ac_cycle, firmware_flash, secure_erase, bios_reset, raid_reconfigure]

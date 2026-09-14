@@ -1,5 +1,1 @@
-"""Baseline vs snapshot diff: device counts, PCIe width and speed, firmware, counters (CLAUDE.md
-§10.2). Filled in P7.
-"""
-
-__version__ = "0.0.1"
+"""slas_diff: baseline vs snapshot (CLAUDE.md §10.2 VERIFY). Import from `slas_diff.diff`."""

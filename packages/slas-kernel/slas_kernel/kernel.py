@@ -22,9 +22,10 @@ from slas_kernel.clock import Clock, SystemClock
 from slas_kernel.executor import ExecutionContext, Executor
 from slas_kernel.journal import Journal
 from slas_kernel.logs import collect_logs
-from slas_kernel.rca import RcaPipeline, placeholder_rca
+from slas_kernel.rca import CrossChecker, RcaPipeline, placeholder_rca
 from slas_kernel.sop import build_sop_model, render_sop
 from slas_kernel.store import TicketStore
+from slas_schemas.finding import Finding
 from slas_schemas.job import Job, MesTicket, Upload
 from slas_schemas.plan import Plan, Step
 from slas_schemas.ticket import (
@@ -34,8 +35,13 @@ from slas_schemas.ticket import (
     Ticket,
     TicketState,
 )
+from slas_schemas.vote import Vote
 from slas_sop.glossary import Glossary
 from slas_sop.translate import Translator
+from slas_triage.dedup import BugIndex, triage
+
+#: Agents whose plans the Consensus Router checks before anything runs (§5.3, unanimous).
+PLAN_CHECKED_AGENTS: frozenset[str] = frozenset({"validation", "factory"})
 
 AfterStepHook = Callable[[Ticket, Step], None]
 
@@ -59,6 +65,7 @@ class Kernel:
         rca_pipeline: RcaPipeline | None = None,
         translator: Translator | None = None,
         glossary: Glossary | None = None,
+        plan_checker: CrossChecker | None = None,
     ) -> None:
         self.data_root = data_root
         self.agent = agent
@@ -71,6 +78,9 @@ class Kernel:
         self.rca_pipeline = rca_pipeline
         self.translator = translator
         self.glossary = glossary
+        # The Consensus Router on Validation and Factory plans (§5.3). INV-11: its verdict is
+        # input to the human approval below, never the approval.
+        self.plan_checker = plan_checker
         # Test seam: called after each step's observation is journalled and the ticket saved.
         self._after_step = after_step
 
@@ -96,6 +106,17 @@ class Kernel:
 
         plan = self.agent.plan(job)
         self._attach_plan(ticket, plan)
+        if self.plan_checker is not None and self.agent.name in PLAN_CHECKED_AGENTS:
+            verdict = self.plan_checker.cross_check(
+                "plan_approval",
+                [plan.summary, *(f"{s.n}. {s.title} [{s.risk}]" for s in plan.steps)],
+            )
+            ticket.votes = [*ticket.votes, *verdict.votes]
+            journal.append(
+                "note",
+                ticket.id,
+                {"plan_cross_check": verdict.sentence, "agreed": verdict.agreed},
+            )
         self._transition(ticket, journal, TicketState.PLANNED, plan.sentence())
 
         if plan.destructive:
@@ -279,17 +300,79 @@ class Kernel:
             *ticket.exports,
             *(e for e in observation.exports if e.path not in known_exports),
         ]
+        if observation.findings:
+            # One finding per fingerprint on the ticket; a repeat adds its evidence only.
+            merged = {f.fingerprint: f.model_copy(deep=True) for f in ticket.findings}
+            for finding in observation.findings:
+                first = merged.get(finding.fingerprint)
+                if first is None:
+                    merged[finding.fingerprint] = finding.model_copy(deep=True)
+                    continue
+                extra = [e for e in finding.evidence if e not in first.evidence]
+                first.evidence = [*first.evidence, *extra][:20]
+            ticket.findings = list(merged.values())
+
+    def _spawn_bug_tickets(self, ticket: Ticket, *, votes: list[Vote]) -> list[str]:
+        """Child bug tickets from findings, one per fingerprint across runs (§5.4, §10.2).
+
+        A finding already tracked (this run or an earlier one) is linked to its ticket; a new
+        one gets a child ticket in `Open`, titled `[Issue] … | [Owner] …`, carrying the run's
+        RCA and the diagnosis votes, for a person to confirm. Nothing here marks anything
+        PASS or FAIL (INV-11).
+        """
+        index = BugIndex(self.data_root / "Tickets" / "bug-index.json")
+        spawned: list[str] = []
+        updated: list[Finding] = []
+        for finding in triage(ticket.findings):
+            if finding.ticket_id is not None:
+                updated.append(finding)
+                continue
+            known = index.lookup(finding.fingerprint)
+            if known is not None:
+                index.record(finding.fingerprint, known.ticket_id, seen_in=ticket.id)
+                updated.append(finding.model_copy(update={"ticket_id": known.ticket_id}))
+                continue
+            now = self.clock.now()
+            child_id = self.store.next_ticket_id(ticket.agent)
+            child = Ticket(
+                id=child_id,
+                agent=ticket.agent,
+                user=ticket.user,
+                title=finding.headline(),
+                job=Job(
+                    id=f"{ticket.job.id}#bug-{finding.fingerprint[:8]}",
+                    agent=ticket.agent,
+                    user=ticket.user,
+                    title=finding.headline(),
+                    target=ticket.job.target,
+                    created_at=now,
+                ),
+                findings=[finding.model_copy(update={"ticket_id": child_id})],
+                rca=ticket.rca,
+                votes=list(votes),
+                parent=ticket.id,
+                created_at=now,
+                updated_at=now,
+            )
+            self.store.save(child)
+            index.record(finding.fingerprint, child_id, seen_in=ticket.id)
+            spawned.append(child_id)
+            updated.append(finding.model_copy(update={"ticket_id": child_id}))
+        ticket.findings = updated
+        return spawned
 
     def _analyse_and_close(self, ticket: Ticket, journal: Journal) -> Ticket:
         """COLLECT → RCA → SOP → CLOSE."""
         ticket.logs = collect_logs(ticket, self.ticket_dir(ticket.id) / "logs")
         journal.append("note", ticket.id, {"logs": ticket.logs.model_dump(mode="json")})
+        rca_votes: list[Vote] = []
         if self.rca_pipeline is None:
             ticket.rca = placeholder_rca(ticket)
             journal.append("note", ticket.id, {"rca": ticket.rca.model_dump(mode="json")})
         else:
             result = self.rca_pipeline.analyse(ticket)
             ticket.rca = result.rca
+            rca_votes = list(result.votes)
             ticket.votes = [*ticket.votes, *result.votes]
             known = {finding.fingerprint for finding in ticket.findings}
             ticket.findings = [
@@ -307,8 +390,13 @@ class Kernel:
                     "citations": result.citations,
                 },
             )
+        spawned = self._spawn_bug_tickets(ticket, votes=rca_votes)
+        if spawned:
+            journal.append("note", ticket.id, {"bug_tickets": spawned})
         failed = any(record.status == "failed" for record in ticket.steps)
-        final_state = TicketState.NEEDS_REVIEW if failed else TicketState.DONE
+        # A finding is a person's to confirm (§5.4): the run itself ends in Needs review.
+        needs_review = failed or bool(ticket.findings)
+        final_state = TicketState.NEEDS_REVIEW if needs_review else TicketState.DONE
         model = build_sop_model(ticket, self.agent.sop_template(), final_state=final_state)
         rendered = render_sop(
             model, self.sop_dir(ticket.id), translator=self.translator, glossary=self.glossary
@@ -331,6 +419,16 @@ class Kernel:
                 journal,
                 TicketState.NEEDS_REVIEW,
                 "A step failed; the logs, the analysis and the SOP are attached for review.",
+            )
+        elif needs_review:
+            count = len(ticket.findings)
+            noun = "finding needs" if count == 1 else "findings need"
+            self._transition(
+                ticket,
+                journal,
+                TicketState.NEEDS_REVIEW,
+                f"Every step finished, but {count} {noun} your review; "
+                "the logs, the analysis and the SOP are attached.",
             )
         else:
             self._transition(
