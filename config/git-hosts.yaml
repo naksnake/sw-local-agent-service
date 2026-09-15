@@ -1,0 +1,20 @@
+# Git host allowlist for SW Local Agent Service (CLAUDE.md §5.7).
+# Rendered from slas_git.hosts.DEFAULT_GIT_HOSTS; a unit test keeps file and code in step.
+# git-broker is the only member of the slas-git network and reaches only these hosts.
+# github.com or gitlab.com need an ADR (INV-1 exception) before they are added here.
+version: 1
+hosts:
+  - name: gitlab-internal
+    hostname: gitlab.internal
+    kind: gitlab
+    api_base: "https://gitlab.internal/api/v4"
+    protocols: [https, ssh]
+    https_username: oauth2
+    note: "Quickstart default. Pin ssh_host_key before allowing ssh."
+  - name: gitea-internal
+    hostname: gitea.internal
+    kind: gitea
+    api_base: "https://gitea.internal/api/v1"
+    protocols: [https]
+    https_username: git
+    note: "Quickstart default."

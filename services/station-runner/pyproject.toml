@@ -1,0 +1,23 @@
+[project]
+name = "slas-station-runner"
+version = "0.0.1"
+description = "Daemon on a physical test station: signed step batches over mTLS, screenshots back"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = ["slas-hal", "slas-schemas", "slas-screen", "slas-skills"]
+
+[project.scripts]
+slas-station-runner = "slas_station_runner.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.uv.sources]
+slas-hal = { workspace = true }
+slas-schemas = { workspace = true }
+slas-screen = { workspace = true }
+slas-skills = { workspace = true }

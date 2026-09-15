@@ -1,0 +1,19 @@
+[project]
+name = "slas-screen-worker"
+version = "0.0.1"
+description = "Screen worker: Xvfb + x11vnc + noVNC per session, driving the screen driver"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = ["slas-observability", "slas-schemas", "slas-screen"]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.uv.sources]
+slas-observability = { workspace = true }
+slas-schemas = { workspace = true }
+slas-screen = { workspace = true }

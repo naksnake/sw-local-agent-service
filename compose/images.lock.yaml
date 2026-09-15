@@ -1,0 +1,232 @@
+# Image lock for SW Local Agent Service (ADR-0003, INV-8). Rendered from
+# slas_deploy.images.DEFAULT_IMAGES; a unit test keeps file and code in step; the JSON twin
+# is what install.sh reads. Tags are immutable upstream releases. `digest` and `image_id`
+# are filled by scripts/lock-images.sh on a connected build host and signed with cosign;
+# while any image the chosen profile starts is null, install.sh refuses to start it.
+version: 1
+default_registry: registry.internal
+images:
+  - name: postgres
+    reference: "library/postgres:16.6"
+    upstream: "docker.io/library/postgres:16.6"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [quickstart, prod]
+  - name: redis
+    reference: "library/redis:7.4.2"
+    upstream: "docker.io/library/redis:7.4.2"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [quickstart, prod]
+  - name: minio
+    reference: "minio/minio:RELEASE.2025-04-22T22-12-26Z"
+    upstream: "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [quickstart, prod]
+  - name: mc
+    reference: "minio/mc:RELEASE.2025-04-16T18-13-26Z"
+    upstream: "quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [prod]
+  - name: qdrant
+    reference: "qdrant/qdrant:v1.13.4"
+    upstream: "docker.io/qdrant/qdrant:v1.13.4"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [quickstart, prod]
+  - name: prometheus
+    reference: "prom/prometheus:v3.2.1"
+    upstream: "quay.io/prometheus/prometheus:v3.2.1"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [quickstart, prod]
+  - name: alertmanager
+    reference: "prom/alertmanager:v0.28.1"
+    upstream: "quay.io/prometheus/alertmanager:v0.28.1"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [quickstart, prod]
+  - name: grafana
+    reference: "grafana/grafana:11.5.2"
+    upstream: "docker.io/grafana/grafana:11.5.2"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [quickstart, prod]
+  - name: dcgm-exporter
+    reference: "nvidia/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
+    upstream: "nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [quickstart, prod]
+  - name: node-exporter
+    reference: "prom/node-exporter:v1.9.0"
+    upstream: "quay.io/prometheus/node-exporter:v1.9.0"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [quickstart, prod]
+  - name: postgres-exporter
+    reference: "prometheuscommunity/postgres-exporter:v0.17.1"
+    upstream: "quay.io/prometheuscommunity/postgres-exporter:v0.17.1"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [quickstart, prod]
+  - name: vault
+    reference: "hashicorp/vault:1.18.5"
+    upstream: "docker.io/hashicorp/vault:1.18.5"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [prod]
+  - name: keycloak
+    reference: "keycloak/keycloak:26.1.4"
+    upstream: "quay.io/keycloak/keycloak:26.1.4"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [prod]
+  - name: loki
+    reference: "grafana/loki:3.4.2"
+    upstream: "docker.io/grafana/loki:3.4.2"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [prod]
+  - name: tempo
+    reference: "grafana/tempo:2.7.1"
+    upstream: "docker.io/grafana/tempo:2.7.1"
+    first_party: false
+    digest: null
+    image_id: null
+    signed_by: null
+    profiles: [prod]
+  - name: edge
+    reference: "slas/edge:${SLAS_VERSION}"
+    upstream: "built offline from images/ and the vendored caches"
+    first_party: true
+    digest: null
+    image_id: null
+    signed_by: "slas-release"
+    profiles: [quickstart, prod]
+  - name: webui
+    reference: "slas/webui:${SLAS_VERSION}"
+    upstream: "built offline from images/ and the vendored caches"
+    first_party: true
+    digest: null
+    image_id: null
+    signed_by: "slas-release"
+    profiles: [quickstart, prod]
+  - name: api
+    reference: "slas/api:${SLAS_VERSION}"
+    upstream: "built offline from images/ and the vendored caches"
+    first_party: true
+    digest: null
+    image_id: null
+    signed_by: "slas-release"
+    profiles: [quickstart, prod]
+  - name: agent-core-orchestrator
+    reference: "slas/agent-core-orchestrator:${SLAS_VERSION}"
+    upstream: "built offline from images/ and the vendored caches"
+    first_party: true
+    digest: null
+    image_id: null
+    signed_by: "slas-release"
+    profiles: [quickstart, prod]
+  - name: llm-gateway
+    reference: "slas/llm-gateway:${SLAS_VERSION}"
+    upstream: "built offline from images/ and the vendored caches"
+    first_party: true
+    digest: null
+    image_id: null
+    signed_by: "slas-release"
+    profiles: [quickstart, prod]
+  - name: model-manager
+    reference: "slas/model-manager:${SLAS_VERSION}"
+    upstream: "built offline from images/ and the vendored caches"
+    first_party: true
+    digest: null
+    image_id: null
+    signed_by: "slas-release"
+    profiles: [quickstart, prod]
+  - name: sandbox-manager
+    reference: "slas/sandbox-manager:${SLAS_VERSION}"
+    upstream: "built offline from images/ and the vendored caches"
+    first_party: true
+    digest: null
+    image_id: null
+    signed_by: "slas-release"
+    profiles: [quickstart, prod]
+  - name: screen-worker
+    reference: "slas/screen-worker:${SLAS_VERSION}"
+    upstream: "built offline from images/ and the vendored caches"
+    first_party: true
+    digest: null
+    image_id: null
+    signed_by: "slas-release"
+    profiles: [quickstart, prod]
+  - name: git-broker
+    reference: "slas/git-broker:${SLAS_VERSION}"
+    upstream: "built offline from images/ and the vendored caches"
+    first_party: true
+    digest: null
+    image_id: null
+    signed_by: "slas-release"
+    profiles: [quickstart, prod]
+  - name: validation-executor
+    reference: "slas/validation-executor:${SLAS_VERSION}"
+    upstream: "built offline from images/ and the vendored caches"
+    first_party: true
+    digest: null
+    image_id: null
+    signed_by: "slas-release"
+    profiles: [quickstart, prod]
+  - name: factory-executor
+    reference: "slas/factory-executor:${SLAS_VERSION}"
+    upstream: "built offline from images/ and the vendored caches"
+    first_party: true
+    digest: null
+    image_id: null
+    signed_by: "slas-release"
+    profiles: [quickstart, prod]
+  - name: local-search-api
+    reference: "slas/local-search-api:${SLAS_VERSION}"
+    upstream: "built offline from images/ and the vendored caches"
+    first_party: true
+    digest: null
+    image_id: null
+    signed_by: "slas-release"
+    profiles: [quickstart, prod]
+  - name: postgres-pgbackrest
+    reference: "slas/postgres-pgbackrest:${SLAS_VERSION}"
+    upstream: "built offline from images/ and the vendored caches"
+    first_party: true
+    digest: null
+    image_id: null
+    signed_by: "slas-release"
+    profiles: [prod]

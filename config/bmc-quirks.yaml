@@ -1,0 +1,16 @@
+# BMC quirk shims for SW Local Agent Service (CLAUDE.md §15 open decision 4).
+# Rendered from slas_hal.quirks.DEFAULT_QUIRKS; a unit test keeps file and code in step.
+# Matching is by Manufacturer regex and inclusive firmware range; later entries override
+# earlier ones. Add a real vendor only from a recorded answer, never from memory.
+version: 1
+quirks:
+  - id: dmtf-defaults
+    manufacturer: ""
+    note: "Every BMC starts from the DMTF-standard behaviour; later entries override."
+    set: {}
+  - id: slas-fixture
+    manufacturer: "SW Local Agent Service test fixture"
+    note: "The recorded fixture BMC: BDF under Oem.Slas, SEL served in pages of 2."
+    set:
+      bdf_path: "Oem.Slas.BDF"
+      sel_page_size: 2

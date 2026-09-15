@@ -1,0 +1,35 @@
+[project]
+name = "slas-orchestrator"
+version = "0.0.1"
+description = "Runs the Agent Kernel and hosts the Coding, Validation and Factory agents"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "slas-observability",
+  "slas-factory-executor",
+  "slas-git",
+  "slas-hal",
+  "slas-kernel",
+  "slas-llm-gateway",
+  "slas-sandbox-manager",
+  "slas-schemas",
+  "slas-validation-executor",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.uv.sources]
+slas-observability = { workspace = true }
+slas-factory-executor = { workspace = true }
+slas-git = { workspace = true }
+slas-hal = { workspace = true }
+slas-kernel = { workspace = true }
+slas-llm-gateway = { workspace = true }
+slas-sandbox-manager = { workspace = true }
+slas-schemas = { workspace = true }
+slas-validation-executor = { workspace = true }

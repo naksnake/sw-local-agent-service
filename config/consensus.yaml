@@ -1,0 +1,48 @@
+# Consensus Router rules for SW Local Agent Service (CLAUDE.md §5.3).
+# Rendered from slas_llm_gateway.consensus.DEFAULT_CONSENSUS; a unit test keeps file and
+# code in step. INV-11: a verdict never authorises anything by itself. Cross-checks may use
+# at most token_budget_pct of the daily tokens; beyond that the router degrades to one
+# model and flags it.
+version: 1
+default_voters: 3
+token_budget_pct: 5.0
+decisions:
+  plan_approval:
+    decision: plan_approval
+    description: "A Validation or Factory plan before anything runs."
+    voters: 3
+    rule: unanimous
+    approve_phrase: "approve the plan"
+    if_not_met: "You decide; the concerns are shown above."
+  code_change:
+    decision: code_change
+    description: "The Coding Agent's final diff."
+    voters: 3
+    rule: majority
+    approve_phrase: "approve the change"
+    if_not_met: "Address each concern or dismiss it with a note."
+  ticket_diagnosis:
+    decision: ticket_diagnosis
+    description: "Owner, severity and root cause of a finding."
+    voters: 3
+    rule: majority_per_field
+    approve_phrase: "agree"
+    fields:
+      - owner
+      - severity
+      - root_cause
+    if_not_met: "Your call."
+  factory_pass:
+    decision: factory_pass
+    description: "A unit's PASS verdict on the line."
+    voters: 3
+    rule: unanimous
+    approve_phrase: "say PASS"
+    if_not_met: "The line lead decides."
+  rca_conclusion:
+    decision: rca_conclusion
+    description: "The root-cause conclusion in a report."
+    voters: 3
+    rule: majority
+    approve_phrase: "agree with the conclusion"
+    if_not_met: "The conclusion is marked uncertain in the report."

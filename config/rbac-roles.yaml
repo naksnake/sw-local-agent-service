@@ -1,0 +1,71 @@
+# Roles and capabilities for SW Local Agent Service (CLAUDE.md §5.7, ADR-0006).
+# Rendered from slas_authz.roles.DEFAULT_ROLES; a unit test keeps file and code in step.
+# Role definitions are configuration: the api reads this file read-only and picks up an
+# edit on the next request. Assigning a role to a person is data in the database.
+# git:push_protected is granted to nobody by default (§5.7). Changing the role set needs
+# an ADR (§15).
+version: 1
+default_role: engineer
+roles:
+  administrator:
+    label: "Administrator"
+    description: "Manages people, settings, Git hosts, test stations and models, and can do everything an engineer can."
+    capabilities:
+      - screen
+      - ssh
+      - redfish
+      - files
+      - network
+      - git:remote_manage
+      - git:clone
+      - git:pull
+      - git:push_branch
+      - git:bundle
+      - git:terminal
+      - git:hosts_manage
+      - admin:people
+      - admin:settings
+      - approve:destructive
+      - factory:verdict
+      - factory:control
+      - factory:stations_manage
+      - model:manage
+  engineer:
+    label: "Engineer"
+    description: "Runs coding tasks, validation runs and factory jobs, and approves destructive steps."
+    capabilities:
+      - screen
+      - ssh
+      - redfish
+      - files
+      - network
+      - git:remote_manage
+      - git:clone
+      - git:pull
+      - git:push_branch
+      - git:bundle
+      - git:terminal
+      - approve:destructive
+      - factory:control
+  line_lead:
+    label: "Line lead"
+    description: "An engineer who also decides a factory PASS or FAIL when the voters disagree."
+    capabilities:
+      - screen
+      - ssh
+      - redfish
+      - files
+      - network
+      - git:remote_manage
+      - git:clone
+      - git:pull
+      - git:push_branch
+      - git:bundle
+      - git:terminal
+      - approve:destructive
+      - factory:control
+      - factory:verdict
+  viewer:
+    label: "Viewer"
+    description: "Reads tickets, runs and reports."
+    capabilities: []

@@ -1,0 +1,26 @@
+# Rendered from slas_observability (CLAUDE.md §8.2, P11); a unit test keeps file and
+# code in step. Edit the Python, then run `uv run python -m slas_observability.render`.
+global:
+  resolve_timeout: 5m
+route:
+  receiver: slas-local
+  group_by:
+    - alertname
+    - instance
+    - decision
+    - station
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers:
+        - "severity=\"critical\""
+      receiver: slas-local
+      group_wait: 10s
+      repeat_interval: 1h
+receivers:
+  - name: slas-local
+    webhook_configs:
+      - url: http://api:8000/internal/alerts
+        send_resolved: true
+        max_alerts: 50

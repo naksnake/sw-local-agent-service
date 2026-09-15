@@ -1,0 +1,12 @@
+[SOL Session operational. Use ~? for help]
+BIOS Version 2.4.1  Copyright (c) test fixture
+POST: memory training 1024 GiB ... done
+POST: PCIe enumeration ... 11 devices
+Booting from Hard Drive C:
+[    0.000000] Linux version 6.8.0-slas (gcc 13.2.0) #1 SMP
+[    0.000000] Command line: BOOT_IMAGE=/vmlinuz root=/dev/nvme0n1p2 ro console=ttyS0,115200
+[    1.204311] pci 0000:8a:00.0: [10de:2330] type 00 class 0x030200
+[    2.883104] NVRM: loading NVIDIA UNIX x86_64 Kernel Module  550.90.07
+[    4.011239] EDAC MC0: Giving out device to module skx_edac controller Skylake Socket#0 IMC#0
+[    6.532004] systemd[1]: Reached target Multi-User System.
+slas-gx8 login:

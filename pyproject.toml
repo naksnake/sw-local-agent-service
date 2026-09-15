@@ -1,0 +1,190 @@
+# Workspace root for SW Local Agent Service (CLAUDE.md §11, §13).
+# Python 3.12 · uv · ruff · mypy --strict · pytest. Every version below is pinned (INV-8).
+
+[project]
+name = "slas-workspace"
+version = "0.0.1"
+description = "SW Local Agent Service — workspace root (not a package)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "slas-authz",
+  "slas-cli",
+  "slas-deploy",
+  "slas-diff",
+  "slas-eval",
+  "slas-factory-executor",
+  "slas-git",
+  "slas-git-broker",
+  "slas-hal",
+  "slas-kernel",
+  "slas-llm-gateway",
+  "slas-model-manager",
+  "slas-observability",
+  "slas-orchestrator",
+  "slas-rag",
+  "slas-sandbox-manager",
+  "slas-schemas",
+  "slas-screen",
+  "slas-screen-worker",
+  "slas-skills",
+  "slas-station-runner",
+  "slas-sop",
+  "slas-triage",
+  "slas-validation-executor",
+]
+
+[dependency-groups]
+dev = [
+  "mypy==2.3.1",
+  "pytest==9.1.1",
+  "pytest-cov==7.1.0",
+  "ruff==0.16.7",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+# apps/api and the remaining services/* join the workspace when they gain a pyproject.
+members = [
+  "packages/*",
+  "services/agent-core-orchestrator",
+  "services/factory-executor",
+  "services/git-broker",
+  "services/llm-gateway",
+  "services/model-manager",
+  "services/sandbox-manager",
+  "services/screen-worker",
+  "services/station-runner",
+  "services/validation-executor",
+]
+
+[tool.uv.sources]
+slas-authz = { workspace = true }
+slas-cli = { workspace = true }
+slas-deploy = { workspace = true }
+slas-diff = { workspace = true }
+slas-eval = { workspace = true }
+slas-factory-executor = { workspace = true }
+slas-git = { workspace = true }
+slas-git-broker = { workspace = true }
+slas-hal = { workspace = true }
+slas-kernel = { workspace = true }
+slas-llm-gateway = { workspace = true }
+slas-model-manager = { workspace = true }
+slas-observability = { workspace = true }
+slas-orchestrator = { workspace = true }
+slas-rag = { workspace = true }
+slas-sandbox-manager = { workspace = true }
+slas-schemas = { workspace = true }
+slas-screen = { workspace = true }
+slas-screen-worker = { workspace = true }
+slas-skills = { workspace = true }
+slas-sop = { workspace = true }
+slas-station-runner = { workspace = true }
+slas-triage = { workspace = true }
+slas-validation-executor = { workspace = true }
+
+# --- ruff -------------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Markdown is excluded on purpose: ruff would reformat the code blocks in CLAUDE.md and the
+# ADRs, and CLAUDE.md changes only by decision (CLAUDE.md §15).
+extend-exclude = [".venv", ".uv-cache", "node_modules", "apps/webui", "*.md", "*.yaml"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",   # pycodestyle
+  "F",        # pyflakes
+  "I",        # isort
+  "N",        # pep8-naming
+  "UP",       # pyupgrade
+  "B",        # bugbear
+  "S",        # bandit — catches shell=True and friends (CLAUDE.md §11)
+  "SIM",      # simplify
+  "C4",       # comprehensions
+  "RUF",      # ruff-specific
+]
+
+# Traditional Chinese copy uses fullwidth punctuation on purpose (INV-13 renderings).
+allowed-confusables = ["：", "（", "）", "；", "，", "。", "×"]
+
+[tool.ruff.lint.per-file-ignores]
+# asserts, subprocess, fake credentials and seeded `random` generators in tests are fine
+"tests/**" = ["S101", "S603", "S607", "S105", "S106", "S311"]
+# Fixtures with Traditional Chinese sentences: ruff counts a CJK character as two columns.
+"tests/unit/test_sop_translation.py" = ["E501"]
+"tests/unit/test_eval_checks.py" = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+  "slas_authz", "slas_cli", "slas_deploy", "slas_diff", "slas_eval", "slas_factory_executor", "slas_git", "slas_git_broker", "slas_hal",
+  "slas_kernel", "slas_llm_gateway", "slas_model_manager", "slas_observability", "slas_orchestrator",
+  "slas_rag",
+  "slas_sandbox_manager", "slas_schemas", "slas_screen", "slas_screen_worker", "slas_skills",
+  "slas_sop", "slas_station_runner", "slas_triage", "slas_validation_executor",
+]
+
+# --- mypy -------------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+pretty = true
+files = [
+  "packages",
+  "services/agent-core-orchestrator",
+  "services/factory-executor",
+  "services/git-broker",
+  "services/llm-gateway",
+  "services/model-manager",
+  "services/sandbox-manager",
+  "services/screen-worker",
+  "services/station-runner",
+  "services/validation-executor",
+  "tests",
+]
+plugins = ["pydantic.mypy"]
+
+# --- pytest / coverage ---------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+  "-q",
+  "--strict-markers",
+  "--cov=slas_authz",
+  "--cov=slas_cli",
+  "--cov=slas_diff",
+  "--cov=slas_eval",
+  "--cov=slas_factory_executor",
+  "--cov=slas_hal",
+  "--cov=slas_git",
+  "--cov=slas_git_broker",
+  "--cov=slas_kernel",
+  "--cov=slas_llm_gateway",
+  "--cov=slas_model_manager",
+  "--cov=slas_orchestrator",
+  "--cov=slas_rag",
+  "--cov=slas_sandbox_manager",
+  "--cov=slas_schemas",
+  "--cov=slas_screen",
+  "--cov=slas_screen_worker",
+  "--cov=slas_skills",
+  "--cov=slas_sop",
+  "--cov=slas_station_runner",
+  "--cov=slas_triage",
+  "--cov=slas_validation_executor",
+  "--cov-report=term-missing",
+  "--cov-fail-under=85",
+]
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+skip_empty = true
+exclude_also = ["if TYPE_CHECKING:", "\\.\\.\\.$"]

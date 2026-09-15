@@ -1,0 +1,29 @@
+[project]
+name = "slas-kernel"
+version = "0.0.1"
+description = "Agent Kernel: the shared lifecycle every agent runs"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "slas-observability",
+    "slas-rag",
+    "slas-schemas",
+    "slas-skills",
+    "slas-sop",
+    "slas-triage",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.uv.sources]
+slas-observability = { workspace = true }
+slas-rag = { workspace = true }
+slas-schemas = { workspace = true }
+slas-skills = { workspace = true }
+slas-sop = { workspace = true }
+slas-triage = { workspace = true }

@@ -1,0 +1,13 @@
+# Validation guardrails for SW Local Agent Service (CLAUDE.md §10.2).
+# Rendered from slas_validation_executor.guardrails.DEFAULT_GUARDRAILS; a unit test keeps
+# file and code in step. The plan compiler refuses a plan that exceeds them and the executor
+# checks them again at every cycle. Hardware is physical and finite (§1.2).
+version: 1
+max_cycles_per_run: 100
+min_settle_s: 10
+min_ac_settle_s: 30
+boot_timeout_s: 900
+consecutive_failure_abort: 3
+exclusive_lease: true
+max_run_hours: 72
+requires_approval: [ac_cycle, firmware_flash, secure_erase, bios_reset, raid_reconfigure]

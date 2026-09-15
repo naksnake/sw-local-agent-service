@@ -1,0 +1,6 @@
+-----BEGIN PUBLIC KEY-----
+REPLACE-WITH-THE-RELEASE-PUBLIC-KEY: `cosign generate-key-pair` on the release host produces
+cosign.key (kept offline, never committed) and cosign.pub. Commit cosign.pub here as
+config/cosign.pub and print its SHA-256 fingerprint in the release notes; install.sh --profile
+prod refuses to start without it (ADR-0012).
+-----END PUBLIC KEY-----

@@ -1,0 +1,9 @@
+{
+  "@odata.id": "/redfish/v1/Systems/1/LogServices/SEL/Entries",
+  "@odata.type": "#LogEntryCollection.LogEntryCollection",
+  "Members@odata.count": 4000,
+  "Members": [
+    { "Id": "1", "Created": "2026-09-10T07:00:00Z", "Severity": "OK", "Message": "System boot initiated", "SensorType": "System Event" },
+    { "Id": "2", "Created": "2026-09-10T07:00:12Z", "Severity": "OK", "Message": "BIOS POST completed", "SensorType": "System Firmware Progress" }
+  ]
+}

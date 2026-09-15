@@ -1,0 +1,39 @@
+# Redaction rules for SW Local Agent Service (CLAUDE.md §5.2, INV-5).
+# Rendered from slas_llm_gateway.redaction.DEFAULT_REDACTION; a unit test keeps file and
+# code in step. The gateway applies these to every prompt before a model sees it, and the
+# kernel applies them to logs before RCA. Rules run in order; `replacement` may keep the
+# non-secret part with regex groups. Values are never logged, only counts per rule.
+version: 1
+rules:
+  - name: private_key_block
+    description: "PEM private keys (SSH deploy keys, TLS keys)."
+    pattern: "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----"
+  - name: url_credentials
+    description: "user:password inside a URL, as in https://user:token@host/."
+    pattern: "(://)[^/\\s:@]+:[^/\\s@]+@"
+    replacement: "\\1[redacted:url_credentials]@"
+  - name: bearer_token
+    description: "Authorization: Bearer <token>."
+    pattern: "(?i)\\b(bearer)\\s+[A-Za-z0-9._~+/=-]{8,}"
+    replacement: "\\1 [redacted:bearer_token]"
+  - name: basic_auth
+    description: "Authorization: Basic <base64>."
+    pattern: "(?i)\\b(basic)\\s+[A-Za-z0-9+/=]{16,}"
+    replacement: "\\1 [redacted:basic_auth]"
+  - name: github_token
+    description: "GitHub personal, OAuth, server, user and refresh tokens."
+    pattern: "\\bgh[pousr]_[A-Za-z0-9]{20,}\\b"
+  - name: gitlab_token
+    description: "GitLab personal and project access tokens."
+    pattern: "\\bglpat-[A-Za-z0-9_-]{20,}\\b"
+  - name: aws_access_key
+    description: "AWS access key ids (also used by MinIO-compatible stores)."
+    pattern: "\\bAKIA[0-9A-Z]{16}\\b"
+  - name: ipmitool_password
+    description: "The -P argument of ipmitool."
+    pattern: "(?i)(\\bipmitool\\b[^\\n]*?\\s-P)\\s+\\S+"
+    replacement: "\\1 [redacted:ipmitool_password]"
+  - name: password_assignment
+    description: "password=, passwd:, secret=, token=, api_key= and similar, including prefixed names such as POSTGRES_PASSWORD."
+    pattern: "(?i)\\b([A-Za-z0-9_-]*?(?:password|passwd|pwd|secret|token|api[_-]?key))(\\s*[=:]\\s*)['\\\"]?[^\\s'\\\"]{4,}['\\\"]?"
+    replacement: "\\1\\2[redacted:password_assignment]"

@@ -1,0 +1,392 @@
+# The prod profile (CLAUDE.md §3, ADR-0012): Vault (credentials resolved at dispatch),
+# Keycloak OIDC beside the built-in accounts, Loki and Tempo, pgBackRest archiving to MinIO
+# with object lock, the Kata/Firecracker sandbox tier. Apply with
+#   docker compose -f compose/docker-compose.yml -f compose/prod.override.yml up -d
+# Rendered from slas_deploy.compose; a unit test keeps file and code in step.
+volumes:
+  loki_data: {}
+  tempo_data: {}
+secrets:
+  vault_approle_role_id:
+    file: "${SLAS_DATA_ROOT}/secrets/vault_approle_role_id"
+  vault_approle_secret_id:
+    file: "${SLAS_DATA_ROOT}/secrets/vault_approle_secret_id"
+  keycloak_admin_password:
+    file: "${SLAS_DATA_ROOT}/secrets/keycloak_admin_password"
+  keycloak_db_password:
+    file: "${SLAS_DATA_ROOT}/secrets/keycloak_db_password"
+  oidc_client_secret:
+    file: "${SLAS_DATA_ROOT}/secrets/oidc_client_secret"
+  pgbackrest_s3_key:
+    file: "${SLAS_DATA_ROOT}/secrets/pgbackrest_s3_key"
+  pgbackrest_s3_secret:
+    file: "${SLAS_DATA_ROOT}/secrets/pgbackrest_s3_secret"
+services:
+  vault:
+    image: "${SLAS_REGISTRY}/hashicorp/vault:1.18.5"
+    restart: unless-stopped
+    user: 100:1000
+    networks:
+      - slas-backend
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      VAULT_ADDR: https://vault:8200
+      SKIP_SETCAP: "true"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - vault
+        - status
+        - "-tls-skip-verify"
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - "../config/vault/vault.hcl:/vault/config/vault.hcl:ro"
+      - "../config/vault/policies:/vault/policies:ro"
+      - "${SLAS_DATA_ROOT}/vault:/vault/file"
+      - "${SLAS_DATA_ROOT}/tls/vault:/vault/tls:ro"
+    command:
+      - server
+      - "-config=/vault/config/vault.hcl"
+  keycloak:
+    image: "${SLAS_REGISTRY}/keycloak/keycloak:26.1.4"
+    restart: unless-stopped
+    user: 1000:1000
+    networks:
+      - slas-frontend
+      - slas-backend
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD_FILE: /run/secrets/keycloak_db_password
+      KC_HOSTNAME: "https://${SLAS_PUBLIC_HOST}/auth"
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_admin_password
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:9000/auth/health/ready
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "../config/keycloak/slas-realm.json:/opt/keycloak/data/import/slas-realm.json:ro"
+    secrets:
+      - keycloak_admin_password
+      - keycloak_db_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - start
+      - "--optimized"
+      - "--import-realm"
+  loki:
+    image: "${SLAS_REGISTRY}/grafana/loki:3.4.2"
+    restart: unless-stopped
+    user: 10001:10001
+    networks:
+      - slas-observability
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:3100/ready
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "../config/loki/loki.yml:/etc/loki/loki.yml:ro"
+      - loki_data:/loki
+    command:
+      - "-config.file=/etc/loki/loki.yml"
+  tempo:
+    image: "${SLAS_REGISTRY}/grafana/tempo:2.7.1"
+    restart: unless-stopped
+    user: 10001:10001
+    networks:
+      - slas-observability
+      - slas-backend
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:3200/ready
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "../config/tempo/tempo.yml:/etc/tempo/tempo.yml:ro"
+      - tempo_data:/var/tempo
+    command:
+      - "-config.file=/etc/tempo/tempo.yml"
+  backup-runner:
+    image: "${SLAS_REGISTRY}/slas/postgres-pgbackrest:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: 999:999
+    networks:
+      - slas-backend
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      PGBACKREST_STANZA: slas
+      BACKUP_FULL_CRON: "${SLAS_BACKUP_FULL_CRON}"
+      BACKUP_DIFF_CRON: "${SLAS_BACKUP_DIFF_CRON}"
+      SLAS_DATA_ROOT: /data
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - pgbackrest
+        - "--stanza=slas"
+        - check
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - "../config/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro"
+      - "../deploy/prod/backup-runner.sh:/usr/local/bin/backup-runner.sh:ro"
+      - "${SLAS_DATA_ROOT}/Backups:/data/Backups"
+      - "${SLAS_DATA_ROOT}/qdrant:/data/qdrant:ro"
+    secrets:
+      - pgbackrest_s3_key
+      - pgbackrest_s3_secret
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command:
+      - /usr/local/bin/backup-runner.sh
+  minio-init:
+    image: "${SLAS_REGISTRY}/minio/mc:RELEASE.2025-04-16T18-13-26Z"
+    restart: on-failure
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-backend
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
+      BACKUP_RETENTION_DAYS: "${SLAS_BACKUP_RETENTION_DAYS}"
+      ARTIFACT_RETENTION_DAYS: "${SLAS_ARTIFACT_RETENTION_DAYS}"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - "true"
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "../deploy/prod/minio-init.sh:/usr/local/bin/minio-init.sh:ro"
+    secrets:
+      - minio_root_password
+      - pgbackrest_s3_key
+      - pgbackrest_s3_secret
+    depends_on:
+      minio:
+        condition: service_healthy
+    command:
+      - /usr/local/bin/minio-init.sh
+  postgres:
+    image: "${SLAS_REGISTRY}/slas/postgres-pgbackrest:${SLAS_VERSION}"
+    command:
+      - postgres
+      - "-c"
+      - "config_file=/etc/postgresql/prod.conf"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - "../config/postgres/prod.conf:/etc/postgresql/prod.conf:ro"
+      - "../config/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro"
+    secrets:
+      - postgres_password
+      - pgbackrest_s3_key
+      - pgbackrest_s3_secret
+  api:
+    environment:
+      SLAS_AUTH_MODES: "builtin,oidc"
+      SLAS_OIDC_ISSUER: "https://${SLAS_PUBLIC_HOST}/auth/realms/slas"
+      SLAS_OIDC_CLIENT_ID: slas-webui
+      SLAS_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+      SLAS_OIDC_ROLE_CLAIM: slas_roles
+      SLAS_ARTIFACT_RETENTION_DAYS: "${SLAS_ARTIFACT_RETENTION_DAYS}"
+      SLAS_ARTIFACT_BUCKET: slas-artifacts
+      SLAS_TRACES_ENDPOINT: http://tempo:4318/v1/traces
+    secrets:
+      - postgres_password
+      - redis_password
+      - secret_key
+      - admin-initial-password
+      - oidc_client_secret
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+  edge:
+    environment:
+      SLAS_AUTH_UPSTREAM: http://keycloak:8080
+  git-broker:
+    environment:
+      CRED_STORE: vault
+      VAULT_ADDR: https://vault:8200
+      VAULT_CACERT: /vault-ca/ca.crt
+      VAULT_ROLE_ID_FILE: /run/secrets/vault_approle_role_id
+      VAULT_SECRET_ID_FILE: /run/secrets/vault_approle_secret_id
+      VAULT_KV_MOUNT: slas
+    volumes:
+      - "${SLAS_DATA_ROOT}/Coding:/data/Coding"
+      - "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:ro"
+      - "${SLAS_DATA_ROOT}/tls/vault/ca.crt:/vault-ca/ca.crt:ro"
+    secrets:
+      - vault_approle_role_id
+      - vault_approle_secret_id
+    depends_on:
+      vault:
+        condition: service_healthy
+  validation-executor:
+    environment:
+      CREDENTIAL_SOURCE: vault
+      VAULT_ADDR: https://vault:8200
+      VAULT_CACERT: /vault-ca/ca.crt
+      VAULT_ROLE_ID_FILE: /run/secrets/vault_approle_role_id
+      VAULT_SECRET_ID_FILE: /run/secrets/vault_approle_secret_id
+      VAULT_KV_MOUNT: slas
+      SLAS_TRACES_ENDPOINT: http://tempo:4318/v1/traces
+    secrets:
+      - vault_approle_role_id
+      - vault_approle_secret_id
+    depends_on:
+      vault:
+        condition: service_healthy
+  factory-executor:
+    environment:
+      CREDENTIAL_SOURCE: vault
+      VAULT_ADDR: https://vault:8200
+      VAULT_CACERT: /vault-ca/ca.crt
+      VAULT_ROLE_ID_FILE: /run/secrets/vault_approle_role_id
+      VAULT_SECRET_ID_FILE: /run/secrets/vault_approle_secret_id
+      VAULT_KV_MOUNT: slas
+      SLAS_TRACES_ENDPOINT: http://tempo:4318/v1/traces
+    secrets:
+      - vault_approle_role_id
+      - vault_approle_secret_id
+    depends_on:
+      vault:
+        condition: service_healthy
+  sandbox-manager:
+    environment:
+      DEFAULT_RUNTIME: kata-fc
+      SANDBOX_TIER: kata
+      REQUIRE_GVISOR: "true"
+  screen-worker:
+    environment:
+      DISPLAY_ISOLATION: kata
+  llm-gateway:
+    environment:
+      SLAS_TRACES_ENDPOINT: http://tempo:4318/v1/traces
+  agent-core-orchestrator:
+    environment:
+      SLAS_TRACES_ENDPOINT: http://tempo:4318/v1/traces
+  grafana:
+    environment:
+      GF_AUTH_GENERIC_OAUTH_ENABLED: "false"
+    volumes:
+      - "../observability/grafana/provisioning:/etc/grafana/provisioning:ro"
+      - "../observability/grafana/dashboards:/etc/grafana/dashboards:ro"
+      - "../config/loki/grafana-datasources.yml:/etc/grafana/provisioning/datasources/loki-tempo.yml:ro"
+      - grafana_data:/var/lib/grafana

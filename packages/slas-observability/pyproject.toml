@@ -1,0 +1,20 @@
+[project]
+name = "slas-observability"
+version = "0.0.1"
+description = "Metrics, trace ids, structured events, the local alert channel, and the provisioned Prometheus/Grafana files"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+# Standard library only: the Prometheus text format and W3C trace context are small and
+# stable, and every service must expose them without a network at install time (INV-1).
+# prometheus_client, structlog and opentelemetry are added if and when approved.
+dependencies = ["slas-schemas"]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.uv.sources]
+slas-schemas = { workspace = true }

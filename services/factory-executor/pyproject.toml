@@ -1,0 +1,31 @@
+[project]
+name = "slas-factory-executor"
+version = "0.0.1"
+description = "Factory executor: deterministic test loop on stations through the station runner"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "slas-observability",
+  "slas-hal",
+  "slas-kernel",
+  "slas-schemas",
+  "slas-skills",
+  "slas-station-runner",
+  "slas-triage",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.uv.sources]
+slas-observability = { workspace = true }
+slas-hal = { workspace = true }
+slas-kernel = { workspace = true }
+slas-schemas = { workspace = true }
+slas-skills = { workspace = true }
+slas-station-runner = { workspace = true }
+slas-triage = { workspace = true }

@@ -1,0 +1,22 @@
+[project]
+name = "slas-validation-executor"
+version = "0.0.1"
+description = "Validation executor: ARM/QUIESCE/ACT/SETTLE/VERIFY/GATE state machine over slas_hal"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = ["slas-observability", "slas-diff", "slas-hal", "slas-kernel", "slas-schemas", "slas-triage"]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.uv.sources]
+slas-observability = { workspace = true }
+slas-diff = { workspace = true }
+slas-hal = { workspace = true }
+slas-kernel = { workspace = true }
+slas-schemas = { workspace = true }
+slas-triage = { workspace = true }
