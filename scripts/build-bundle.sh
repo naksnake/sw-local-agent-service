@@ -49,6 +49,8 @@ PY
 cp "$repo/install.sh" "$bundle/"
 cp -r "$repo/compose" "$repo/config" "$repo/observability" "$repo/deploy" "$bundle/"
 cp -r "$repo/packages" "$bundle/"
+mkdir -p "$bundle/scripts"
+cp "$repo/scripts/fetch_models.py" "$bundle/scripts/"   # install.sh --models verifies weights with it
 cp "$repo/pyproject.toml" "$bundle/"
 [[ -f "$repo/config/cosign.pub" ]] && cp "$repo/config/cosign.pub" "$bundle/config/cosign.pub"
 command -v cosign >/dev/null && cp "$(command -v cosign)" "$bundle/tools/cosign"

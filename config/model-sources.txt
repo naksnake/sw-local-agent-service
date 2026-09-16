@@ -1,20 +1,39 @@
 # Where the model weights come from, for scripts/fetch_models.py on a CONNECTED build host.
 # One line per model:  <path> <owner/repo> [revision]
-#   <path> is the directory name under Models/ and the `path` field in Models/models.yaml.
-#   [revision] pins a branch, tag or commit; the fetched commit is recorded in manifest.json.
+#   <path> is the directory name under Models/ and the `path` field in Models/models.yaml
+#   (config/models.quickstart.yaml and config/models.prod.yaml name exactly these paths).
+#   [revision] pins a branch, tag or commit; every line below pins the commit that was
+#   current on 2026-09-16, so a fetch is reproducible and a silent upstream change is not
+#   picked up. Move a pin on purpose, then update vram_gib in the registry if the size moved.
 # The platform host never reads this file and never downloads anything (INV-1).
 #
-# Lines that still say TODO are refused by the script: fill in the hub repository id for the
-# exact build you want (FP8 or FP4 for Blackwell, per CLAUDE.md §7), then remove the TODO.
+# Sections name the install profile that needs the models below them (CLAUDE.md §3):
+#   `--profile quickstart` fetches the [quickstart] lines; `--profile prod` fetches both.
+# Sizes are what the script downloads after skipping redundant formats (ONNX, TensorFlow,
+# Flax, and PyTorch pickles when safetensors exist).
+#
+#   scripts/fetch_models.py fetch --sources config/model-sources.txt --profile quickstart --dry-run --dest ./models
+#   scripts/fetch_models.py fetch --sources config/model-sources.txt --profile quickstart --dest ./models
+#   ./install.sh --models ./models          # on the platform host: verify, place under Models/, write models.yaml
 
-# Embedding and reranking (unchanged in the current plan)
-bge-m3               BAAI/bge-m3
-bge-reranker-v2-m3   BAAI/bge-reranker-v2-m3
+[quickstart]
+# triage (and a voter): DeepSeek-V4 Flash, FP8 as published, 149 GiB, MIT
+deepseek-v4-flash      deepseek-ai/DeepSeek-V4-Flash      60d8d70770c6776ff598c94bb586a859a38244f1
+# coder and planner (and a voter): Qwen3.8-27B in the FP8 serving build, 29 GiB, Apache-2.0
+qwen3.8-27b-fp8        Qwen/Qwen3.8-27B-FP8               017b9c7af6b5689d5dd426a76e0bc077eb5ca20a
+# embed: BGE-M3, 2.1 GiB (ships PyTorch weights only, so the .bin is kept), MIT
+bge-m3                 BAAI/bge-m3                        5617a9f61b028005a4858fdac845db406aefb181
+# rerank: BGE Reranker v2 M3, 2.1 GiB, Apache-2.0
+bge-reranker-v2-m3     BAAI/bge-reranker-v2-m3            953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e
 
-# Planner and triage — DeepSeek-V4 Pro (FP4+FP8) and Flash: fill in the repository ids
-# deepseek-v4-pro-fp4     TODO owner/repo
-# deepseek-v4-flash-fp4   TODO owner/repo
+[prod]
+# planner (and a voter): DeepSeek-V4 Pro, FP8 as published, 805 GiB, MIT; tensor parallel over GPUs 0-3
+deepseek-v4-pro        deepseek-ai/DeepSeek-V4-Pro        b5968e9190ef611bbf34a7229255be88a0e937c1
+# the BF16 reference copy of the coder, kept for eval regression only (CLAUDE.md §7), 52 GiB
+qwen3.8-27b-bf16       Qwen/Qwen3.8-27B                   1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
 
-# Coder — Qwen3.8-27B: the FP8 serving build, and the BF16 copy kept for eval regression
-# qwen3.8-27b-fp8         TODO owner/repo
-# qwen3.8-27b-bf16        TODO owner/repo
+# A third model family for the voters (CLAUDE.md §5.3) is not in the default layout: the
+# candidates checked on 2026-09-16 do not fit the one free GPU. GLM-5.3 Flash is 306 GiB of
+# FP8 (two GPUs, tensor parallel 2); Kimi K2.6 is 554 GiB and not FP8. To add one, put a
+# line here, add the model to models.yaml with roles [planner] and to voters, and free the GPUs.
+# glm-5.3-flash        zai-org/GLM-5.3-Flash              eb9eb208eb0d

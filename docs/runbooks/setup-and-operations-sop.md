@@ -58,8 +58,8 @@ Files to carry in: the release bundle `slas-bundle-<version>.tgz`, `config/cosig
 | # | Do | Done when |
 |---|---|---|
 | A1 | `git clone` the repository; `uv sync --frozen && uv run pytest` | 788 tests pass |
-| A2 | Fill `config/model-sources.txt`: `<path> <owner/repo> [revision]`; the DeepSeek-V4 and Qwen3.8 lines are TODO until you name the FP8 or FP4 builds | no line says TODO |
-| A3 | `export HF_TOKEN=…` only for gated repositories; `scripts/fetch_models.py fetch --sources config/model-sources.txt --dest ./models` | one sentence per model and `models/manifest.json` |
+| A2 | `config/model-sources.txt` ships filled in, every line pinned to a commit; change a line only to pick another build | every line names a repository and a commit |
+| A3 | `scripts/fetch_models.py fetch --sources config/model-sources.txt --profile prod --dry-run --dest ./models`, then the same without `--dry-run`; `export HF_TOKEN=…` only for gated repositories | "Total: 6 models, …" and the free disk, then one sentence per model and `models/manifest.json` |
 | A4 | Rerun A3 after any interruption; it resumes and keeps complete files | "Done: N models" |
 | A5 | Waits: `scripts/lock-images.sh --sign` then `scripts/build-bundle.sh --profile prod`; commit the filled lock | `compose/images.lock.*` has no null digest |
 | A6 | Copy `models/`, the bundle and `config/cosign.pub` to the sneakernet disk | checksums recorded |
@@ -70,8 +70,8 @@ Files to carry in: the release bundle `slas-bundle-<version>.tgz`, `config/cosig
 |---|---|---|
 | B1 | `./install.sh --preflight-only` | no ✗ line; every ! line understood |
 | B2 | Mount the data and model volumes; `mkdir -p /AI/Agent/Models` | preflight Disk space ✓ |
-| B3 | Copy `models/` to `/AI/Agent/Models/`; `scripts/fetch_models.py verify --dest /AI/Agent/Models` | "Every model … matches its checksums." |
-| B4 | Write `/AI/Agent/Models/models.yaml` with the layout below; format in `services/model-manager/models.example.yaml` | the registry sentence names every role |
+| B3 | Copy `models/` next to `install.sh`, or anywhere and pass `--models DIR`; `./install.sh --dry-run` says what will be copied | "Would copy 6 models (…) … into /AI/Agent/Models" |
+| B4 | Nothing to write: the install verifies the checksums, places the weights and writes `/AI/Agent/Models/models.yaml` from `config/models.prod.yaml` when there is none; it never overwrites one. Edit roles later on the Models page | "Wrote /AI/Agent/Models/models.yaml from the prod template." |
 | B5 | Waits: `tar xzf slas-bundle-<version>.tgz && cd slas-bundle-<version>`; `./install.sh --profile prod --dry-run` | "Dry run finished: every read-only step passed" |
 | B6 | Waits: `./install.sh --profile prod` | the sign-in URL and one-time administrator password print |
 | B7 | Waits: sign in, choose a new password; Admin → People; Admin → Git hosts | first person added |
@@ -165,4 +165,5 @@ works today against the executor's enrolment server.
 `CLAUDE.md` (invariants, §3 deployment, §7 models, §9 UI) · `docs/runbooks/deploy-hgx-b300.md`
 (host detail and GPU layout) · `docs/runbooks/prod-profile.md` · `docs/runbooks/restore-drill.md`
 · `docs/runbooks/station-runner.md` · `docs/adr/0013-skill-enablement-record.md` ·
-`config/model-sources.txt` · `scripts/fetch_models.py`.
+`config/model-sources.txt` · `config/models.quickstart.yaml` · `config/models.prod.yaml` ·
+`scripts/fetch_models.py`.

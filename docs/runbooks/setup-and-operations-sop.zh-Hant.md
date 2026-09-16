@@ -56,8 +56,8 @@
 | # | 動作 | 完成判準 |
 |---|---|---|
 | A1 | `git clone` 儲存庫；`uv sync --frozen && uv run pytest` | 788 項測試通過 |
-| A2 | 填寫 `config/model-sources.txt`：`<path> <owner/repo> [revision]`；DeepSeek-V4 與 Qwen3.8 各行在你指定 FP8 或 FP4 版本前為 TODO | 沒有任何一行寫著 TODO |
-| A3 | 僅在受限儲存庫時 `export HF_TOKEN=…`；`scripts/fetch_models.py fetch --sources config/model-sources.txt --dest ./models` | 每個模型一句話，並產生 `models/manifest.json` |
+| A2 | `config/model-sources.txt` 已填妥，每一行都釘選至一個提交；只有要改用其他版本時才修改該行 | 每一行都寫有儲存庫與提交 |
+| A3 | 先執行 `scripts/fetch_models.py fetch --sources config/model-sources.txt --profile prod --dry-run --dest ./models`，再去掉 `--dry-run` 執行一次；僅在受限儲存庫時 `export HF_TOKEN=…` | 先顯示「Total: 6 models, …」與可用磁碟空間，之後每個模型一句話，並產生 `models/manifest.json` |
 | A4 | 任何中斷後重新執行 A3；會續傳並保留已完成的檔案 | 顯示「Done: N models」 |
 | A5 | 待決：`scripts/lock-images.sh --sign`，再 `scripts/build-bundle.sh --profile prod`；提交填妥的鎖定檔 | `compose/images.lock.*` 沒有 null 摘要 |
 | A6 | 將 `models/`、安裝包與 `config/cosign.pub` 複製到攜帶磁碟 | 已記錄校驗和 |
@@ -68,8 +68,8 @@
 |---|---|---|
 | B1 | `./install.sh --preflight-only` | 沒有 ✗；每一行 ! 均已理解 |
 | B2 | 掛載資料與模型磁碟區；`mkdir -p /AI/Agent/Models` | 預檢的 Disk space 為 ✓ |
-| B3 | 將 `models/` 複製到 `/AI/Agent/Models/`；`scripts/fetch_models.py verify --dest /AI/Agent/Models` | 顯示「Every model … matches its checksums.」 |
-| B4 | 依下表撰寫 `/AI/Agent/Models/models.yaml`；格式見 `services/model-manager/models.example.yaml` | 登錄檔的一句話列出每個角色 |
+| B3 | 將 `models/` 複製到 `install.sh` 旁，或放在任何位置並加上 `--models DIR`；`./install.sh --dry-run` 會說明將複製的內容 | 顯示「Would copy 6 models (…) … into /AI/Agent/Models」 |
+| B4 | 無需手寫：安裝程式會驗證校驗和、放置權重，並在 `/AI/Agent/Models/models.yaml` 不存在時依 `config/models.prod.yaml` 寫入，且永不覆寫既有檔案。之後在 Models 頁面調整角色 | 顯示「Wrote /AI/Agent/Models/models.yaml from the prod template.」 |
 | B5 | 待決：`tar xzf slas-bundle-<version>.tgz && cd slas-bundle-<version>`；`./install.sh --profile prod --dry-run` | 顯示「Dry run finished: every read-only step passed」 |
 | B6 | 待決：`./install.sh --profile prod` | 印出登入網址與一次性管理員密碼 |
 | B7 | 待決：登入、設定新密碼；Admin → People；Admin → Git hosts | 已新增第一位人員 |
@@ -162,4 +162,5 @@ uv run python -m slas_cli doctor               # 對本主機執行預檢
 `CLAUDE.md`（不變式、§3 部署、§7 模型、§9 UI）· `docs/runbooks/deploy-hgx-b300.md`
 （主機細節與 GPU 配置）· `docs/runbooks/prod-profile.md` · `docs/runbooks/restore-drill.md`
 · `docs/runbooks/station-runner.md` · `docs/adr/0013-skill-enablement-record.md` ·
-`config/model-sources.txt` · `scripts/fetch_models.py`。
+`config/model-sources.txt` · `config/models.quickstart.yaml` · `config/models.prod.yaml` ·
+`scripts/fetch_models.py`。

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # SW Local Agent Service — installer (CLAUDE.md §3, ADR-0003, ADR-0004, ADR-0012).
 #
-#   preflight → verify (bundle signature or Harbor signatures; the image lock) →
-#   write .env → generate secret files → load or pull images → docker compose up → wait
-#   healthy → print the URL and the one-time administrator password.
+#   preflight → verify (bundle signature or Harbor signatures; the image lock; model
+#   checksums) → write .env → generate secret files → load or pull images → place model
+#   weights and models.yaml → docker compose up → wait healthy → print the URL and the
+#   one-time administrator password.
 #
 # Read-only steps come first; nothing on the host changes until every one of them passed.
 # Idempotent: running it twice is safe. `--dry-run` performs the read-only steps for real
@@ -18,6 +19,7 @@ BUNDLE_DIR="${SLAS_BUNDLE_DIR:-$SCRIPT_DIR/bundle}"
 REGISTRY="${SLAS_REGISTRY:-}"
 COSIGN_KEY="${SLAS_COSIGN_KEY:-$SCRIPT_DIR/config/cosign.pub}"
 LOCK_FILE="${SLAS_IMAGE_LOCK:-$SCRIPT_DIR/compose/images.lock.json}"
+MODELS_DIR="${SLAS_MODELS_DIR:-}"
 VERSION="$(grep -m1 '^version' "$SCRIPT_DIR/pyproject.toml" | sed 's/.*"\(.*\)"/\1/')"
 JSON=0
 DRY_RUN=0
@@ -27,10 +29,11 @@ SKIP_PREFLIGHT=0
 usage() {
   cat <<EOF
 Usage: ./install.sh [--profile quickstart|prod] [--data-root PATH] [--bundle DIR | --registry HOST]
-                    [--dry-run] [--preflight-only] [--json]
+                    [--models DIR] [--dry-run] [--preflight-only] [--json]
 
 Installs SW Local Agent Service on this host: preflight, verification, .env and secrets,
-images, services, and the sign-in URL. Nothing changes until every read-only step passed.
+images, model weights, services, and the sign-in URL. Nothing changes until every read-only
+step passed.
 
   --profile PROFILE    quickstart (default) or prod. Also read from \$SLAS_PROFILE.
   --data-root PATH     Where the platform keeps its data. Default: \$SLAS_DATA_ROOT or /AI/Agent.
@@ -38,6 +41,10 @@ images, services, and the sign-in URL. Nothing changes until every read-only ste
                        Default: ./bundle when it exists.
   --registry HOST      Pull from a registry inside the perimeter (Harbor); every image is
                        verified with cosign before it is pulled (prod).
+  --models DIR         Model weights fetched with scripts/fetch_models.py on a connected host.
+                       Their checksums are verified, they are placed under <data root>/Models,
+                       and Models/models.yaml is written from config/models.<profile>.yaml
+                       when there is none. Default: ./models when it exists; also \$SLAS_MODELS_DIR.
   --dry-run            Run the read-only steps for real; print what the rest would do.
   --preflight-only     Stop after the preflight.
   --json               Print the preflight report as JSON, for scripts.
@@ -57,6 +64,8 @@ while [[ $# -gt 0 ]]; do
     --bundle=*)       BUNDLE_DIR="${1#*=}"; shift ;;
     --registry)       REGISTRY="${2:-}"; shift 2 ;;
     --registry=*)     REGISTRY="${1#*=}"; shift ;;
+    --models)         MODELS_DIR="${2:-}"; shift 2 ;;
+    --models=*)       MODELS_DIR="${1#*=}"; shift ;;
     --lock)           LOCK_FILE="${2:-}"; shift 2 ;;
     --cosign-key)     COSIGN_KEY="${2:-}"; shift 2 ;;
     --dry-run)        DRY_RUN=1; shift ;;
@@ -117,6 +126,10 @@ export PYTHONPATH="$SCRIPT_DIR/packages/slas-cli:$SCRIPT_DIR/packages/slas-kerne
 export PYTHONDONTWRITEBYTECODE=1
 if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
   PYTHON="$SCRIPT_DIR/.venv/bin/python"
+fi
+FETCH_MODELS="$SCRIPT_DIR/scripts/fetch_models.py"   # standard library only; verifies checksums offline
+if [[ -z "$MODELS_DIR" && -d "$SCRIPT_DIR/models" ]]; then
+  MODELS_DIR="$SCRIPT_DIR/models"
 fi
 
 nothing_changed() {
@@ -221,6 +234,55 @@ PY
   fi
 fi
 
+# ---------------------------------------------------------------------------- 2b model weights (read-only)
+# Weights arrive from scripts/fetch_models.py on a connected host (INV-1). Here they are only
+# checked; copying and models.yaml happen with the other changes below.
+MODELS_TARGET="$DATA_ROOT/Models"
+MODELS_TEMPLATE="$SCRIPT_DIR/config/models.$PROFILE.yaml"
+MODELS_TO_COPY=()
+MODELS_PRESENT=()
+list_models() {  # the model directories under $1: those that carry a SHA256SUMS
+  local dir
+  for dir in "$1"/*/; do
+    [[ -f "$dir/SHA256SUMS" ]] && basename "$dir"
+  done
+  return 0
+}
+if [[ -n "$MODELS_DIR" ]]; then
+  if [[ ! -d "$MODELS_DIR" ]]; then
+    nothing_changed "The models directory $MODELS_DIR does not exist. Likely cause: a typo in --models or SLAS_MODELS_DIR, or the weights were not copied to this host yet. What to do: on a connected host run scripts/fetch_models.py fetch --sources config/model-sources.txt --profile $PROFILE --dest <dir>, bring <dir> here, and pass --models <dir>." 1
+  fi
+  mapfile -t found_models < <(list_models "$MODELS_DIR")
+  if [[ ${#found_models[@]} -eq 0 ]]; then
+    nothing_changed "No model weights were found in $MODELS_DIR: no <model>/SHA256SUMS. Likely cause: the directory is not the --dest of scripts/fetch_models.py, or the fetch did not finish. What to do: run the fetch again on the connected host; it resumes and writes SHA256SUMS when a model is complete." 1
+  fi
+  for name in "${found_models[@]}"; do
+    if [[ -f "$MODELS_TARGET/$name/SHA256SUMS" ]]; then
+      MODELS_PRESENT+=("$name")
+    else
+      MODELS_TO_COPY+=("$name")
+    fi
+  done
+  if [[ ${#MODELS_TO_COPY[@]} -gt 0 ]]; then
+    echo
+    echo "Checking the model weights in $MODELS_DIR against their checksums (large models take a few minutes)."
+    verify_args=(verify --dest "$MODELS_DIR")
+    for name in "${MODELS_TO_COPY[@]}"; do verify_args+=(--model "$name"); done
+    if ! "$PYTHON" "$FETCH_MODELS" "${verify_args[@]}"; then
+      nothing_changed "The model weights in $MODELS_DIR do not match their checksums. Likely cause: an interrupted copy or fetch. What to do: copy the listed files again (or run the fetch again on the connected host), then run ./install.sh again." 1
+    fi
+  fi
+else
+  if [[ -d "$MODELS_TARGET" ]]; then
+    mapfile -t MODELS_PRESENT < <(list_models "$MODELS_TARGET")
+  fi
+  if [[ ${#MODELS_PRESENT[@]} -eq 0 ]]; then
+    echo
+    echo "No model weights were given: no --models DIR and no ./models next to install.sh."
+    echo "The platform installs without models. Fetch them on a connected host with scripts/fetch_models.py fetch --sources config/model-sources.txt --profile $PROFILE --dest <dir>, then run ./install.sh --models <dir>; nothing else needs to change."
+  fi
+fi
+
 # ---------------------------------------------------------------------------- 3 the changes
 run_or_print() {
   if [[ $DRY_RUN -eq 1 ]]; then
@@ -252,6 +314,74 @@ if [[ "$SOURCE" == "bundle" ]]; then
     [[ -e "$tarball" ]] || continue
     run_or_print docker load --quiet --input "$tarball"
   done
+fi
+
+# ---------------------------------------------------------------------------- 3b model weights
+if [[ ${#MODELS_TO_COPY[@]} -gt 0 ]]; then
+  copy_paths=()
+  for name in "${MODELS_TO_COPY[@]}"; do copy_paths+=("$MODELS_DIR/$name"); done
+  copy_size="$(du -shc "${copy_paths[@]}" 2>/dev/null | tail -1 | cut -f1)"
+  noun="model"; [[ ${#MODELS_TO_COPY[@]} -gt 1 ]] && noun="models"
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "Would copy ${#MODELS_TO_COPY[@]} $noun ($copy_size) from $MODELS_DIR into $MODELS_TARGET: ${MODELS_TO_COPY[*]}."
+  else
+    mkdir -p "$MODELS_TARGET"
+    link_copy=0
+    if [[ "$(stat -c %d "$MODELS_DIR")" == "$(stat -c %d "$MODELS_TARGET")" ]]; then
+      link_copy=1   # same volume: hard links are instant and cost no space; the weights are read-only
+    fi
+    echo "Copying ${#MODELS_TO_COPY[@]} $noun ($copy_size) into $MODELS_TARGET: ${MODELS_TO_COPY[*]}. Large models take a while."
+    for name in "${MODELS_TO_COPY[@]}"; do
+      rm -rf "$MODELS_TARGET/$name.part"   # a copy this script left unfinished earlier
+      if [[ $link_copy -eq 1 ]]; then
+        cp -al "$MODELS_DIR/$name" "$MODELS_TARGET/$name.part"
+      else
+        cp -a "$MODELS_DIR/$name" "$MODELS_TARGET/$name.part"
+      fi
+      mv "$MODELS_TARGET/$name.part" "$MODELS_TARGET/$name"
+    done
+    verify_args=(verify --dest "$MODELS_TARGET")
+    for name in "${MODELS_TO_COPY[@]}"; do verify_args+=(--model "$name"); done
+    if ! "$PYTHON" "$FETCH_MODELS" "${verify_args[@]}"; then
+      echo "The copied model weights under $MODELS_TARGET do not match their checksums."
+      echo "Likely cause: the disk ran out of space or the copy was cut short."
+      echo "What to do: remove the listed model directories under $MODELS_TARGET and run ./install.sh again."
+      exit 1
+    fi
+    if [[ -f "$MODELS_DIR/manifest.json" && ! -f "$MODELS_TARGET/manifest.json" ]]; then
+      cp "$MODELS_DIR/manifest.json" "$MODELS_TARGET/manifest.json"
+    fi
+  fi
+fi
+if [[ ${#MODELS_PRESENT[@]} -gt 0 ]]; then
+  noun="model is"; [[ ${#MODELS_PRESENT[@]} -gt 1 ]] && noun="models are"
+  echo "${#MODELS_PRESENT[@]} $noun already under $MODELS_TARGET: ${MODELS_PRESENT[*]}."
+fi
+if [[ $(( ${#MODELS_TO_COPY[@]} + ${#MODELS_PRESENT[@]} )) -gt 0 ]]; then
+  registry_from_template=0
+  if [[ -f "$MODELS_TARGET/models.yaml" ]]; then
+    echo "Kept $MODELS_TARGET/models.yaml as it is; the $PROFILE template was not applied over your registry."
+  elif [[ $DRY_RUN -eq 1 ]]; then
+    echo "Would write $MODELS_TARGET/models.yaml from config/models.$PROFILE.yaml."
+    registry_from_template=1
+  else
+    cp "$MODELS_TEMPLATE" "$MODELS_TARGET/models.yaml"
+    echo "Wrote $MODELS_TARGET/models.yaml from the $PROFILE template. Change roles on the Models page or in that file; no restart is needed."
+    registry_from_template=1
+  fi
+  if [[ $registry_from_template -eq 1 ]]; then
+    # The template names the weights the profile expects; say which are not here yet.
+    while IFS= read -r wanted; do
+      [[ -z "$wanted" ]] && continue
+      have=0
+      for name in ${MODELS_TO_COPY[@]+"${MODELS_TO_COPY[@]}"} ${MODELS_PRESENT[@]+"${MODELS_PRESENT[@]}"}; do
+        [[ "$name" == "$wanted" ]] && have=1
+      done
+      if [[ $have -eq 0 ]]; then
+        echo "models.yaml names $wanted, but no weights for it are here yet. Fetch it with scripts/fetch_models.py and run ./install.sh --models <dir> again, or remove it from models.yaml."
+      fi
+    done < <(sed -n 's/^    path: "\(.*\)"$/\1/p' "$MODELS_TEMPLATE")
+  fi
 fi
 
 if [[ $DRY_RUN -eq 1 ]]; then

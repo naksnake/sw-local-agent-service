@@ -27,6 +27,15 @@ cd slas-bundle-<version>
 
 One command, one `.env`, one page to manage models. Details in `CLAUDE.md` §3.
 
+Model weights come from a connected host, never from the platform (INV-1). The sources file
+ships filled in and pinned; fetch the set your profile needs, carry it over, and let the
+installer verify, place it and write `models.yaml`:
+
+```bash
+scripts/fetch_models.py fetch --sources config/model-sources.txt --profile quickstart --dest ./models
+./install.sh --models ./models          # on the platform host; ./models next to install.sh is found on its own
+```
+
 Deploying to a specific GPU host, and what runs today versus what still waits on a
 dependency decision: [`docs/runbooks/deploy-hgx-b300.md`](docs/runbooks/deploy-hgx-b300.md).
 The operator SOP, in English and Traditional Chinese:

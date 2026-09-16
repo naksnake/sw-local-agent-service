@@ -51,7 +51,9 @@ def test_help_describes_the_options() -> None:
 
 def test_preflight_prints_a_report_and_changes_nothing(tmp_path: Path) -> None:
     data_root = tmp_path / "slas-data"
-    result = run_install("--data-root", str(data_root))
+    # --preflight-only: on a host that is ready, the script would otherwise go on to look
+    # for a bundle, and that message is not the preflight's.
+    result = run_install("--preflight-only", "--data-root", str(data_root))
     assert result.returncode in (0, 1), result.stderr
     lines = result.stdout.splitlines()
     assert lines[0].startswith("SW Local Agent Service")

@@ -15,7 +15,14 @@ from slas_llm_gateway.redaction import (
     REDACTION_FILE_HEADER,
     render_redaction_yaml,
 )
-from slas_model_manager.registry import EXAMPLE_REGISTRY, REGISTRY_FILE_HEADER, render_registry_yaml
+from slas_model_manager.registry import (
+    EXAMPLE_REGISTRY,
+    PROFILE_REGISTRIES,
+    REGISTRY_FILE_HEADER,
+    profile_registry,
+    profile_registry_header,
+    render_registry_yaml,
+)
 from slas_validation_executor.guardrails import (
     DEFAULT_GUARDRAILS,
     GUARDRAILS_FILE_HEADER,
@@ -69,6 +76,25 @@ def test_models_example_yaml_is_in_step() -> None:
     assert path.read_text(encoding="utf-8") == expected
     assert "roles:\n  coder: qwen2.5-coder-32b-awq" in expected
     assert "voters:\n  - qwen2.5-coder-32b-awq\n  - deepseek-v3-fp8\n  - kimi-k2-awq\n" in expected
+
+
+def test_profile_models_yaml_files_are_in_step_and_valid() -> None:
+    """install.sh copies config/models.<profile>.yaml to Models/models.yaml on a fresh host."""
+    for profile, data in PROFILE_REGISTRIES.items():
+        expected = render_registry_yaml(data, header=profile_registry_header(profile))
+        path = REPO_ROOT / "config" / f"models.{profile}.yaml"
+        assert path.read_text(encoding="utf-8") == expected, f"{path.name} drifted from code"
+        registry = profile_registry(profile)
+        assert set(registry.roles) == {"coder", "planner", "triage", "embed", "rerank"}
+        assert "://" not in expected
+    quickstart = profile_registry("quickstart")
+    assert quickstart.sentence().endswith("2 voters from 2 model families.")
+    prod = profile_registry("prod")
+    assert prod.roles["planner"] == "deepseek-v4-pro"
+    assert prod.sentence().endswith("3 voters from 2 model families.")
+    assert prod.model("qwen3.8-27b-bf16").roles == [], "the BF16 copy is for eval only"
+    # Prod is a superset of quickstart: the same weights serve, plus the planner and the reference.
+    assert {m.path for m in quickstart.models} < {m.path for m in prod.models}
 
 
 def test_factory_yaml_is_in_step() -> None:

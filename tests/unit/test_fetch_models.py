@@ -7,11 +7,13 @@ import hashlib
 import importlib.util
 import io
 import json
+import re
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -183,9 +185,100 @@ def test_fetch_writes_files_checksums_and_manifest_and_skips_redundant_formats(
     assert (
         "tiny: 3 files, 1.0 MiB, from demo/tiny at abc123def456; 2 redundant files skipped." in out
     )
-    assert "run `scripts/fetch_models.py verify --dest /AI/Agent/Models` there." in out
+    assert f"Next: on the platform host run `./install.sh --models {dest}`" in out
+    # The plan came first: every model listed with its size, then the disk check.
+    assert out.index("Total: 1 model, 1.0 MiB; 1.0 MiB still to fetch;") < out.index("fetched ")
     # Every request carried no token, and the token never appears in the output.
     assert "Bearer" not in out
+
+
+def test_dry_run_lists_sizes_checks_the_disk_and_downloads_nothing(
+    hub: FakeHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dest = tmp_path / "models"
+    code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest), "--dry-run")
+    assert code == 0, out
+    assert (
+        "tiny ← demo/tiny@main (abc123def456): 3 files, 1.0 MiB; 2 redundant files skipped" in out
+    )
+    assert "Total: 1 model, 1.0 MiB; 1.0 MiB still to fetch;" in out and f"free at {dest}." in out
+    assert "Dry run: nothing was downloaded." in out
+    assert not dest.exists()
+    assert not any("/resolve/" in path for path, _ in hub.requests), "a dry run fetches no file"
+
+    assert run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))[0] == 0
+    code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest), "--dry-run")
+    assert code == 0 and "3 files, 1.0 MiB, 0 B still to fetch;" in out
+
+    monkeypatch.setattr(fm.shutil, "disk_usage", lambda _path: SimpleNamespace(free=1000))
+    code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(tmp_path / "small"))
+    assert code == 1
+    assert "Not enough free disk at" in out and "1000 B is free." in out
+    assert "point --dest at a larger volume" in out
+    assert not (tmp_path / "small").exists(), "the disk check runs before any download"
+
+
+def test_verify_can_be_limited_to_named_models(hub: FakeHub, tmp_path: Path) -> None:
+    dest = tmp_path / "models"
+    assert run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))[0] == 0
+    code, out = run("verify", "--dest", str(dest), "--model", "tiny")
+    assert code == 0 and out.endswith("tiny matches its checksums.\n")
+    code, out = run("verify", "--dest", str(dest), "--model", "tiny", "--model", "nope")
+    assert code == 1 and f"{dest / 'nope'} has no SHA256SUMS file." in out
+
+
+def test_sources_sections_select_the_models_a_profile_needs(tmp_path: Path) -> None:
+    sources = tmp_path / "sources.txt"
+    sources.write_text(
+        "# shared by every profile\ncommon demo/common\n"
+        "[quickstart]\nsmall demo/small\n"
+        "[prod]\nlarge demo/large abc\n"
+    )
+    assert [s.path for s in fm.read_sources(sources)] == ["common", "small", "large"]
+    assert [s.path for s in fm.read_sources(sources, profile="quickstart")] == ["common", "small"]
+    prod = fm.read_sources(sources, profile="prod")
+    assert [s.path for s in prod] == ["common", "small", "large"] and prod[-1].revision == "abc"
+
+    with pytest.raises(fm.FetchError) as bad_profile:
+        fm.read_sources(sources, profile="staging")
+    assert "The profile 'staging' is not known." in bad_profile.value.what_happened
+
+    sources.write_text("[staging]\nx demo/x\n")
+    with pytest.raises(fm.FetchError) as bad_section:
+        fm.read_sources(sources)
+    assert "The section [staging] in sources.txt is not an install profile." in str(
+        bad_section.value
+    )
+
+    sources.write_text("[prod]\nlarge demo/large\n")
+    with pytest.raises(fm.FetchError) as empty:
+        fm.read_sources(sources, profile="quickstart")
+    assert "lists no models for the quickstart profile." in empty.value.what_happened
+
+
+def test_the_shipped_sources_are_pinned_and_match_the_profile_registries() -> None:
+    from slas_model_manager.registry import PROFILE_REGISTRIES
+
+    shipped = REPO_ROOT / "config" / "model-sources.txt"
+    every = fm.read_sources(shipped)
+    assert {s.repo for s in every} == {
+        "deepseek-ai/DeepSeek-V4-Flash",
+        "Qwen/Qwen3.8-27B-FP8",
+        "BAAI/bge-m3",
+        "BAAI/bge-reranker-v2-m3",
+        "deepseek-ai/DeepSeek-V4-Pro",
+        "Qwen/Qwen3.8-27B",
+    }
+    for source in every:
+        assert re.fullmatch(r"[0-9a-f]{40}", source.revision), f"{source.path} is not pinned"
+    for profile, registry in PROFILE_REGISTRIES.items():
+        models = cast(list[dict[str, object]], registry["models"])
+        wanted = {str(model["path"]) for model in models}
+        fetched = {s.path for s in fm.read_sources(shipped, profile=profile)}
+        assert fetched == wanted, (
+            f"{profile}: sources and models.{profile}.yaml name different paths"
+        )
+    assert len(fm.read_sources(shipped, profile="quickstart")) < len(every)
 
 
 def test_a_cut_download_resumes_with_a_range_request_and_a_rerun_keeps_complete_files(
@@ -260,8 +353,3 @@ def test_sources_file_gated_repo_and_errors_speak_in_three_parts(
 
     code, out = run("fetch", "--dest", str(tmp_path / "m"))
     assert code == 1 and "No model was named." in out
-
-    shipped = fm.read_sources(REPO_ROOT / "config" / "model-sources.txt")
-    assert [s.repo for s in shipped] == ["BAAI/bge-m3", "BAAI/bge-reranker-v2-m3"], (
-        "the shipped file lists only repositories that exist; the rest are TODO comments"
-    )

@@ -211,6 +211,137 @@ def example_registry() -> Registry:
     return registry_from_mapping(EXAMPLE_REGISTRY, source="models.example.yaml")
 
 
+# --- The registries install.sh ships ------------------------------------------------------
+#
+# `config/models.<profile>.yaml` is rendered from these and copied to Models/models.yaml by
+# install.sh when the data root has none yet. Paths match config/model-sources.txt, so the
+# weights scripts/fetch_models.py fetches are the ones these entries name. Sizes come from
+# the hub's file listings on 2026-09-16; vram_gib adds headroom for the KV cache at the
+# stated context and is an assumption until real instances run (same note as fit.py).
+# `quant` stays within fp8 | awq4 | bf16 until ADR-0014 admits fp4.
+
+_DEEPSEEK_V4_FLASH: Final[dict[str, object]] = {
+    "id": "deepseek-v4-flash",
+    "display_name": "DeepSeek-V4 Flash",
+    "family": "DeepSeek",
+    "path": "deepseek-v4-flash",
+    "quant": "fp8",
+    "vram_gib": 180.0,  # 149 GiB of FP8 weights on the hub
+    "context": 131072,
+    "roles": ["triage", "planner"],
+}
+_QWEN38_27B_FP8: Final[dict[str, object]] = {
+    "id": "qwen3.8-27b-fp8",
+    "display_name": "Qwen3.8-27B",
+    "family": "Qwen",
+    "path": "qwen3.8-27b-fp8",
+    "quant": "fp8",
+    "vram_gib": 40.0,  # 29 GiB of FP8 weights on the hub
+    "context": 131072,
+    "roles": ["coder", "planner"],
+}
+_BGE_M3: Final[dict[str, object]] = {
+    "id": "bge-m3",
+    "display_name": "BGE-M3",
+    "family": "BAAI",
+    "path": "bge-m3",
+    "quant": "bf16",
+    "vram_gib": 3.0,
+    "context": 8192,
+    "roles": ["embed"],
+}
+_BGE_RERANKER_V2_M3: Final[dict[str, object]] = {
+    "id": "bge-reranker-v2-m3",
+    "display_name": "BGE Reranker v2 M3",
+    "family": "BAAI",
+    "path": "bge-reranker-v2-m3",
+    "quant": "bf16",
+    "vram_gib": 2.0,
+    "context": 8192,
+    "roles": ["rerank"],
+}
+_DEEPSEEK_V4_PRO: Final[dict[str, object]] = {
+    "id": "deepseek-v4-pro",
+    "display_name": "DeepSeek-V4 Pro",
+    "family": "DeepSeek",
+    "path": "deepseek-v4-pro",
+    "quant": "fp8",
+    "vram_gib": 900.0,  # 805 GiB of FP8 weights on the hub; tensor parallel over four GPUs
+    "context": 131072,
+    "roles": ["planner"],
+}
+_QWEN38_27B_BF16: Final[dict[str, object]] = {
+    "id": "qwen3.8-27b-bf16",
+    "display_name": "Qwen3.8-27B (BF16 reference)",
+    "family": "Qwen",
+    "path": "qwen3.8-27b-bf16",
+    "quant": "bf16",
+    "vram_gib": 64.0,  # 52 GiB of BF16 weights on the hub
+    "context": 131072,
+    "roles": [],  # eval regression only (CLAUDE.md §7); the gateway never routes to it
+}
+
+#: Quickstart (CLAUDE.md §3): one coder, one triage, embed and rerank. The planner role is a
+#: second instance of the coder so nothing large runs twice; two voters from two families.
+QUICKSTART_REGISTRY: Final[dict[str, object]] = {
+    "version": 1,
+    "models": [_DEEPSEEK_V4_FLASH, _QWEN38_27B_FP8, _BGE_M3, _BGE_RERANKER_V2_M3],
+    "roles": {
+        "coder": "qwen3.8-27b-fp8",
+        "planner": "qwen3.8-27b-fp8",
+        "triage": "deepseek-v4-flash",
+        "embed": "bge-m3",
+        "rerank": "bge-reranker-v2-m3",
+    },
+    "voters": ["deepseek-v4-flash", "qwen3.8-27b-fp8"],
+}
+
+#: Prod (docs/runbooks/deploy-hgx-b300.md §4): DeepSeek-V4 Pro as planner on four GPUs,
+#: three voters (two DeepSeek, one Qwen), and the BF16 reference copy for eval regression.
+PROD_REGISTRY: Final[dict[str, object]] = {
+    "version": 1,
+    "models": [
+        _DEEPSEEK_V4_PRO,
+        _DEEPSEEK_V4_FLASH,
+        _QWEN38_27B_FP8,
+        _QWEN38_27B_BF16,
+        _BGE_M3,
+        _BGE_RERANKER_V2_M3,
+    ],
+    "roles": {
+        "coder": "qwen3.8-27b-fp8",
+        "planner": "deepseek-v4-pro",
+        "triage": "deepseek-v4-flash",
+        "embed": "bge-m3",
+        "rerank": "bge-reranker-v2-m3",
+    },
+    "voters": ["deepseek-v4-pro", "deepseek-v4-flash", "qwen3.8-27b-fp8"],
+}
+
+PROFILE_REGISTRIES: Final[dict[str, dict[str, object]]] = {
+    "quickstart": QUICKSTART_REGISTRY,
+    "prod": PROD_REGISTRY,
+}
+
+
+def profile_registry_header(profile: str) -> str:
+    return (
+        f"Models/models.yaml for the {profile} profile of SW Local Agent Service (CLAUDE.md §7).\n"
+        f"Rendered from slas_model_manager.registry.PROFILE_REGISTRIES[{profile!r}]; a unit test\n"
+        "keeps file and code in step. install.sh copies this file to ${SLAS_DATA_ROOT}/Models/\n"
+        "models.yaml when none exists there yet, and never overwrites one (INV-9).\n"
+        "Every `path` is a directory under Models/ that scripts/fetch_models.py fetches from the\n"
+        "matching line of config/model-sources.txt; never a URL (INV-1).\n"
+        "vram_gib is the weights on the hub plus headroom for the KV cache at `context`; it is\n"
+        "an assumption until real instances run. DeepSeek-V4 Pro runs tensor parallel over\n"
+        "four GPUs. Change roles on the Models page or here; no restart is needed."
+    )
+
+
+def profile_registry(profile: str) -> Registry:
+    return registry_from_mapping(PROFILE_REGISTRIES[profile], source=f"models.{profile}.yaml")
+
+
 def render_registry_yaml(data: Mapping[str, object], *, header: str = "") -> str:
     registry = registry_from_mapping(data)
     lines: list[str] = []

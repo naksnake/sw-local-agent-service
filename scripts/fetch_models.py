@@ -5,15 +5,25 @@ Standard library only, so it runs on any host with Python 3.12 and no virtualenv
 platform host never runs this (INV-1): the weights travel by sneakernet and are verified on
 arrival with `--verify`, which needs no network.
 
-    scripts/fetch_models.py fetch  --sources config/model-sources.txt --dest ./models
+    scripts/fetch_models.py fetch  --sources config/model-sources.txt --profile quickstart \
+                                   --dest ./models
+    scripts/fetch_models.py fetch  --sources config/model-sources.txt --profile prod --dry-run \
+                                   --dest ./models
     scripts/fetch_models.py fetch  --model qwen3.8-27b-fp8=Qwen/Qwen3.8-27B-FP8 --dest ./models
     scripts/fetch_models.py verify --dest /AI/Agent/Models            # on the box, offline
 
 Each model lands in <dest>/<path>/ (the `path` the registry names), with SHA256SUMS beside
-the files and one manifest.json for the whole set. Downloads resume; every large file is
-checked against the sha256 the hub publishes, and small files are hashed after download.
-A token for gated repositories comes from HF_TOKEN in the environment, never from argv;
-HF_ENDPOINT points at a mirror inside the perimeter when one exists.
+the files and one manifest.json for the whole set. Before anything downloads, the script
+lists every model with its size and checks the free disk at --dest; `--dry-run` stops there.
+Downloads resume; every large file is checked against the sha256 the hub publishes, and
+small files are hashed after download. A token for gated repositories comes from HF_TOKEN
+in the environment, never from argv; HF_ENDPOINT points at a mirror inside the perimeter
+when one exists.
+
+The sources file may carry `[quickstart]` and `[prod]` sections: `--profile quickstart`
+fetches the lines above any section and the `[quickstart]` ones, `--profile prod` also the
+`[prod]` ones. Without `--profile`, every line is fetched. `./install.sh --models <dest>`
+then verifies the checksums and puts the weights under the data root.
 """
 
 from __future__ import annotations
@@ -23,6 +33,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import shutil
 import sys
 import urllib.error
 import urllib.parse
@@ -35,16 +46,19 @@ from typing import Any, Final, TextIO
 
 DEFAULT_ENDPOINT: Final = "https://huggingface.co"
 CHUNK: Final = 1 << 20
-#: Formats vLLM does not need when safetensors are present; skipping them halves most downloads.
-REDUNDANT_WHEN_SAFETENSORS: Final[tuple[str, ...]] = (
-    "*.bin",
+#: Install profiles, in order: each one needs everything the ones before it need.
+PROFILES: Final[tuple[str, ...]] = ("quickstart", "prod")
+#: Formats vLLM never reads (ONNX, TensorFlow, Flax, Rust, Lightning): always skipped.
+ALWAYS_REDUNDANT: Final[tuple[str, ...]] = (
+    "onnx/*",
+    "*.onnx",
     "*.h5",
     "*.msgpack",
     "*.ot",
     "*.ckpt",
-    "onnx/*",
-    "*.onnx",
 )
+#: PyTorch pickles are only needed when a model ships no safetensors (BGE-M3 is one).
+REDUNDANT_WHEN_SAFETENSORS: Final[tuple[str, ...]] = ("*.bin",)
 
 
 class FetchError(Exception):
@@ -103,17 +117,47 @@ class Source:
         return cls(path=path, repo=repo, revision=revision or "main")
 
 
-def read_sources(path: Path) -> list[Source]:
+def read_sources(path: Path, *, profile: str | None = None) -> list[Source]:
+    """The sources file, optionally narrowed to what one install profile needs.
+
+    A `[quickstart]` or `[prod]` line starts a section. Lines above any section belong to
+    every profile; a section's lines belong to that profile and the ones after it in
+    PROFILES (prod needs everything quickstart needs). `profile=None` keeps every line.
+    """
+    if profile is not None and profile not in PROFILES:
+        raise FetchError(
+            f"The profile {profile!r} is not known.",
+            f"Profiles are {', '.join(PROFILES)}.",
+            "Pass --profile quickstart or --profile prod.",
+        )
     sources: list[Source] = []
+    section: str | None = None
     for line in path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1].strip()
+            if section not in PROFILES:
+                raise FetchError(
+                    f"The section [{section}] in {path.name} is not an install profile.",
+                    "Sections name the profile that needs the models below them: "
+                    f"{', '.join(PROFILES)}.",
+                    "Rename the section, or move its lines under [quickstart] or [prod].",
+                )
+            continue
+        if (
+            profile is not None
+            and section is not None
+            and PROFILES.index(section) > PROFILES.index(profile)
+        ):
+            continue
         sources.append(Source.parse(stripped))
     if not sources:
+        scope = f" for the {profile} profile" if profile else ""
         raise FetchError(
-            f"{path} lists no models.",
-            "Every line is a comment or blank.",
+            f"{path} lists no models{scope}.",
+            "Every line is a comment, blank, or in a section another profile needs.",
             "Add one line per model: `<path> <owner/repo> [revision]`.",
         )
     return sources
@@ -281,7 +325,7 @@ def select(
 ) -> tuple[list[RemoteFile], list[str]]:
     """Which files to fetch, and the ones skipped because safetensors make them redundant."""
     has_safetensors = any(f.path.endswith(".safetensors") for f in files)
-    patterns = list(exclude)
+    patterns = [*exclude, *ALWAYS_REDUNDANT]
     if has_safetensors:
         patterns += REDUNDANT_WHEN_SAFETENSORS
     chosen: list[RemoteFile] = []
@@ -315,16 +359,46 @@ class FetchedModel:
         )
 
 
-def fetch_model(
+@dataclass
+class ModelPlan:
+    """What one model needs before a byte is downloaded: files, sizes, what is already here."""
+
+    source: Source
+    commit: str
+    files: list[RemoteFile]
+    skipped: list[str]
+    present: list[str] = field(default_factory=list)  # relative paths already complete-looking
+
+    @property
+    def bytes_total(self) -> int:
+        return sum(f.size for f in self.files)
+
+    @property
+    def bytes_to_fetch(self) -> int:
+        have = set(self.present)
+        return sum(f.size for f in self.files if f.path not in have)
+
+    def sentence(self) -> str:
+        source = self.source
+        text = (
+            f"{source.path} ← {source.repo}@{source.revision} ({self.commit[:12]}): "
+            f"{len(self.files)} files, {human(self.bytes_total)}"
+        )
+        if self.present:
+            text += f", {human(self.bytes_to_fetch)} still to fetch"
+        if self.skipped:
+            text += f"; {len(self.skipped)} redundant files skipped"
+        return text
+
+
+def plan_model(
     hub: Hub,
     source: Source,
     dest: Path,
     *,
     include: Sequence[str] = (),
     exclude: Sequence[str] = (),
-    log: TextIO,
-) -> FetchedModel:
-    target_dir = dest / source.path
+) -> ModelPlan:
     commit = hub.revision_sha(source)
     files = hub.tree(source)
     chosen, skipped = select(files, include=include, exclude=exclude)
@@ -334,13 +408,59 @@ def fetch_model(
             "The include or exclude patterns removed everything.",
             "Loosen the patterns, or check the repository on the hub.",
         )
+    target_dir = dest / source.path
+    present = [
+        remote.path
+        for remote in chosen
+        if (target_dir / remote.path).is_file()
+        and (not remote.size or (target_dir / remote.path).stat().st_size == remote.size)
+    ]
+    return ModelPlan(source=source, commit=commit, files=chosen, skipped=skipped, present=present)
+
+
+def free_bytes(dest: Path) -> int:
+    """Free space on the volume that will hold dest (its nearest existing parent)."""
+    probe = dest.resolve()
+    while not probe.exists():
+        if probe.parent == probe:
+            break
+        probe = probe.parent
+    return shutil.disk_usage(probe).free
+
+
+def check_disk(plans: Sequence[ModelPlan], dest: Path, *, log: TextIO) -> None:
+    needed = sum(plan.bytes_to_fetch for plan in plans)
+    total = sum(plan.bytes_total for plan in plans)
+    free = free_bytes(dest)
+    noun = "model" if len(plans) == 1 else "models"
     log.write(
-        f"{source.path} ← {source.repo}@{source.revision} ({commit[:12]}): {len(chosen)} files\n"
+        f"Total: {len(plans)} {noun}, {human(total)}; {human(needed)} still to fetch; "
+        f"{human(free)} free at {dest}.\n"
+    )
+    if needed > free:
+        raise FetchError(
+            f"Not enough free disk at {dest}: {human(needed)} is still to fetch, "
+            f"{human(free)} is free.",
+            "The destination volume is too small for this set of models.",
+            "Free space or point --dest at a larger volume, then run the same command again.",
+        )
+
+
+def fetch_planned(hub: Hub, plan: ModelPlan, dest: Path, *, log: TextIO) -> FetchedModel:
+    source = plan.source
+    target_dir = dest / source.path
+    log.write(
+        f"{source.path} ← {source.repo}@{source.revision} ({plan.commit[:12]}): "
+        f"{len(plan.files)} files\n"
     )
     fetched = FetchedModel(
-        path=source.path, repo=source.repo, revision=source.revision, commit=commit, skipped=skipped
+        path=source.path,
+        repo=source.repo,
+        revision=source.revision,
+        commit=plan.commit,
+        skipped=plan.skipped,
     )
-    for remote in chosen:
+    for remote in plan.files:
         target = target_dir / remote.path
         if target.exists() and (remote.sha256 is None or sha256_of(target) == remote.sha256):
             if remote.sha256 is not None:
@@ -399,11 +519,19 @@ def write_manifest(dest: Path, models: list[FetchedModel], *, now: datetime) -> 
     return path
 
 
-def verify(dest: Path, *, log: TextIO) -> list[str]:
-    """Offline: every SHA256SUMS under dest against the files. Returns the problems."""
+def verify(dest: Path, *, log: TextIO, only: Sequence[str] = ()) -> list[str]:
+    """Offline: every SHA256SUMS under dest (or only the named models) against the files.
+
+    Returns the problems as sentences.
+    """
     problems: list[str] = []
     found = 0
+    wanted = set(only)
+    for name in sorted(wanted - {p.parent.name for p in dest.glob("*/SHA256SUMS")}):
+        problems.append(f"{dest / name} has no SHA256SUMS file.")
     for sums_path in sorted(dest.glob("*/SHA256SUMS")):
+        if wanted and sums_path.parent.name not in wanted:
+            continue
         found += 1
         model_dir = sums_path.parent
         sums = read_sums(sums_path)
@@ -418,14 +546,14 @@ def verify(dest: Path, *, log: TextIO) -> list[str]:
                 bad += 1
         state = "every file matches" if bad == 0 else f"{bad} of {len(sums)} files wrong"
         log.write(f"{model_dir.name}: {len(sums)} files, {state}.\n")
-    if found == 0:
+    if found == 0 and not wanted:
         problems.append(f"No model directory under {dest} has a SHA256SUMS file.")
     return problems
 
 
 def iter_sources(args: argparse.Namespace) -> Iterator[Source]:
     if args.sources:
-        yield from read_sources(Path(args.sources))
+        yield from read_sources(Path(args.sources), profile=args.profile)
     for spec in args.model or []:
         yield Source.parse(spec)
 
@@ -443,6 +571,11 @@ def main(
         "--sources", help="config/model-sources.txt: `<path> <owner/repo> [revision]` per line."
     )
     fetch.add_argument(
+        "--profile",
+        choices=PROFILES,
+        help="Only the models this install profile needs, per the sections in --sources.",
+    )
+    fetch.add_argument(
         "--model", action="append", help="One model as <path>=<owner/repo>[@revision]; repeatable."
     )
     fetch.add_argument("--dest", required=True, help="Directory that becomes Models/ on the box.")
@@ -452,15 +585,26 @@ def main(
     fetch.add_argument(
         "--exclude", action="append", default=[], help="Skip files matching this glob (repeatable)."
     )
+    fetch.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List every model with its size and check the free disk; download nothing.",
+    )
     check = commands.add_parser(
         "verify", help="Check every SHA256SUMS under --dest; no network (the box)."
     )
     check.add_argument("--dest", required=True)
+    check.add_argument(
+        "--model",
+        action="append",
+        default=[],
+        help="Only this model directory under --dest (repeatable); default: every one.",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     dest = Path(args.dest)
     try:
         if args.command == "verify":
-            problems = verify(dest, log=out)
+            problems = verify(dest, log=out, only=args.model)
             if problems:
                 out.write("\n".join(problems) + "\n")
                 out.write(
@@ -468,7 +612,8 @@ def main(
                     "verify again.\n"
                 )
                 return 1
-            out.write(f"Every model under {dest} matches its checksums.\n")
+            scope = ", ".join(args.model) if args.model else f"Every model under {dest}"
+            out.write(f"{scope} matches its checksums.\n")
             return 0
         sources = list(iter_sources(args))
         if not sources:
@@ -483,18 +628,30 @@ def main(
         )
         if opener is not None:
             hub.opener = opener
-        fetched = [
-            fetch_model(hub, source, dest, include=args.include, exclude=args.exclude, log=out)
+        # Say what will happen before it happens (CLAUDE.md §9): list and size everything,
+        # check the disk, and only then download.
+        plans = [
+            plan_model(hub, source, dest, include=args.include, exclude=args.exclude)
             for source in sources
         ]
+        for plan in plans:
+            out.write(plan.sentence() + "\n")
+        check_disk(plans, dest, log=out)
+        if args.dry_run:
+            out.write("Dry run: nothing was downloaded.\n")
+            return 0
+        fetched = [fetch_planned(hub, plan, dest, log=out) for plan in plans]
         manifest = write_manifest(dest, fetched, now=datetime.now(UTC))
         for model in fetched:
             out.write(model.sentence() + "\n")
         total = sum(m.bytes for m in fetched)
+        noun = "model" if len(fetched) == 1 else "models"
         out.write(
-            f"Done: {len(fetched)} models, {human(total)}, checksums in each SHA256SUMS and "
-            f"{manifest}. Copy {dest}/ to /AI/Agent/Models/ on the box and run "
-            f"`scripts/fetch_models.py verify --dest /AI/Agent/Models` there.\n"
+            f"Done: {len(fetched)} {noun}, {human(total)}, checksums in each SHA256SUMS and "
+            f"{manifest}.\n"
+            f"Next: on the platform host run `./install.sh --models {dest}` (carry {dest}/ "
+            "there first if this is not that host); the installer verifies every checksum "
+            "and puts the weights under Models/.\n"
         )
         return 0
     except FetchError as exc:
