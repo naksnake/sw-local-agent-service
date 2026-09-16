@@ -110,7 +110,10 @@ EOF
 fi
 
 # From the source tree the packages are imported directly; the bundle ships them installed.
-export PYTHONPATH="$SCRIPT_DIR/packages/slas-cli:$SCRIPT_DIR/packages/slas-kernel:$SCRIPT_DIR/packages/slas-schemas:$SCRIPT_DIR/packages/slas-deploy:$SCRIPT_DIR/packages/slas-hal:$SCRIPT_DIR/packages/slas-observability${PYTHONPATH:+:$PYTHONPATH}"
+# `services/sandbox-manager` is here for the stdlib-only `slas_sandbox_manager.toolchains`
+# module that `slas toolchain` uses. tests/unit/test_host_cli_is_stdlib_only.py reads this
+# line, so the test and the installer cannot drift apart.
+export PYTHONPATH="$SCRIPT_DIR/packages/slas-cli:$SCRIPT_DIR/packages/slas-kernel:$SCRIPT_DIR/packages/slas-schemas:$SCRIPT_DIR/packages/slas-deploy:$SCRIPT_DIR/packages/slas-hal:$SCRIPT_DIR/packages/slas-observability:$SCRIPT_DIR/services/sandbox-manager${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1
 if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
   PYTHON="$SCRIPT_DIR/.venv/bin/python"

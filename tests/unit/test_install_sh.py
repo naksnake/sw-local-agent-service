@@ -67,6 +67,46 @@ def test_preflight_prints_a_report_and_changes_nothing(tmp_path: Path) -> None:
     assert not data_root.exists(), "the preflight must not create the data root"
 
 
+def test_preflight_runs_on_a_host_without_a_venv(tmp_path: Path) -> None:
+    """A fresh host has no .venv: the script must find every module on its own PYTHONPATH.
+
+    The repository is mirrored into a temporary directory with symlinks, minus `.venv`, so
+    install.sh takes the source-tree path instead of the developer's virtualenv.
+    """
+    mirror = tmp_path / "repo"
+    mirror.mkdir()
+    for entry in REPO_ROOT.iterdir():
+        if entry.name == ".venv":
+            continue
+        (mirror / entry.name).symlink_to(entry)
+    clean_env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("SLAS_") and key not in ("PYTHONPATH", "VIRTUAL_ENV")
+    }
+    result = subprocess.run(
+        [
+            "bash",
+            str(mirror / "install.sh"),
+            "--preflight-only",
+            "--json",
+            "--data-root",
+            str(tmp_path / "d"),
+        ],
+        capture_output=True,
+        text=True,
+        env=clean_env,
+        cwd=mirror,
+        timeout=120,
+        check=False,
+    )
+    if "Python 3.12 was not found on this host." in result.stderr:
+        pytest.skip("the preflight needs python3.12 on this host")
+    assert "ModuleNotFoundError" not in result.stderr, result.stderr
+    assert result.returncode in (0, 1), result.stderr
+    assert json.loads(result.stdout)["product"] == "SW Local Agent Service"
+
+
 def test_json_output_is_machine_readable(tmp_path: Path) -> None:
     result = run_install("--json", "--data-root", str(tmp_path / "d"))
     assert result.returncode in (0, 1), result.stderr

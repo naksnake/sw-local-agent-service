@@ -1,23 +1,41 @@
-"""install.sh runs `slas doctor` from the source tree on a bare host: no third-party imports."""
+"""install.sh runs `slas doctor` from the source tree on a bare host: no third-party imports.
+
+The path list comes from install.sh itself, so a module the CLI starts importing must be
+added to the installer's PYTHONPATH — a hard-coded copy here once let the two drift apart
+and `./install.sh` failed on a fresh host with ModuleNotFoundError.
+"""
 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HOST_CLI_PACKAGES = (
-    "packages/slas-cli",
-    "packages/slas-kernel",
-    "packages/slas-schemas",
-    "services/sandbox-manager",  # only its stdlib-only `toolchains` module is imported
-)
+INSTALL_SH = REPO_ROOT / "install.sh"
+
+
+def install_sh_pythonpath() -> list[Path]:
+    """The directories install.sh puts on PYTHONPATH when running from the source tree."""
+    match = re.search(
+        r'^export PYTHONPATH="(.+?)\$\{PYTHONPATH:\+', INSTALL_SH.read_text(), re.MULTILINE
+    )
+    assert match, "install.sh must export PYTHONPATH for the source-tree preflight"
+    entries = match.group(1).rstrip(":").split(":")
+    return [Path(entry.replace("$SCRIPT_DIR", str(REPO_ROOT))) for entry in entries]
+
+
+def test_install_sh_pythonpath_directories_exist() -> None:
+    for directory in install_sh_pythonpath():
+        assert directory.is_dir(), (
+            f"install.sh puts {directory} on PYTHONPATH but it does not exist"
+        )
 
 
 def test_slas_doctor_imports_with_site_packages_disabled(tmp_path: Path) -> None:
-    pythonpath = os.pathsep.join(str(REPO_ROOT / name) for name in HOST_CLI_PACKAGES)
+    pythonpath = os.pathsep.join(str(directory) for directory in install_sh_pythonpath())
     result = subprocess.run(
         [
             sys.executable,
@@ -27,6 +45,8 @@ def test_slas_doctor_imports_with_site_packages_disabled(tmp_path: Path) -> None
             "import slas_cli.cli, slas_cli.doctor, slas_schemas, slas_schemas.envfile\n"
             "import slas_sandbox_manager.toolchains\n"
             "from slas_kernel.branding import PRODUCT_NAME\n"
+            # install.sh calls `slas doctor`, which builds the whole parser, sub-commands included.
+            "slas_cli.cli.build_parser({})\n"
             "assert 'pydantic' not in sys.modules, 'the host CLI must not import pydantic'\n"
             "print(PRODUCT_NAME)",
         ],
