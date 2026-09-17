@@ -1,0 +1,43 @@
+[project]
+name = "slas-api"
+version = "0.0.1"
+description = "The api: sign-in, sessions, people, runtime settings, the model registry view, health and metrics"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+# The dependency set of ADR-0005, approved by the project owner on 2026-09-17, each pinned
+# with == (INV-8). Deviations from the ADR text are recorded in the ADR's status note:
+# a synchronous SQLAlchemy engine on psycopg 3 (FastAPI runs the sync endpoints in its
+# threadpool) and slas_observability's EventLog instead of structlog.
+dependencies = [
+  "fastapi==0.141.1",
+  "uvicorn==0.53.0",
+  "pydantic==2.13.5",
+  "pydantic-settings==2.15.0",
+  "sqlalchemy==2.0.54",
+  "psycopg[binary]==3.3.5",
+  "alembic==1.20.0",
+  "redis==8.1.0",
+  "argon2-cffi==25.1.0",
+  "pyyaml==6.0.3",
+  "types-PyYAML==6.0.12.20260906",
+  "slas-authz",
+  "slas-model-manager",
+  "slas-observability",
+  "slas-schemas",
+]
+
+[project.scripts]
+slas-api = "slas_api.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.uv.sources]
+slas-authz = { workspace = true }
+slas-model-manager = { workspace = true }
+slas-observability = { workspace = true }
+slas-schemas = { workspace = true }

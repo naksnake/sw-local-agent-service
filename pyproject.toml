@@ -7,6 +7,7 @@ version = "0.0.1"
 description = "SW Local Agent Service — workspace root (not a package)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "slas-api",
   "slas-authz",
   "slas-cli",
   "slas-deploy",
@@ -35,6 +36,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  "httpx==0.28.1",  # FastAPI's TestClient (ADR-0005); the api itself never imports it
   "mypy==2.3.1",
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
@@ -45,8 +47,9 @@ dev = [
 package = false
 
 [tool.uv.workspace]
-# apps/api and the remaining services/* join the workspace when they gain a pyproject.
+# The remaining services/* join the workspace when they gain a pyproject.
 members = [
+  "apps/api",
   "packages/*",
   "services/agent-core-orchestrator",
   "services/factory-executor",
@@ -60,6 +63,7 @@ members = [
 ]
 
 [tool.uv.sources]
+slas-api = { workspace = true }
 slas-authz = { workspace = true }
 slas-cli = { workspace = true }
 slas-deploy = { workspace = true }
@@ -120,7 +124,7 @@ allowed-confusables = ["：", "（", "）", "；", "，", "。", "×"]
 
 [tool.ruff.lint.isort]
 known-first-party = [
-  "slas_authz", "slas_cli", "slas_deploy", "slas_diff", "slas_eval", "slas_factory_executor", "slas_git", "slas_git_broker", "slas_hal",
+  "slas_api", "slas_authz", "slas_cli", "slas_deploy", "slas_diff", "slas_eval", "slas_factory_executor", "slas_git", "slas_git_broker", "slas_hal",
   "slas_kernel", "slas_llm_gateway", "slas_model_manager", "slas_observability", "slas_orchestrator",
   "slas_rag",
   "slas_sandbox_manager", "slas_schemas", "slas_screen", "slas_screen_worker", "slas_skills",
@@ -135,6 +139,7 @@ strict = true
 warn_unreachable = true
 pretty = true
 files = [
+  "apps/api",
   "packages",
   "services/agent-core-orchestrator",
   "services/factory-executor",
@@ -156,6 +161,7 @@ testpaths = ["tests"]
 addopts = [
   "-q",
   "--strict-markers",
+  "--cov=slas_api",
   "--cov=slas_authz",
   "--cov=slas_cli",
   "--cov=slas_diff",
