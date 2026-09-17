@@ -12,6 +12,7 @@ same module. The bundle manifest is JSON at `${SLAS_DATA_ROOT}/Toolchains/manife
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -21,7 +22,12 @@ from typing import Final
 from slas_schemas.errors import ThreePartMessage
 
 MANIFEST_NAME: Final = "manifest.json"
-IMAGE_REGISTRY: Final = "registry.internal/slas"
+#: Sandbox images are tagged `<registry>/slas/sandbox-<language>:<version>`, the same shape
+#: `install.sh --build` gives every first-party image (`${SLAS_REGISTRY}/slas/<name>:<tag>`,
+#: ADR-0014). The registry label comes from SLAS_SANDBOX_REGISTRY; "local" is what `--build`
+#: tags with.
+REGISTRY_ENV: Final = "SLAS_SANDBOX_REGISTRY"
+DEFAULT_REGISTRY: Final = "local"
 _VERSION = re.compile(r"^\d+(?:\.\d+){0,3}$")
 
 
@@ -155,7 +161,13 @@ DEFAULT_MANIFEST: Final[dict[str, object]] = {
         "typescript": ["5.9.3"],
         "config": ["1.35.1"],
     },
-    "companions": {"node": "22.22.2", "ruff": "0.16.7", "mypy": "2.3.1", "pytest": "9.1.1"},
+    "companions": {
+        "node": "22.22.2",
+        "ruff": "0.16.7",
+        "mypy": "2.3.1",
+        "pytest": "9.1.1",
+        "jsonschema": "4.23.0",
+    },
 }
 
 
@@ -283,7 +295,11 @@ def manifest_path(data_root: Path) -> Path:
 
 
 def load_manifest(data_root: Path) -> Manifest:
-    path = manifest_path(data_root)
+    return load_manifest_file(manifest_path(data_root))
+
+
+def load_manifest_file(path: Path) -> Manifest:
+    """The manifest at `path` (SLAS_TOOLCHAIN_MANIFEST); the bundled default when absent."""
     if not path.is_file():
         return default_manifest()
     try:
@@ -336,9 +352,19 @@ def add_toolchain(data_root: Path, language: str, version: str, archive: Path) -
 # --- resolution ---------------------------------------------------------------------------
 
 
-def image_for(language: str, version: str) -> str:
-    """One sandbox image per language, tagged by the toolchain version (INV-8: never latest)."""
-    return f"{IMAGE_REGISTRY}/sandbox-{language_spec(language).id}:{version}"
+def sandbox_registry(registry: str | None = None) -> str:
+    """The sandbox images' registry label: the argument, else SLAS_SANDBOX_REGISTRY, else local."""
+    chosen = (registry or os.environ.get(REGISTRY_ENV, "")).strip().rstrip("/")
+    return chosen or DEFAULT_REGISTRY
+
+
+def image_for(language: str, version: str, *, registry: str | None = None) -> str:
+    """One sandbox image per language and toolchain version (INV-8: never latest).
+
+    `<registry>/slas/sandbox-<language>:<version>` — the tag `python -m
+    slas_sandbox_manager.images list` prints and `install.sh --build` builds.
+    """
+    return f"{sandbox_registry(registry)}/slas/sandbox-{language_spec(language).id}:{version}"
 
 
 @dataclass(frozen=True)
@@ -355,6 +381,7 @@ class Resolution:
     def to_record(self) -> dict[str, object]:
         return {
             "language": self.language,
+            "label": self.label,
             "requested": self.requested,
             "version": self.version,
             "honoured": self.honoured,
@@ -363,7 +390,9 @@ class Resolution:
         }
 
 
-def resolve(language: str, requested: str | None, manifest: Manifest) -> Resolution:
+def resolve(
+    language: str, requested: str | None, manifest: Manifest, *, registry: str | None = None
+) -> Resolution:
     spec = language_spec(language)
     versions = manifest.versions(spec.id)
     if not versions:
@@ -384,7 +413,7 @@ def resolve(language: str, requested: str | None, manifest: Manifest) -> Resolut
             newest,
             True,
             f"{spec.label}: no version pinned, so the newest bundled {spec.tool} {newest} is used.",
-            image_for(spec.id, newest),
+            image_for(spec.id, newest, registry=registry),
             spec.checks,
         )
     exact = [v for v in versions if v == wanted]
@@ -399,7 +428,7 @@ def resolve(language: str, requested: str | None, manifest: Manifest) -> Resolut
             chosen,
             True,
             f"{spec.label} {wanted} pinned; the bundle has it {how}, using {chosen}.",
-            image_for(spec.id, chosen),
+            image_for(spec.id, chosen, registry=registry),
             spec.checks,
         )
     return Resolution(
@@ -410,12 +439,14 @@ def resolve(language: str, requested: str | None, manifest: Manifest) -> Resolut
         False,
         f"{spec.label} {wanted} isn't in the offline toolchain bundle, so the newest bundled "
         f"{newest} is used instead.",
-        image_for(spec.id, newest),
+        image_for(spec.id, newest, registry=registry),
         spec.checks,
     )
 
 
-def resolve_all(choices: dict[str, str | None], manifest: Manifest) -> list[Resolution]:
+def resolve_all(
+    choices: dict[str, str | None], manifest: Manifest, *, registry: str | None = None
+) -> list[Resolution]:
     """Resolve every chosen language, in the order given; duplicates collapse."""
     seen: set[str] = set()
     out: list[Resolution] = []
@@ -424,7 +455,7 @@ def resolve_all(choices: dict[str, str | None], manifest: Manifest) -> list[Reso
         if spec.id in seen:
             continue
         seen.add(spec.id)
-        out.append(resolve(spec.id, requested, manifest))
+        out.append(resolve(spec.id, requested, manifest, registry=registry))
     return out
 
 
