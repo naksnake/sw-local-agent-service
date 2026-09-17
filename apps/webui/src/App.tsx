@@ -1,145 +1,301 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
+import type { PeopleApi, SettingsApi } from "./admin/api";
+import { PeoplePage } from "./admin/PeoplePage";
+import { SettingsPage } from "./admin/SettingsPage";
 import { PRODUCT_NAME, VERSION } from "./branding";
 import type { CodingApi } from "./coding/api";
 import { CodingPage } from "./coding/CodingPage";
+import { homeWelcome, later, notAllowed, shell as copy, unknownAddress } from "./copy/en";
 import type { FactoryApi, StationsAdminApi } from "./factory/api";
 import { FactoryPage } from "./factory/FactoryPage";
 import { StationsAdmin } from "./factory/StationsAdmin";
 import type { GitApi } from "./git/api";
 import { GitHostsAdmin } from "./git/GitHostsAdmin";
 import { GitRemotesSettings } from "./git/GitRemotesSettings";
+import type { HomeListsApi } from "./home/api";
 import { type AgentPage, HomePage, healthSentence, type Snapshot } from "./home/HomePage";
+import type { ModelsApi } from "./models/api";
+import { ModelsPage } from "./models/ModelsPage";
+import type { Person, SessionApi } from "./session/api";
+import { ChoosePasswordPage } from "./session/ChoosePasswordPage";
+import { SignInPage } from "./session/SignInPage";
+import { type Session, SessionProvider, useSession } from "./session/store";
 import type { ValidationApi } from "./validation/api";
 import { ValidationPage } from "./validation/ValidationPage";
 
-// The shell from docs/ui-demo/slas-ui-demo.html (CLAUDE.md §9; copy in docs/ui/home.md):
-// a left rail with the nine pages, a top bar with one health sentence, and the page.
-// Until apps/api exists the pages run on the API fakes main.tsx passes in; a page whose
-// API is absent is left out of the rail rather than shown empty.
+// The shell from docs/ui-demo/slas-ui-demo.html (CLAUDE.md §9; copy in docs/ui/home.md and
+// docs/ui/sign-in.md): a left rail, a top bar with one health sentence, and the page. Routes
+// follow ADR-0009: /sign-in and /choose-password stand alone; everything else lives inside
+// the shell behind the session gate. A page whose API is absent is left out of the rail and
+// answers "There is nothing at this address" rather than showing an empty page. Without a
+// SessionApi the shell runs ungated — component tests only; main.tsx always passes one.
 
-interface Props {
+export interface AppProps {
+  sessionApi?: SessionApi;
+  homeListsApi?: HomeListsApi;
+  peopleApi?: PeopleApi;
+  settingsApi?: SettingsApi;
+  modelsApi?: ModelsApi;
   codingApi?: CodingApi;
   validationApi?: ValidationApi;
   factoryApi?: FactoryApi;
   stationsApi?: StationsAdminApi;
   gitApi?: GitApi;
-  /** Who is signed in; shown in the top bar and recorded on approvals and decisions. */
+  /** Who is signed in when there is no SessionApi (tests); shown in the top bar. */
   user?: string;
+  /** A dev-only line under the sign-in form naming the fake accounts. */
+  signInHint?: string;
 }
 
-type AdminTab = "git-hosts" | "stations";
+export function App(props: AppProps) {
+  if (props.sessionApi !== undefined) {
+    return (
+      <SessionProvider api={props.sessionApi}>
+        <Routed {...props} />
+      </SessionProvider>
+    );
+  }
+  return <Routed {...props} />;
+}
 
-export type Page =
-  | "home"
-  | "coding"
-  | "validation"
-  | "factory"
-  | "runs"
-  | "models"
-  | "skills"
-  | "settings"
-  | "admin";
+type AdminTab = "people" | "settings" | "git-hosts" | "stations";
 
-const RAIL: [Page, string][] = [
-  ["home", "Home"],
-  ["coding", "Coding"],
-  ["validation", "Validation"],
-  ["factory", "Factory"],
-  ["runs", "Runs"],
-  ["models", "Models"],
-  ["skills", "Skills"],
-  ["settings", "Settings"],
-  ["admin", "Admin"],
+const RAIL: [path: string, label: string][] = [
+  ["/", copy.rail.home],
+  ["/coding", copy.rail.coding],
+  ["/validation", copy.rail.validation],
+  ["/factory", copy.rail.factory],
+  ["/runs", copy.rail.runs],
+  ["/models", copy.rail.models],
+  ["/skills", copy.rail.skills],
+  ["/settings", copy.rail.settings],
+  ["/admin", copy.rail.admin],
 ];
 
-const LATER: Record<"runs" | "models" | "skills", { heading: string; lede: string; sentence: string }> = {
-  runs: {
-    heading: "Runs",
-    lede: "Every ticket, across the three agents.",
-    sentence:
-      "Every ticket from the three agents will be listed here once the ticket service is connected (Phase 3). Until then, each agent's page lists its own work.",
-  },
-  models: {
-    heading: "Models",
-    lede: "Which model serves each role, and the cross-check voters.",
-    sentence:
-      "Models are read from Models/models.yaml. This page arrives with the Models service (Phase 3); until then, edit the file on the host and run `slas model fit` before a load.",
-  },
-  skills: {
-    heading: "Skills",
-    lede: "Reusable step-by-step recipes. Write one once, then turn it on for any agent.",
-    sentence:
-      "The skill library and its per-agent switches arrive with Phase 4 (ADR-0013). Skills already imported are offered by the New task, run and job wizards.",
-  },
+const TAB_LABEL: Record<AdminTab, string> = {
+  people: copy.adminTabs.people,
+  settings: copy.adminTabs.settings,
+  "git-hosts": copy.adminTabs.gitHosts,
+  stations: copy.adminTabs.stations,
 };
+
+function Routed(props: AppProps) {
+  const { homeListsApi, peopleApi, settingsApi, modelsApi, codingApi, validationApi, factoryApi, stationsApi, gitApi } = props;
+  const session = useSession();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [snap, setSnap] = useState<Snapshot | null>(null);
+  const onSnapshot = useCallback((s: Snapshot) => setSnap(s), []);
+
+  if (session !== null && session.state.status === "checking") {
+    return (
+      <main className="auth">
+        <p role="status" className="sentence">
+          {copy.checking}
+        </p>
+      </main>
+    );
+  }
+
+  const person: Person | null = session !== null && session.state.status === "signed-in" ? session.state.person : null;
+  const anonymous = session !== null && session.state.status === "anonymous";
+  const mustChange = person?.must_change_password === true;
+  const can = (capability: string) => session === null || session.hasCapability(capability);
+
+  const tabs: AdminTab[] = [];
+  if (peopleApi !== undefined && can("admin:people")) tabs.push("people");
+  if (settingsApi !== undefined && can("admin:settings")) tabs.push("settings");
+  if (gitApi !== undefined && can("git:hosts_manage")) tabs.push("git-hosts");
+  if (stationsApi !== undefined && can("factory:stations_manage")) tabs.push("stations");
+
+  const available: Record<string, boolean> = {
+    "/": true,
+    "/coding": codingApi !== undefined,
+    "/validation": validationApi !== undefined,
+    "/factory": factoryApi !== undefined,
+    "/runs": true,
+    "/models": true,
+    "/skills": true,
+    "/settings": gitApi !== undefined && can("git:remote_manage"),
+    "/admin": tabs.length > 0,
+  };
+
+  const wizard = (location.state as { wizard?: boolean } | null)?.wizard === true;
+  const openFromHome = (page: AgentPage, openWizard: boolean) => navigate(`/${page}`, { state: { wizard: openWizard } });
+  const agentsPresent = codingApi !== undefined || validationApi !== undefined || factoryApi !== undefined;
+  const welcome = person === null ? undefined : homeWelcome(person.display_name, person.capabilities, { agentsPresent });
+  const userName = person?.display_name ?? props.user ?? "you";
+
+  /** A page that needs a capability: the not-allowed sentence instead of a blank page. */
+  const guarded = (capability: string, element: React.ReactNode) => (can(capability) ? element : <NotAllowed />);
+
+  return (
+    <Routes>
+      <Route
+        path="/sign-in"
+        element={
+          session === null ? (
+            <Navigate to="/" replace />
+          ) : anonymous ? (
+            <SignInPage session={session} {...(props.signInHint !== undefined ? { hint: props.signInHint } : {})} />
+          ) : (
+            <Navigate to={mustChange ? "/choose-password" : "/"} replace />
+          )
+        }
+      />
+      <Route
+        path="/choose-password"
+        element={
+          session === null ? (
+            <Navigate to="/" replace />
+          ) : person === null ? (
+            <Navigate to="/sign-in" replace />
+          ) : !mustChange ? (
+            <Navigate to="/" replace />
+          ) : (
+            <ChoosePasswordPage session={session} person={person} />
+          )
+        }
+      />
+      <Route
+        element={
+          anonymous ? (
+            <Navigate to="/sign-in" replace />
+          ) : mustChange ? (
+            <Navigate to="/choose-password" replace />
+          ) : (
+            <Shell rail={RAIL.filter(([path]) => available[path])} snap={snap} person={person} userName={userName} session={session} />
+          )
+        }
+      >
+        <Route
+          index
+          element={
+            <HomePage
+              {...(homeListsApi !== undefined ? { lists: homeListsApi } : {})}
+              {...(codingApi !== undefined ? { codingApi } : {})}
+              {...(validationApi !== undefined ? { validationApi } : {})}
+              {...(factoryApi !== undefined ? { factoryApi } : {})}
+              {...(welcome !== undefined ? { welcome } : {})}
+              onOpen={openFromHome}
+              onSnapshot={onSnapshot}
+            />
+          }
+        />
+        <Route
+          path="coding"
+          element={
+            codingApi !== undefined ? (
+              <CodingPage api={codingApi} startWizardOpen={wizard} {...(gitApi !== undefined ? { gitApi } : {})} />
+            ) : (
+              <UnknownAddress />
+            )
+          }
+        />
+        <Route
+          path="validation"
+          element={
+            validationApi !== undefined ? (
+              <ValidationPage api={validationApi} user={userName} startWizardOpen={wizard} />
+            ) : (
+              <UnknownAddress />
+            )
+          }
+        />
+        <Route
+          path="factory"
+          element={
+            factoryApi !== undefined ? <FactoryPage api={factoryApi} user={userName} startWizardOpen={wizard} /> : <UnknownAddress />
+          }
+        />
+        <Route path="runs" element={<Later page="runs" />} />
+        <Route path="models" element={modelsApi !== undefined ? <ModelsPage api={modelsApi} /> : <Later page="models" />} />
+        <Route path="skills" element={<Later page="skills" />} />
+        <Route
+          path="settings"
+          element={gitApi !== undefined ? guarded("git:remote_manage", <GitRemotesSettings api={gitApi} />) : <UnknownAddress />}
+        />
+        <Route path="admin" element={<AdminSection tabs={tabs} />}>
+          <Route index element={tabs[0] !== undefined ? <Navigate to={tabs[0]} replace /> : <NotAllowed />} />
+          <Route
+            path="people"
+            element={peopleApi !== undefined ? guarded("admin:people", <PeoplePage api={peopleApi} me={person} />) : <UnknownAddress />}
+          />
+          <Route
+            path="settings"
+            element={settingsApi !== undefined ? guarded("admin:settings", <SettingsPage api={settingsApi} />) : <UnknownAddress />}
+          />
+          <Route
+            path="git-hosts"
+            element={gitApi !== undefined ? guarded("git:hosts_manage", <GitHostsAdmin api={gitApi} />) : <UnknownAddress />}
+          />
+          <Route
+            path="stations"
+            element={
+              stationsApi !== undefined ? guarded("factory:stations_manage", <StationsAdmin api={stationsApi} />) : <UnknownAddress />
+            }
+          />
+          <Route path="*" element={<UnknownAddress />} />
+        </Route>
+        <Route path="*" element={<UnknownAddress />} />
+      </Route>
+    </Routes>
+  );
+}
+
+// --- shell -------------------------------------------------------------------------------------
 
 function clock(now: Date): string {
   return now.toLocaleTimeString(undefined, { hour12: false });
 }
 
-export function App({ codingApi, validationApi, factoryApi, stationsApi, gitApi, user = "you" }: Props) {
-  const [page, setPage] = useState<Page>("home");
-  const [openWizard, setOpenWizard] = useState<AgentPage | null>(null);
-  const [adminTab, setAdminTab] = useState<AdminTab>(gitApi !== undefined ? "git-hosts" : "stations");
-  const [snap, setSnap] = useState<Snapshot | null>(null);
+interface ShellProps {
+  rail: [path: string, label: string][];
+  snap: Snapshot | null;
+  person: Person | null;
+  userName: string;
+  session: Session | null;
+}
+
+function Shell({ rail, snap, person, userName, session }: ShellProps) {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
   const [now, setNow] = useState(() => new Date());
-  const [whoNote, setWhoNote] = useState(false);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
 
-  const adminAvailable = gitApi !== undefined || stationsApi !== undefined;
-  const available: Record<Page, boolean> = {
-    home: true,
-    coding: codingApi !== undefined,
-    validation: validationApi !== undefined,
-    factory: factoryApi !== undefined,
-    runs: true,
-    models: true,
-    skills: true,
-    settings: gitApi !== undefined,
-    admin: adminAvailable,
-  };
-
-  const go = (target: Page) => {
-    setOpenWizard(null);
-    setPage(target);
-  };
-  const openFromHome = useCallback((target: AgentPage, wizard: boolean) => {
-    setOpenWizard(wizard ? target : null);
-    setPage(target);
-  }, []);
-  const onSnapshot = useCallback((s: Snapshot) => setSnap(s), []);
-
   const health = healthSentence(snap);
   const dot = snap === null ? "idle" : health.startsWith("Everything") ? "" : "warn";
+  const current = (path: string) => (path === "/" ? pathname === "/" : pathname === path || pathname.startsWith(`${path}/`));
 
   return (
     <div className="app">
       <nav className="rail" aria-label="Pages">
         <div className="brand">
           <strong>{PRODUCT_NAME}</strong>
-          <span>Self-hosted, no cloud</span>
+          <span>{copy.brandLine}</span>
         </div>
-        {RAIL.filter(([key]) => available[key]).map(([key, label]) => (
+        {rail.map(([path, label]) => (
           <button
-            key={key}
+            key={path}
             type="button"
             className="rail-link"
-            aria-current={page === key ? "page" : undefined}
-            onClick={() => go(key)}
+            aria-current={current(path) ? "page" : undefined}
+            onClick={() => navigate(path)}
           >
             {label}
           </button>
         ))}
         <div className="spacer" />
         <div className="foot">
-          <span>Version {VERSION}</span>
+          <span>{copy.version(VERSION)}</span>
           <br />
-          <span>Air-gapped mode is on</span>
+          <span>{copy.airGapped}</span>
         </div>
       </nav>
 
@@ -153,84 +309,90 @@ export function App({ codingApi, validationApi, factoryApi, stationsApi, gitApi,
             <span className="pill mono" aria-label="Time">
               {clock(now)}
             </span>
-            <button type="button" className="btn small ghost" onClick={() => setWhoNote((v) => !v)}>
-              Signed in
-            </button>
+            {person !== null && session !== null ? (
+              <>
+                <span className="muted" data-testid="signed-in-as">
+                  {copy.signedInAs(person.display_name, person.role_label)}
+                </span>
+                <button type="button" className="btn small ghost" onClick={() => void session.signOut()}>
+                  {copy.signOut}
+                </button>
+              </>
+            ) : (
+              <span className="muted" data-testid="signed-in-as">
+                {copy.signedInAsPlain(userName)}
+              </span>
+            )}
           </div>
         </header>
-        {whoNote && (
-          <p className="muted" style={{ padding: "8px 28px 0" }}>
-            Signed in as {user}. Roles and permissions are managed under Admin → People.
-          </p>
-        )}
 
         <main className="view">
-          {page === "home" && (
-            <HomePage
-              {...(codingApi !== undefined ? { codingApi } : {})}
-              {...(validationApi !== undefined ? { validationApi } : {})}
-              {...(factoryApi !== undefined ? { factoryApi } : {})}
-              onOpen={openFromHome}
-              onSnapshot={onSnapshot}
-            />
-          )}
-          {page === "coding" && codingApi !== undefined && (
-            <CodingPage
-              api={codingApi}
-              startWizardOpen={openWizard === "coding"}
-              {...(gitApi !== undefined ? { gitApi } : {})}
-            />
-          )}
-          {page === "validation" && validationApi !== undefined && (
-            <ValidationPage api={validationApi} user={user} startWizardOpen={openWizard === "validation"} />
-          )}
-          {page === "factory" && factoryApi !== undefined && (
-            <FactoryPage api={factoryApi} user={user} startWizardOpen={openWizard === "factory"} />
-          )}
-          {(page === "runs" || page === "models" || page === "skills") && (
-            <div>
-              <div className="page-head">
-                <div>
-                  <h1>{LATER[page].heading}</h1>
-                  <p className="lede">{LATER[page].lede}</p>
-                </div>
-              </div>
-              <section className="panel">
-                <p className="sentence">{LATER[page].sentence}</p>
-              </section>
-            </div>
-          )}
-          {page === "settings" && gitApi !== undefined && <GitRemotesSettings api={gitApi} />}
-          {page === "admin" && adminAvailable && (
-            <div className="stack">
-              {gitApi !== undefined && stationsApi !== undefined && (
-                <nav aria-label="Admin sections" className="tabs">
-                  <button
-                    type="button"
-                    className="tab"
-                    aria-current={adminTab === "git-hosts" ? "page" : undefined}
-                    onClick={() => setAdminTab("git-hosts")}
-                  >
-                    Git hosts
-                  </button>
-                  <button
-                    type="button"
-                    className="tab"
-                    aria-current={adminTab === "stations" ? "page" : undefined}
-                    onClick={() => setAdminTab("stations")}
-                  >
-                    Stations
-                  </button>
-                </nav>
-              )}
-              {adminTab === "git-hosts" && gitApi !== undefined && <GitHostsAdmin api={gitApi} />}
-              {(adminTab === "stations" || gitApi === undefined) && stationsApi !== undefined && (
-                <StationsAdmin api={stationsApi} />
-              )}
-            </div>
-          )}
+          <Outlet />
         </main>
       </div>
     </div>
+  );
+}
+
+function AdminSection({ tabs }: { tabs: AdminTab[] }) {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  return (
+    <div className="stack">
+      {tabs.length > 1 && (
+        <nav aria-label="Admin sections" className="tabs">
+          {tabs.map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              className="tab"
+              aria-current={pathname === `/admin/${tab}` ? "page" : undefined}
+              onClick={() => navigate(`/admin/${tab}`)}
+            >
+              {TAB_LABEL[tab]}
+            </button>
+          ))}
+        </nav>
+      )}
+      <Outlet />
+    </div>
+  );
+}
+
+function Later({ page }: { page: "runs" | "models" | "skills" }) {
+  return (
+    <div>
+      <div className="page-head">
+        <div>
+          <h1>{later[page].heading}</h1>
+          <p className="lede">{later[page].lede}</p>
+        </div>
+      </div>
+      <section className="panel">
+        <p className="sentence">{later[page].sentence}</p>
+      </section>
+    </div>
+  );
+}
+
+function NotAllowed() {
+  return (
+    <section className="panel" aria-label="Not allowed">
+      <p className="sentence">{notAllowed.sentence}</p>
+      <p>
+        <Link to="/">{notAllowed.link}</Link>
+      </p>
+    </section>
+  );
+}
+
+function UnknownAddress() {
+  return (
+    <section className="panel" aria-label="Unknown address">
+      <p className="sentence">{unknownAddress.sentence}</p>
+      <p>
+        <Link to="/">{unknownAddress.link}</Link>
+      </p>
+    </section>
   );
 }

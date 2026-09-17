@@ -457,6 +457,191 @@
     font-weight: 600;
   }
 
+  /* Sign in and Choose a new password: one card, centred */
+  .auth {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px 16px;
+  }
+  .auth-card {
+    width: 100%;
+    max-width: 440px;
+  }
+  .auth-card .lede {
+    margin-top: 4px;
+    color: var(--color-ink-2);
+    font-size: 14px;
+  }
+
+  /* Forms */
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .field > label,
+  .choices > legend {
+    font-weight: 500;
+  }
+  .input {
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-ctl);
+    background: var(--color-panel);
+    font: inherit;
+    color: inherit;
+  }
+  .input:focus-visible {
+    border-color: var(--color-accent);
+  }
+  .help {
+    color: var(--color-ink-2);
+    font-size: 12.5px;
+  }
+  .choices {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .choices > legend {
+    padding: 0;
+    margin-bottom: 4px;
+  }
+  .choice {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    cursor: pointer;
+  }
+  .choice input {
+    margin-top: 3px;
+  }
+  .choice > span {
+    display: flex;
+    flex-direction: column;
+  }
+  .choice .title {
+    font-weight: 500;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  /* Dialog: one per action, never stacked */
+  .dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgb(23 27 33 / 0.45);
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    z-index: 20;
+  }
+  .dialog {
+    background: var(--color-panel);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-panel);
+    padding: 18px 20px;
+    width: 100%;
+    max-width: 480px;
+    max-height: calc(100vh - 32px);
+    overflow: auto;
+  }
+  .dialog > h2 {
+    margin-bottom: 12px;
+  }
+  .otp {
+    display: block;
+    padding: 10px 12px;
+    border: 1px dashed var(--color-rule);
+    border-radius: var(--radius-ctl);
+    background: var(--color-rule-2);
+    font-size: 15px;
+    letter-spacing: 0.02em;
+    user-select: all;
+  }
+
+  /* Row menu */
+  .menu-cell {
+    position: relative;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .menu {
+    position: absolute;
+    right: 18px;
+    top: 100%;
+    margin-top: -6px;
+    min-width: 160px;
+    background: var(--color-panel);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-ctl);
+    box-shadow: 0 4px 16px rgb(23 27 33 / 0.12);
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
+    z-index: 10;
+    text-align: left;
+  }
+  .menu > button {
+    border: 0;
+    background: none;
+    padding: 7px 10px;
+    text-align: left;
+    border-radius: var(--radius-ctl);
+    cursor: pointer;
+  }
+  .menu > button:hover {
+    background: var(--color-rule-2);
+  }
+  table.list .title {
+    font-weight: 600;
+  }
+
+  /* Facts and cards */
+  .facts {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 6px 16px;
+    margin: 0;
+  }
+  .facts dt {
+    color: var(--color-ink-2);
+  }
+  .facts dd {
+    margin: 0;
+  }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+  }
+  .card {
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-panel);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .lines li {
+    padding: 4px 0;
+    border-bottom: 1px solid var(--color-rule-2);
+  }
+  .lines li:last-child {
+    border-bottom: 0;
+  }
+
   /* Console */
   .console {
     background: var(--color-console);
@@ -509,6 +694,9 @@
     }
     .bar {
       width: 100px;
+    }
+    .facts {
+      grid-template-columns: 1fr;
     }
   }
 }
