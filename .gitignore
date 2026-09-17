@@ -40,3 +40,6 @@ Backups/
 .DS_Store
 .idea/
 .vscode/
+
+# Claude Code session state and agent worktrees; never repository content
+/.claude/
