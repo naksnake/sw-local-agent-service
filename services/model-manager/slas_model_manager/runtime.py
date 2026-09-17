@@ -8,7 +8,7 @@ tests run against `FakeRuntime`.
 
 from __future__ import annotations
 
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol
 
 from pydantic import Field, model_validator
 
@@ -28,6 +28,19 @@ MANDATORY_GENERATE_FLAGS: Final[tuple[str, ...]] = (
 )
 GENERATE_ROLES: Final[frozenset[str]] = frozenset({"coder", "planner", "triage"})
 INFERENCE_NETWORK: Final = "slas-inference"
+
+#: What a vLLM instance does: chat completions, embeddings, or reranking scores
+#: (docs/api-contract-round-2.md §3: embed and rerank entries start with `--task embed` /
+#: `--task score` and none of the generate flags).
+VllmTask = Literal["generate", "embed", "score"]
+TASK_FOR_ROLE: Final[dict[str, VllmTask]] = {"embed": "embed", "rerank": "score"}
+
+
+def task_for_role(role: str | None) -> VllmTask:
+    """The vLLM task an instance serving `role` runs; a voter (no role) generates."""
+    if role is None:
+        return "generate"
+    return TASK_FOR_ROLE.get(role, "generate")
 
 
 class ContainerSpec(SlasModel):
@@ -81,7 +94,15 @@ def vllm_spec(
     image: str,
     models_dir: str = "/data/Models",
     generate: bool = True,
+    task: VllmTask = "generate",
 ) -> ContainerSpec:
+    """The vLLM container for `entry` as `name` on `gpu_ids`.
+
+    `task` decides the flags: a generate instance carries the mandatory prefix-caching and
+    xgrammar flags (CLAUDE.md §7); an embed or score instance carries `--task` and none of
+    them. `generate=False` keeps the older meaning "no generate flags" for callers that have
+    no task to name.
+    """
     argv = [
         "--model",
         f"{models_dir}/{entry.path}",
@@ -96,7 +117,9 @@ def vllm_spec(
         argv += ["--quantization", "fp8"]
     elif entry.quant == "awq4":
         argv += ["--quantization", "awq_marlin"]
-    if generate:
+    if task != "generate":
+        argv += ["--task", task]
+    elif generate:
         argv += ["--enable-prefix-caching", "--guided-decoding-backend", "xgrammar"]
     return ContainerSpec(
         name=name,

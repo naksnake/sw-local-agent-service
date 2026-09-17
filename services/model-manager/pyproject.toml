@@ -4,8 +4,8 @@ version = "0.0.1"
 description = "Model manager: the registry, fit sentences, vLLM container specs, blue/green swaps, reconciliation"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-# The Podman driver behind ContainerRuntime and the HTTP surface arrive with their approved
-# dependencies; everything here runs against FakeRuntime and FakeSmokeTester.
+# The approved set of ADR-0005/ADR-0015: the HTTP surface through slas-http, the runtime
+# socket through slas-container. Tests run against FakeContainerApi and scripted transports.
 dependencies = [
   "slas-schemas",
   "slas-llm-gateway",
@@ -15,6 +15,9 @@ dependencies = [
   "slas-container",
   "slas-observability",
 ]
+
+[project.scripts]
+slas-model-manager = "slas_model_manager.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9.0"]
