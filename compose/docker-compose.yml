@@ -327,7 +327,7 @@ services:
       SLAS_BIND: 0.0.0.0:8000
       SLAS_RUNTIME_SOCKET: /run/podman/podman.sock
       SLAS_GPU_IDS: "${SLAS_GPU_IDS}"
-      SLAS_GPU_VRAM_GIB: "${SLAS_GPU_VRAM_GIB:-180}"
+      SLAS_GPU_VRAM_GIB: "${SLAS_GPU_VRAM_GIB:-270}"
       SLAS_HOST_MODELS_DIR: "${SLAS_DATA_ROOT}/Models"
       SLAS_INFERENCE_NETWORK: slas_slas-inference
       SLAS_VLLM_IMAGE: "${SLAS_REGISTRY}/vllm/vllm-openai:v0.29.0-x86_64-cu129"
@@ -442,6 +442,7 @@ services:
       SLAS_HOST_DATA_ROOT: "${SLAS_DATA_ROOT}"
       SLAS_TOOLCHAIN_MANIFEST: /data/Toolchains/manifest.json
       SLAS_SANDBOX_REGISTRY: "${SLAS_REGISTRY}"
+      SLAS_SANDBOX_USER: "${SLAS_UID}:${SLAS_GID}"
       DEFAULT_RUNTIME: runsc
       SANDBOX_TIER: gvisor
       DEFAULT_NETWORK: none

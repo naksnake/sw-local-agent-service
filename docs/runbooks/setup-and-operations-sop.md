@@ -124,7 +124,7 @@ and `docker compose -p slas ps` list them; `docker compose -p slas logs <service
 `SLAS_VLLM_IMAGE` over the runtime socket: `vllm-coder`, `vllm-planner`, `vllm-triage`,
 `vllm-embed`, `vllm-rerank`, and `vllm-voter-<model id>` for each voter, all on the
 `slas_slas-inference` network (internal, no egress), with `/AI/Agent/Models` mounted
-read-only and the GPUs the placement assigns (`SLAS_GPU_VRAM_GIB`, 180 GiB per GPU by
+read-only and the GPUs the placement assigns (`SLAS_GPU_VRAM_GIB`, 270 GiB per GPU by
 default). `docker ps --filter label=slas.kind=vllm` lists them; the Models page and
 `GET /v1/status` on the model manager say the state of each in a sentence; an instance that
 does not fit is reported, never started. Prometheus scrapes them by those names.

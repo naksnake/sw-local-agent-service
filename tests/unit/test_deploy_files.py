@@ -264,7 +264,7 @@ def test_round_2_wiring_of_the_compose_services() -> None:
     mm = services["model-manager"]["environment"]
     assert mm["SLAS_INFERENCE_NETWORK"] == "slas_slas-inference"
     assert mm["SLAS_HOST_MODELS_DIR"] == "${SLAS_DATA_ROOT}/Models"
-    assert mm["SLAS_GPU_VRAM_GIB"] == "${SLAS_GPU_VRAM_GIB:-180}"
+    assert mm["SLAS_GPU_VRAM_GIB"] == "${SLAS_GPU_VRAM_GIB:-270}"
     assert mm["SLAS_RECONCILE_INTERVAL_S"] == "30" and mm["SLAS_VLLM_SHM"] == "16g"
     assert (
         mm["SLAS_RUNTIME_SOCKET"]
@@ -276,13 +276,16 @@ def test_round_2_wiring_of_the_compose_services() -> None:
         and "${SLAS_DATA_ROOT}/Models:/data/Models" in services["model-manager"]["volumes"]
     )
     assert "slas-inference" in compose.networks_of(doc, "model-manager"), "it probes vllm-* itself"
-    assert "SLAS_GPU_VRAM_GIB=180" in (REPO_ROOT / "config" / ".env.example").read_text()
+    assert "SLAS_GPU_VRAM_GIB=270" in (REPO_ROOT / "config" / ".env.example").read_text()
 
     # sandbox-manager (§4).
     sm = services["sandbox-manager"]["environment"]
     assert sm["SLAS_HOST_DATA_ROOT"] == "${SLAS_DATA_ROOT}" and sm["SLAS_DATA_ROOT"] == "/data"
     assert sm["SLAS_TOOLCHAIN_MANIFEST"] == "/data/Toolchains/manifest.json"
     assert sm["SLAS_SANDBOX_REGISTRY"] == "${SLAS_REGISTRY}"
+    assert sm["SLAS_SANDBOX_USER"] == "${SLAS_UID}:${SLAS_GID}", (
+        "sandboxes write what the platform owns"
+    )
     assert (
         sm["SLAS_RUNTIME_SOCKET"] == "/run/podman/podman.sock" and sm["DEFAULT_RUNTIME"] == "runsc"
     )

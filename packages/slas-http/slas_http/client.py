@@ -111,7 +111,9 @@ class ServiceClient:
         identity: Identity | None = None,
         timeout_s: float | None = None,
     ) -> Any:
-        headers = tracing.outbound_headers()
+        # Never bind a trace id as a side effect: a background loop (a reconcile tick, a
+        # poller) without one gets a fresh id per request and leaves the context untouched.
+        headers = tracing.outbound_headers(tracing.current_trace_id() or tracing.new_trace_id())
         if identity is not None:
             headers.update(identity.headers())
         try:

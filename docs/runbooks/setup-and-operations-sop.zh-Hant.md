@@ -115,7 +115,7 @@ B300 的 GPU 配置（8 顆 GPU，每顆約 288 GB）：
 角色與每個投票模型透過容器執行環境 socket 以 `SLAS_VLLM_IMAGE` 建立一個容器：`vllm-coder`、`vllm-planner`、
 `vllm-triage`、`vllm-embed`、`vllm-rerank`，以及每個投票模型一個 `vllm-voter-<model id>`，全部位於
 `slas_slas-inference` 網路（內部網路，無對外連線），以唯讀方式掛載 `/AI/Agent/Models`，並配置放置演算法
-指定的 GPU（`SLAS_GPU_VRAM_GIB`，預設每顆 GPU 180 GiB）。`docker ps --filter label=slas.kind=vllm`
+指定的 GPU（`SLAS_GPU_VRAM_GIB`，預設每顆 GPU 270 GiB）。`docker ps --filter label=slas.kind=vllm`
 列出它們；Models 頁面與模型管理器的 `GET /v1/status` 以一句話說明每個實例的狀態；容納不下的實例會被
 回報，絕不啟動。Prometheus 以這些名稱抓取指標。
 

@@ -16,10 +16,15 @@ import httpx
 
 from slas_model_manager.driver import instance_url
 from slas_model_manager.swap import SmokeResult
-from slas_observability.tracing import outbound_headers
+from slas_observability.tracing import current_trace_id, new_trace_id, outbound_headers
 
 SMOKE_PROMPT: Final = "Reply with the single word: ready"
 SMOKE_TIMEOUT_S: Final = 120.0
+
+
+def _trace_headers() -> dict[str, str]:
+    """The trace headers for one probe without binding an id to the calling thread."""
+    return outbound_headers(current_trace_id() or new_trace_id())
 
 
 class HttpSmokeTester:
@@ -56,7 +61,7 @@ class HttpSmokeTester:
                     "max_tokens": 8,
                     "temperature": 0,
                 },
-                headers=outbound_headers(),
+                headers=_trace_headers(),
             )
         except httpx.HTTPError as exc:
             return SmokeResult(
@@ -82,7 +87,7 @@ class HttpSmokeTester:
         )
 
     def _served_model(self, base: str) -> str | None:
-        response = self._client.get(f"{base}/v1/models", headers=outbound_headers())
+        response = self._client.get(f"{base}/v1/models", headers=_trace_headers())
         if response.status_code != 200:
             return None
         payload: Any = _json(response)

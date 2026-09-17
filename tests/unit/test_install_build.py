@@ -91,29 +91,28 @@ SANDBOX_TAGS = ("local/slas/sandbox-python:3.12.6", "local/slas/sandbox-shell:5.
 
 
 def mirror_checkout(tmp_path: Path, *, sandbox_cli: bool) -> Path:
-    """A symlink mirror of the repository; with `sandbox_cli` its sandbox manager carries the
-    stub `images` module (the real one lands with its own slice)."""
+    """A symlink mirror of the repository. With `sandbox_cli` the sandbox manager carries the
+    small stub `images` module (a fixed two-image listing the assertions know); without it the
+    module is absent, the case of a checkout whose sandbox manager has no `images list` yet."""
     mirror = tmp_path / "repo"
     if mirror.exists():
         return mirror
     mirror.mkdir()
     for entry in REPO_ROOT.iterdir():
-        if entry.name == "services" and sandbox_cli:
+        if entry.name == "services":
             continue
         (mirror / entry.name).symlink_to(entry)
+    services = mirror / "services"
+    services.mkdir()
+    for entry in (REPO_ROOT / "services").iterdir():
+        if entry.name != "sandbox-manager":
+            (services / entry.name).symlink_to(entry)
+    package = services / "sandbox-manager" / "slas_sandbox_manager"
+    package.mkdir(parents=True)
+    for entry in (REPO_ROOT / "services" / "sandbox-manager" / "slas_sandbox_manager").iterdir():
+        if entry.name != "images.py":
+            (package / entry.name).symlink_to(entry)
     if sandbox_cli:
-        services = mirror / "services"
-        services.mkdir()
-        for entry in (REPO_ROOT / "services").iterdir():
-            if entry.name != "sandbox-manager":
-                (services / entry.name).symlink_to(entry)
-        package = services / "sandbox-manager" / "slas_sandbox_manager"
-        package.mkdir(parents=True)
-        for entry in (
-            REPO_ROOT / "services" / "sandbox-manager" / "slas_sandbox_manager"
-        ).iterdir():
-            if entry.name != "images.py":
-                (package / entry.name).symlink_to(entry)
         (package / "images.py").write_text(STUB_SANDBOX_IMAGES)
     return mirror
 
@@ -836,7 +835,7 @@ def test_write_env_records_the_runtime_socket_only_while_it_is_at_the_default(
     changed = write("/var/run/docker.sock")
     assert "SLAS_RUNTIME_SOCKET" in changed
     assert read_env(target).get("SLAS_RUNTIME_SOCKET") == "/var/run/docker.sock"
-    assert read_env(target).get("SLAS_GPU_VRAM_GIB") == "180", "the template's default rides along"
+    assert read_env(target).get("SLAS_GPU_VRAM_GIB") == "270", "the template's default rides along"
     env = read_env(target)
     env.set("SLAS_RUNTIME_SOCKET", "/run/user/1000/podman/podman.sock")
     target.write_text(env.render())

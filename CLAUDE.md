@@ -16,7 +16,7 @@
 > driven over the runtime socket with the Engine API (`slas_container`), so the model manager
 > starts the vLLM instances and the sandbox manager the sandboxes on Docker or Podman alike;
 > `install.sh --build` also builds the sandbox images, pulls the pinned vLLM image and names
-> the socket that exists.
+> the socket that exists; ADR-0016 pins `cryptography` for the git broker's AES-GCM credential sealer.
 
 ---
 
@@ -745,7 +745,7 @@ services:
   model-manager: { <<: *common, image: registry.internal/slas/model-manager@sha256:…,
                  networks: [slas-backend, slas-inference],
                  environment: { SLAS_GATEWAY_URL: "http://llm-gateway:8000", SLAS_VLLM_IMAGE: "${SLAS_REGISTRY}/vllm/vllm-openai:v0.29.0-x86_64-cu129",
-                                SLAS_INFERENCE_NETWORK: slas_slas-inference, SLAS_HOST_MODELS_DIR: "${SLAS_DATA_ROOT}/Models", SLAS_GPU_VRAM_GIB: "180" },
+                                SLAS_INFERENCE_NETWORK: slas_slas-inference, SLAS_HOST_MODELS_DIR: "${SLAS_DATA_ROOT}/Models", SLAS_GPU_VRAM_GIB: "270" },
                  volumes: ["${SLAS_RUNTIME_SOCKET:-/run/podman/podman.sock}:/run/podman/podman.sock", "${SLAS_DATA_ROOT}/Models:/data/Models"] }
   # vllm-cluster: vllm-coder, vllm-planner, vllm-triage, vllm-embed, vllm-rerank and one vllm-voter-<model-id> per voter are
   #               CREATED by model-manager over the runtime socket (Engine API, ADR-0015) from Models/models.yaml and the vLLM

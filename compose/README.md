@@ -21,7 +21,7 @@ Host-side knobs in `.env`: `SLAS_RUNTIME_SOCKET` names the container-runtime soc
 into `model-manager` and `sandbox-manager` only (empty = rootless Podman's
 `/run/podman/podman.sock`; `install.sh` writes `/var/run/docker.sock` when only Docker's
 exists and says so; INV-4 unchanged), `SLAS_GPU_VRAM_GIB` is the per-GPU budget the model
-manager places instances against (default 180), and `SLAS_TLS_MODE`/`SLAS_TLS_NAMES` shape
+manager places instances against (default 270, an HGX B300 GPU), and `SLAS_TLS_MODE`/`SLAS_TLS_NAMES` shape
 the edge's certificate. The edge binds 443 as `${SLAS_UID}:${SLAS_GID}` because the compose
 file lowers `net.ipv4.ip_unprivileged_port_start` inside its network namespace.
 
