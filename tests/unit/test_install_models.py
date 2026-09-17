@@ -406,3 +406,56 @@ def test_without_weights_the_install_goes_on_and_says_how_to_add_them(tmp_path: 
     )
     assert "then run ./install.sh --models <dir>; nothing else needs to change." in result.stdout
     assert "models.yaml" not in result.stdout
+
+
+def test_fetch_models_downloads_then_places_in_one_command(tmp_path: Path) -> None:
+    """`./install.sh --fetch-models --models-only`: the one-command preparation."""
+    from tests.unit.test_fetch_models import FakeHub
+
+    hub = FakeHub().start()
+    try:
+        sources = tmp_path / "sources.txt"
+        sources.write_text("[quickstart]\ntiny demo/tiny\n")
+        env = {
+            "HF_ENDPOINT": hub.endpoint,
+            "SLAS_MODEL_SOURCES": str(sources),
+            "SLAS_MODELS_DIR": str(tmp_path / "staged"),
+        }
+        result, calls, data_root = run_install(
+            tmp_path,
+            "--fetch-models",
+            "--models-only",
+            "--dry-run",
+            with_bundle=False,
+            env_extra=env,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (
+            f"Fetching the quickstart profile's model weights into {tmp_path / 'staged'}"
+            in result.stdout
+        )
+        assert "Dry run: nothing was downloaded." in result.stdout
+        assert "the fetch plan above checks out" in result.stdout
+        assert "No model weights were given" not in result.stdout
+        assert not (tmp_path / "staged").exists() and not data_root.exists()
+
+        result, calls, data_root = run_install(
+            tmp_path, "--fetch-models", "--models-only", with_bundle=False, env_extra=env
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "Done: 1 model, 1.0 MiB," in result.stdout
+        assert (tmp_path / "staged" / "tiny" / "SHA256SUMS").exists()
+        assert f"Placed 1 model under {data_root}/Models" in result.stdout
+        assert (data_root / "Models" / "tiny" / "model.safetensors").exists()
+        assert (data_root / "Models" / "models.yaml").exists() and not calls
+
+        hub.gated = True  # the hub refuses: the install stops in three parts, nothing placed twice
+        result, _, _ = run_install(
+            tmp_path, "--fetch-models", "--models-only", with_bundle=False, env_extra=env
+        )
+        assert result.returncode == 1
+        assert "The hub refused" in result.stdout
+        assert "Fetching the model weights did not finish" in result.stdout
+        assert "Nothing was changed on this host." in result.stdout
+    finally:
+        hub.stop()

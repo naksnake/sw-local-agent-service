@@ -32,10 +32,13 @@ ships filled in and pinned; fetch the set your profile needs, carry it over, and
 installer verify, place it and write `models.yaml`:
 
 ```bash
-scripts/fetch_models.py fetch --sources config/model-sources.txt --profile quickstart --dest ./models
-./install.sh --models ./models          # on the platform host; ./models next to install.sh is found on its own
-./install.sh --models ./models --models-only   # place the weights now, before the bundle exists
+./install.sh --fetch-models --models-only    # one command: download, verify, place, write models.yaml
 ```
+
+Or in two steps, when the platform host has no route to the hub: run
+`scripts/fetch_models.py fetch --sources config/model-sources.txt --profile quickstart --dest ./models`
+on a connected host, carry `models/` next to `install.sh`, and run `./install.sh --models-only`.
+The full `./install.sh` finds the weights in place once the bundle exists.
 
 Deploying to a specific GPU host, and what runs today versus what still waits on a
 dependency decision: [`docs/runbooks/deploy-hgx-b300.md`](docs/runbooks/deploy-hgx-b300.md).

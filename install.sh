@@ -21,6 +21,9 @@ COSIGN_KEY="${SLAS_COSIGN_KEY:-$SCRIPT_DIR/config/cosign.pub}"
 LOCK_FILE="${SLAS_IMAGE_LOCK:-$SCRIPT_DIR/compose/images.lock.json}"
 MODELS_DIR="${SLAS_MODELS_DIR:-}"
 MODELS_ONLY=0
+FETCH_MODELS_FIRST=0
+FETCH_PLANNED_ONLY=0
+MODEL_SOURCES="${SLAS_MODEL_SOURCES:-$SCRIPT_DIR/config/model-sources.txt}"
 VERSION="$(grep -m1 '^version' "$SCRIPT_DIR/pyproject.toml" | sed 's/.*"\(.*\)"/\1/')"
 JSON=0
 DRY_RUN=0
@@ -30,7 +33,7 @@ SKIP_PREFLIGHT=0
 usage() {
   cat <<EOF
 Usage: ./install.sh [--profile quickstart|prod] [--data-root PATH] [--bundle DIR | --registry HOST]
-                    [--models DIR] [--models-only] [--dry-run] [--preflight-only] [--json]
+                    [--models DIR] [--fetch-models] [--models-only] [--dry-run] [--preflight-only] [--json]
 
 Installs SW Local Agent Service on this host: preflight, verification, .env and secrets,
 images, model weights, services, and the sign-in URL. Nothing changes until every read-only
@@ -46,8 +49,12 @@ step passed.
                        Their checksums are verified, they are placed under <data root>/Models,
                        and Models/models.yaml is written from config/models.<profile>.yaml
                        when there is none. Default: ./models when it exists; also \$SLAS_MODELS_DIR.
+  --fetch-models       Download the profile's model weights first, into the --models directory
+                       (default ./models), from the pinned config/model-sources.txt. Resumes
+                       and retries; needs a route to the hub (or HTTPS_PROXY / HF_ENDPOINT).
   --models-only        Check and place the model weights and models.yaml, then stop. For a host
                        prepared before the bundle arrives; needs neither a bundle nor a registry.
+                       `./install.sh --fetch-models --models-only` is the one-command preparation.
   --dry-run            Run the read-only steps for real; print what the rest would do.
   --preflight-only     Stop after the preflight.
   --json               Print the preflight report as JSON, for scripts.
@@ -70,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     --models)         MODELS_DIR="${2:-}"; shift 2 ;;
     --models=*)       MODELS_DIR="${1#*=}"; shift ;;
     --models-only)    MODELS_ONLY=1; shift ;;
+    --fetch-models)   FETCH_MODELS_FIRST=1; shift ;;
     --lock)           LOCK_FILE="${2:-}"; shift 2 ;;
     --cosign-key)     COSIGN_KEY="${2:-}"; shift 2 ;;
     --dry-run)        DRY_RUN=1; shift ;;
@@ -132,7 +140,7 @@ if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
   PYTHON="$SCRIPT_DIR/.venv/bin/python"
 fi
 FETCH_MODELS="$SCRIPT_DIR/scripts/fetch_models.py"   # standard library only; verifies checksums offline
-if [[ -z "$MODELS_DIR" && -d "$SCRIPT_DIR/models" ]]; then
+if [[ -z "$MODELS_DIR" && ( -d "$SCRIPT_DIR/models" || $FETCH_MODELS_FIRST -eq 1 ) ]]; then
   MODELS_DIR="$SCRIPT_DIR/models"
 fi
 
@@ -170,6 +178,24 @@ else
   esac
   if [[ $PREFLIGHT_ONLY -eq 1 ]]; then
     nothing_changed "Preflight passed." 0
+  fi
+fi
+
+# ---------------------------------------------------------------------------- 1b fetch the model weights (optional)
+# Downloads into the staging directory, never into the data root; the running platform never
+# downloads anything (INV-1). Whether the platform host may fetch while it is being prepared is
+# CLAUDE.md §15 open decision (13); this step runs only when asked for with --fetch-models.
+if [[ $FETCH_MODELS_FIRST -eq 1 ]]; then
+  echo
+  echo "Fetching the $PROFILE profile's model weights into $MODELS_DIR (from $MODEL_SOURCES)."
+  fetch_args=(fetch --sources "$MODEL_SOURCES" --profile "$PROFILE" --dest "$MODELS_DIR")
+  [[ $DRY_RUN -eq 1 ]] && fetch_args+=(--dry-run)
+  if ! "$PYTHON" "$FETCH_MODELS" "${fetch_args[@]}"; then
+    nothing_changed "Fetching the model weights did not finish; the messages above say why. Likely cause: the hub could not be reached, or the disk under $MODELS_DIR is too small. What to do: fix that and run the same command again; the fetch resumes where it stopped." 1
+  fi
+  if [[ $DRY_RUN -eq 1 && ! -d "$MODELS_DIR" ]]; then
+    MODELS_DIR=""   # nothing was downloaded, so there is nothing to place yet
+    FETCH_PLANNED_ONLY=1
   fi
 fi
 
@@ -312,7 +338,7 @@ else
   if [[ -d "$MODELS_TARGET" ]]; then
     mapfile -t MODELS_PRESENT < <(list_models "$MODELS_TARGET")
   fi
-  if [[ ${#MODELS_PRESENT[@]} -eq 0 ]]; then
+  if [[ ${#MODELS_PRESENT[@]} -eq 0 && $FETCH_PLANNED_ONLY -eq 0 ]]; then
     echo
     echo "No model weights were given: no --models DIR and no ./models next to install.sh."
     echo "The platform installs without models. Fetch them on a connected host with scripts/fetch_models.py fetch --sources config/model-sources.txt --profile $PROFILE --dest <dir>, then run ./install.sh --models <dir>; nothing else needs to change."
@@ -403,6 +429,9 @@ place_models() {  # the changing half of the model step: copy, verify, manifest,
 }
 
 if [[ $MODELS_ONLY -eq 1 ]]; then
+  if [[ $FETCH_PLANNED_ONLY -eq 1 ]]; then
+    nothing_changed "Dry run finished: the fetch plan above checks out; run the same command without --dry-run to download and place the weights." 0
+  fi
   if [[ -z "$MODELS_DIR" ]]; then
     nothing_changed "--models-only needs the weights: pass --models DIR or put them in ./models next to install.sh." 2
   fi
