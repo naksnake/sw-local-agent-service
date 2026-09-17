@@ -1,7 +1,19 @@
 # ADR-0005: The `apps/api` runtime stack and its dependencies
 
-Status: proposed
+Status: accepted
 Date: 2026-09-14
+
+Accepted 2026-09-17: the project owner approved the dependency set below on 2026-09-17 and
+`apps/api` was implemented against it (pins in `apps/api/pyproject.toml`). Two deviations
+from the text below, recorded rather than rewritten: (1) SQLAlchemy is used with a
+**synchronous** engine on `psycopg[binary]` — FastAPI runs the sync endpoints in its
+threadpool and Alembic is synchronous anyway, so `sqlalchemy[asyncio]` and the async Redis
+client are not needed; the `redis` client is used synchronously for the same reason.
+(2) **structlog is not added**: `slas_observability.events.EventLog` (stdlib) already writes
+one JSON object per line with the trace id, `slas_observability.tracing` supplies the
+trace-id middleware and `slas_observability.metrics.REGISTRY` the `/metrics` text, so a new
+logging dependency would duplicate them. `httpx` is a dev-group dependency only (FastAPI's
+test client); the api makes no outbound HTTP call in round 1.
 
 ## Context
 Phase 1 creates `apps/api`: authentication, sessions, people, settings, health. CLAUDE.md
