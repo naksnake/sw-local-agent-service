@@ -99,10 +99,18 @@ class FactoryAgent:
             payload={"source": upload.filename},
         )
 
+    def parse_label(self, text: str, *, by: str, filename: str = "label.txt") -> MesTicket:
+        """The wizard's label scan or manual entry as a production ticket (no job yet)."""
+        return self._from_label(Upload(filename=filename, uploaded_by=by, content=text))
+
     def mes_ticket(self, job_id: str) -> MesTicket:
         return self._tickets[job_id]
 
-    def choose_template(self, job: Job, template_id: str) -> TestLoopTemplate:
+    def choose_template(
+        self, job: Job, template_id: str, *, backup_station: bool = True
+    ) -> TestLoopTemplate:
+        """Bind the job to a template. `backup_station=False` uses the same loop without its
+        `backup_station` step (the wizard's one adjustable rule, CLAUDE.md §10.3 BACKUP)."""
         try:
             template = self.templates[template_id]
         except KeyError:
@@ -113,7 +121,16 @@ class FactoryAgent:
                     "Pick one of those in the wizard, or add the template under Factory/Templates.",
                 )
             ) from None
-        self._chosen[job.id] = template_id
+        if not backup_station and any(s.primitive == "backup_station" for s in template.steps):
+            template = template.model_copy(
+                update={
+                    "id": f"{template.id}-no-backup",
+                    "name": f"{template.name}, without the station backup",
+                    "steps": [s for s in template.steps if s.primitive != "backup_station"],
+                }
+            )
+            self.templates.setdefault(template.id, template)
+        self._chosen[job.id] = template.id
         return template
 
     # --- Agent ----------------------------------------------------------------------------
