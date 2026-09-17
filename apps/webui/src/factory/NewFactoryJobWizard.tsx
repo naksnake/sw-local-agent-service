@@ -129,7 +129,15 @@ export function NewFactoryJobWizard({ api, onStarted, onCancel }: Props) {
                         name="trigger"
                         aria-label={ticket.ticketNo}
                         checked={trigger?.ticketNo === ticket.ticketNo}
-                        onChange={() => setTrigger({ kind: "mes", ticketNo: ticket.ticketNo, station: ticket.station, unitSn: ticket.unitSn })}
+                        onChange={() =>
+                          setTrigger({
+                            kind: "mes",
+                            ticketNo: ticket.ticketNo,
+                            station: ticket.station,
+                            unitSn: ticket.unitSn,
+                            requestedBy: ticket.requestedBy,
+                          })
+                        }
                       />
                       {ticket.ticketNo}: unit {ticket.unitSn} on {ticket.station}
                       <span className="text-slate-500">· from {ticket.requestedBy}</span>

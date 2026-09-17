@@ -83,7 +83,9 @@ export interface HttpClient {
   get<T>(path: string): Promise<T>;
   post<T>(path: string, body?: unknown): Promise<T>;
   patch<T>(path: string, body: unknown): Promise<T>;
-  del(path: string): Promise<void>;
+  put<T>(path: string, body: unknown): Promise<T>;
+  /** Resolves to the JSON body when the api answers one (`{"sentence"}`), undefined on 204. */
+  del<T = void>(path: string): Promise<T>;
 }
 
 export interface HttpOptions {
@@ -91,7 +93,7 @@ export interface HttpOptions {
   fetch?: typeof fetch;
 }
 
-type Method = "GET" | "POST" | "PATCH" | "DELETE";
+type Method = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -179,7 +181,8 @@ export function createHttp(options: HttpOptions = {}): HttpClient {
     get: <T>(path: string) => request<T>("GET", path),
     post: <T>(path: string, body?: unknown) => request<T>("POST", path, body),
     patch: <T>(path: string, body: unknown) => request<T>("PATCH", path, body),
-    del: (path: string) => request<void>("DELETE", path),
+    put: <T>(path: string, body: unknown) => request<T>("PUT", path, body),
+    del: <T = void>(path: string) => request<T>("DELETE", path),
   };
 }
 

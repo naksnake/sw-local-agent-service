@@ -125,7 +125,7 @@ export function NewCodingTaskWizard({ api, onStarted, onCancel }: Props) {
     setStarting(true);
     setProblem(null);
     try {
-      onStarted(await api.start(breakdown, plan));
+      onStarted(await api.start(breakdown, plan, filename));
     } catch (error: unknown) {
       setProblem(
         "The task didn't start. The api service didn't answer. Try again; if it repeats, run " +

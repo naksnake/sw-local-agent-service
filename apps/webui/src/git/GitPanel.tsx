@@ -193,8 +193,8 @@ export function GitPanel({ api, slug }: Props) {
                 type="button"
                 className={secondary}
                 onClick={async () => {
-                  const branches = await api.importBundle(slug, "incoming.bundle");
-                  setNotice(`Imported ${branches.length} ${branches.length === 1 ? "branch" : "branches"} under bundle/: ${branches.join(", ")}.`);
+                  const sentences = await api.importBundle(slug, "incoming.bundle");
+                  setNotice(sentences.join(" "));
                 }}
               >
                 Import bundle…

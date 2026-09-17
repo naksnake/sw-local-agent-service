@@ -1,7 +1,7 @@
 // The Git panel, Settings → Git remotes and Admin → Git hosts as the UI sees them
 // (CLAUDE.md §5.7, §9). Nothing here ever carries a credential: the API returns a
 // fingerprint after save and the UI's paste-only fields are never echoed back.
-// `FakeGitApi` stands in until apps/api and git-broker expose these calls over HTTP.
+// `HttpGitApi` (./http.ts) is what production uses; `FakeGitApi` serves `pnpm dev`.
 
 export type AuthType = "pat" | "ssh_key";
 export type HostKind = "gitlab" | "gitea" | "github" | "generic";
@@ -16,6 +16,8 @@ export interface RemoteView {
   fingerprint: string;
   defaultBranch: string;
   lastUsed: string | null;
+  /** When the credential expires, if the person set one (api only). */
+  expiresAt?: string | null;
 }
 
 export interface GitHostView {
@@ -38,6 +40,9 @@ export interface CommitView {
   subject: string;
   byAgent: boolean;
   ticketId: string | null;
+  /** Author and time as git records them (api only). */
+  author?: string;
+  when?: string;
 }
 
 export interface GateCheckView {
@@ -94,6 +99,7 @@ export interface GitApi {
   push(slug: string, remoteId: string, branch: string): Promise<PushResultView>;
   pull(slug: string, remoteId: string): Promise<string>;
   exportBundle(slug: string): Promise<BundleView>;
+  /** One sentence per branch the import created under bundle/. */
   importBundle(slug: string, fileName: string): Promise<string[]>;
   terminal(slug: string, line: string): Promise<TerminalLineView>;
 }
@@ -269,8 +275,8 @@ export class FakeGitApi implements GitApi {
     return { fileName: `${slug}-20260914-090000.bundle`, refs: ["refs/heads/main", "refs/heads/slas/T-coding-0001"], sizeBytes: 4096, sha256: "0".repeat(64) };
   }
 
-  async importBundle(_slug: string, _fileName: string): Promise<string[]> {
-    return ["main", "feature"];
+  async importBundle(_slug: string, fileName: string): Promise<string[]> {
+    return [`Imported main from ${fileName} as bundle/main.`, `Imported feature from ${fileName} as bundle/feature.`];
   }
 
   async terminal(_slug: string, line: string): Promise<TerminalLineView> {
