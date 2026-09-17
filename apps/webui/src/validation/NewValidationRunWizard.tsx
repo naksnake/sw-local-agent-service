@@ -1,9 +1,23 @@
 import { useEffect, useState } from "react";
 
+import { agents } from "../copy/en";
 import type { PlanPreview, RunView, SuiteView, TargetView, ValidationApi } from "./api";
 
 // The three-step wizard from CLAUDE.md §9: Suite → Target → Review & approve, ending in a
-// sentence that says what will happen and one verb button. Copy: docs/ui/new-validation-run.md.
+// sentence that says what will happen and one verb button. A `.md` suite is pasted or read as
+// text; an `.xlsx` is read as bytes and travels base64-encoded for the server to parse
+// (docs/api-contract-round-2.md §5). Copy: docs/ui/new-validation-run.md.
+
+const XLSX = /\.xlsx$/i;
+
+/** Standard base64 of a file's bytes, in chunks so a large sheet does not blow the call stack. */
+export function base64Of(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
 
 interface Props {
   api: ValidationApi;
@@ -30,6 +44,8 @@ export function NewValidationRunWizard({ api, onStarted, onCancel }: Props) {
   const [step, setStep] = useState<Step>(1);
   const [text, setText] = useState("");
   const [filename, setFilename] = useState("suite.md");
+  /** A chosen spreadsheet as base64 and its size; null while the suite is text. */
+  const [binary, setBinary] = useState<{ base64: string; bytes: number } | null>(null);
   const [suite, setSuite] = useState<SuiteView | null>(null);
   const [targets, setTargets] = useState<TargetView[]>([]);
   const [target, setTarget] = useState<string | null>(null);
@@ -38,12 +54,41 @@ export function NewValidationRunWizard({ api, onStarted, onCancel }: Props) {
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
-    if (text.trim() === "") {
+    const source = binary?.base64 ?? text;
+    if (source.trim() === "") {
       setSuite(null);
       return;
     }
-    void api.parseSuite(text, filename).then(setSuite);
-  }, [api, text, filename]);
+    let live = true;
+    void api
+      .parseSuite(source, filename)
+      .then((parsed) => {
+        if (live) {
+          setSuite(parsed);
+        }
+      })
+      .catch(() => {
+        if (live) {
+          setSuite(null);
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [api, text, binary, filename]);
+
+  async function chooseFile(file: File) {
+    if (XLSX.test(file.name)) {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      setFilename(file.name);
+      setText("");
+      setBinary({ base64: base64Of(bytes), bytes: bytes.length });
+      return;
+    }
+    setFilename(file.name);
+    setBinary(null);
+    setText(await file.text());
+  }
 
   useEffect(() => {
     void api.listTargets().then(setTargets);
@@ -98,7 +143,13 @@ export function NewValidationRunWizard({ api, onStarted, onCancel }: Props) {
               className={`${field} min-h-48 font-mono`}
               placeholder="Paste suite.md here: a title line and one bullet or table row per item, for example `- DC cycle x25, settle 60 s`."
               value={text}
-              onChange={(event) => setText(event.target.value)}
+              onChange={(event) => {
+                if (binary !== null) {
+                  setBinary(null);
+                  setFilename("suite.md");
+                }
+                setText(event.target.value);
+              }}
             />
           </label>
           <label className="block text-sm font-medium">
@@ -108,15 +159,19 @@ export function NewValidationRunWizard({ api, onStarted, onCancel }: Props) {
               className="mt-1 block text-sm"
               type="file"
               accept=".md,.xlsx"
-              onChange={async (event) => {
+              onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (file) {
-                  setFilename(file.name);
-                  setText(await file.text());
+                  void chooseFile(file);
                 }
               }}
             />
           </label>
+          {binary !== null && (
+            <p className="text-sm text-slate-600 dark:text-slate-400" data-testid="xlsx-note">
+              {agents.xlsxChosen(filename, Math.max(1, Math.round(binary.bytes / 1024)))}
+            </p>
+          )}
           {suite === null ? (
             <p className="text-sm text-slate-600 dark:text-slate-400" data-testid="items-note">
               The items are listed here once you add the suite. Destructive items are flagged.

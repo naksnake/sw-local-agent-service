@@ -461,3 +461,29 @@ export const models = {
   quant: { fp8: "FP8", awq4: "AWQ 4-bit", bf16: "BF16" } as Record<string, string>,
   readOnly: "Swapping and rolling back models arrives with the Models service; until then, edit Models/models.yaml on the host and run `slas model fit` before a load.",
 };
+
+// --- The agent pages on the real api (docs/api-contract-round-2.md §5, §7) -------------------
+// Sentences the Http clients and the pages add around what the api sends. Everything the api
+// says (run, job and task sentences, votes, findings, problems) is rendered as received.
+
+export const agents = {
+  /** The plan preview when the Consensus Router answered null (no voters configured). */
+  notCrossChecked: "Not cross-checked: no voters are configured, so the plan needs your own review before it starts.",
+  /** A finding the api sent without an owner; the sentence itself is still shown. */
+  ownerUnknown: "Owner: not routed yet.",
+  /** Under the Verdict heading while the voters' sentences are shown. */
+  votesHeading: "What the voters said",
+  /** The wizard's note after a spreadsheet was chosen (the server reads it; the browser cannot). */
+  xlsxChosen: (filename: string, kib: number) =>
+    `${filename} (${kib} KB) is read on the server. The items appear below once it has been parsed.`,
+  /** The development fakes cannot read a spreadsheet. */
+  xlsxNotInFake: (filename: string) =>
+    `${filename} can't be read in this development build. Paste the suite as text, or run against the real api.`,
+  /** When the api refused a push at the gate with a three-part answer instead of a report. */
+  pushRefused: (parts: ThreePart) => [parts.whatHappened, parts.likelyCause, parts.whatToDo].filter((p) => p !== "").join(" "),
+  /** Imported bundle branches, when the api reports them as names rather than sentences. */
+  importedBranches: (names: readonly string[]) =>
+    `Imported ${names.length} ${names.length === 1 ? "branch" : "branches"} under bundle/: ${names.join(", ")}.`,
+  /** A station action the api refused; the page shows the three parts as one alert. */
+  stationProblem: (parts: ThreePart) => [parts.whatHappened, parts.likelyCause, parts.whatToDo].filter((p) => p !== "").join(" "),
+};

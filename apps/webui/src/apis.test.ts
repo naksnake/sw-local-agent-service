@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { fakeApis } from "./apis.fake";
 import { realApis, wantsFakes } from "./apis";
+import { HttpCodingApi } from "./coding/http";
+import { HttpFactoryApi, HttpStationsAdminApi } from "./factory/http";
+import { HttpGitApi } from "./git/http";
 import { HttpSessionApi } from "./session/api";
 import type { FakeSessionApi } from "./session/fake";
+import { HttpValidationApi } from "./validation/http";
 
 describe("which APIs the bundle runs on", () => {
   it("defaults to the real APIs in a production build and to the fakes under vite dev", () => {
@@ -14,10 +18,26 @@ describe("which APIs the bundle runs on", () => {
     expect(wantsFakes({ DEV: false, VITE_SLAS_FAKE_API: "" })).toBe(false);
   });
 
-  it("gives production only the round-1 HTTP APIs, keeping the agent pages off the rail", () => {
+  it("gives production every HTTP API, so the agent pages, Git and Stations are on the rail", () => {
     const apis = realApis();
     expect(apis.sessionApi).toBeInstanceOf(HttpSessionApi);
-    expect(Object.keys(apis).sort()).toEqual(["homeListsApi", "modelsApi", "peopleApi", "sessionApi", "settingsApi"]);
+    expect(apis.codingApi).toBeInstanceOf(HttpCodingApi);
+    expect(apis.validationApi).toBeInstanceOf(HttpValidationApi);
+    expect(apis.factoryApi).toBeInstanceOf(HttpFactoryApi);
+    expect(apis.stationsApi).toBeInstanceOf(HttpStationsAdminApi);
+    expect(apis.gitApi).toBeInstanceOf(HttpGitApi);
+    expect(Object.keys(apis).sort()).toEqual([
+      "codingApi",
+      "factoryApi",
+      "gitApi",
+      "homeListsApi",
+      "modelsApi",
+      "peopleApi",
+      "sessionApi",
+      "settingsApi",
+      "stationsApi",
+      "validationApi",
+    ]);
     expect(apis.signInHint).toBeUndefined();
   });
 

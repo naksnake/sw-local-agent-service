@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
+import { isLive, POLL_INTERVAL_MS, usePolling } from "../api/polling";
 import type { GitApi } from "../git/api";
 import { GitPanel } from "../git/GitPanel";
 import type { CodingApi, CodingTask, StepStatus } from "./api";
@@ -7,7 +8,8 @@ import { NewCodingTaskWizard } from "./NewCodingTaskWizard";
 
 // The Coding page (CLAUDE.md §9): tasks with their plan checklist and activity feed, and
 // one primary action — New coding task. Each task can open its project's Git panel
-// (Status · Commit · History · Push/Pull · Bundle · Terminal). Copy: docs/ui/coding.md.
+// (Status · Commit · History · Push/Pull · Bundle · Terminal). The list is re-read every
+// few seconds while a task is still running (live progress). Copy: docs/ui/coding.md.
 
 interface Props {
   api: CodingApi;
@@ -33,9 +35,14 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
   const [wizardOpen, setWizardOpen] = useState(startWizardOpen);
   const [gitOpenFor, setGitOpenFor] = useState<string | null>(null);
 
+  const refresh = useCallback(async () => setTasks(await api.listTasks()), [api]);
+
   useEffect(() => {
-    void api.listTasks().then(setTasks);
-  }, [api]);
+    void refresh().catch(() => {
+      // The page stays on "Loading tasks…"; the next poll or visit tries again.
+    });
+  }, [refresh]);
+  usePolling(refresh, tasks?.some((task) => isLive(task.state)) === true ? POLL_INTERVAL_MS : null);
 
   return (
     <div className="space-y-8">

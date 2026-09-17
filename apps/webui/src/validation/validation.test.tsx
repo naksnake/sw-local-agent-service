@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { FakeValidationApi } from "./api";
+import { agents } from "../copy/en";
+import { FakeValidationApi, type SuiteView } from "./api";
+import { base64Of, NewValidationRunWizard } from "./NewValidationRunWizard";
 import { ValidationPage } from "./ValidationPage";
 
 const SUITE = `# GX8 DC cycling
@@ -114,6 +116,35 @@ describe("New validation run wizard", () => {
     await waitFor(() => expect(within(card).getByText("2 of 2 cycles done.")).toBeTruthy());
     expect(within(map).getAllByLabelText(/: ok/)).toHaveLength(2);
     expect(api.runs[0]?.console[0]).toBe("--- approvals recorded by you ---");
+  });
+
+  it("sends a chosen .xlsx as base64 for the server to read, and goes back to text when the person types", async () => {
+    const seen: [string, string][] = [];
+    const api = new FakeValidationApi();
+    const parsed: SuiteView = {
+      title: "Sheet",
+      items: [{ n: 1, title: "DC cycle", cycles: 5, destructive: false, approved: false, sentence: "1. DC cycle ×5" }],
+      problem: null,
+    };
+    api.parseSuite = async (text, filename) => {
+      seen.push([text, filename]);
+      return parsed;
+    };
+    render(<NewValidationRunWizard api={api} onStarted={() => undefined} onCancel={() => undefined} />);
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0xff, 0x00]);
+    expect(base64Of(bytes)).toBe("UEsDBP8A");
+    const file = new File([bytes], "suite.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    Object.defineProperty(file, "arrayBuffer", { value: async () => bytes.buffer });
+    fireEvent.change(screen.getByLabelText("Suite file"), { target: { files: [file] } });
+    await waitFor(() => expect(seen).toEqual([["UEsDBP8A", "suite.xlsx"]]));
+    expect((await screen.findByTestId("xlsx-note")).textContent).toBe(agents.xlsxChosen("suite.xlsx", 1));
+    await waitFor(() => expect(screen.getByTestId("items-note").textContent).toBe("Sheet: 1 item, 5 cycles in total."));
+
+    fireEvent.change(screen.getByLabelText("Suite"), { target: { value: "- DC cycle x2" } });
+    await waitFor(() => expect(seen).toHaveLength(2));
+    expect(seen[1]).toEqual(["- DC cycle x2", "suite.md"]);
+    expect(screen.queryByTestId("xlsx-note")).toBeNull();
+    expect((await new FakeValidationApi().parseSuite("UEsD", "suite.xlsx")).problem).toBe(agents.xlsxNotInFake("suite.xlsx"));
   });
 
   it("explains an unreadable suite in three parts", async () => {

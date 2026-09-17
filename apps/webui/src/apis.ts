@@ -10,9 +10,13 @@
 import { HttpPeopleApi, HttpSettingsApi } from "./admin/api";
 import { http } from "./api/http";
 import type { AppProps } from "./App";
+import { HttpCodingApi } from "./coding/http";
+import { HttpFactoryApi, HttpStationsAdminApi } from "./factory/http";
+import { HttpGitApi } from "./git/http";
 import { HttpHomeListsApi } from "./home/api";
 import { HttpModelsApi } from "./models/api";
 import { HttpSessionApi } from "./session/api";
+import { HttpValidationApi } from "./validation/http";
 
 export interface BuildEnv {
   DEV: boolean;
@@ -29,7 +33,12 @@ export function wantsFakes(env: BuildEnv): boolean {
   return env.DEV;
 }
 
-/** Round 1 over HTTP: sign-in, Home lists, People, Settings, Models. The agent pages stay off the rail. */
+/**
+ * Everything over HTTP (docs/api-contract.md, docs/api-contract-round-2.md): round 1's sign-in,
+ * Home lists, People, Settings and Models, and round 2's Coding, Validation, Factory, Git
+ * (Settings → Git remotes, Admin → Git hosts, the Git panel) and Admin → Stations. App.tsx puts
+ * a page on the rail when its api is present and the person holds the capability.
+ */
 export function realApis(): AppProps {
   return {
     sessionApi: new HttpSessionApi(http),
@@ -37,5 +46,10 @@ export function realApis(): AppProps {
     peopleApi: new HttpPeopleApi(http),
     settingsApi: new HttpSettingsApi(http),
     modelsApi: new HttpModelsApi(http),
+    codingApi: new HttpCodingApi(http),
+    validationApi: new HttpValidationApi(http),
+    factoryApi: new HttpFactoryApi(http),
+    stationsApi: new HttpStationsAdminApi(http),
+    gitApi: new HttpGitApi(http),
   };
 }

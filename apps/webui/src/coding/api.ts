@@ -1,7 +1,7 @@
 // The Coding page's view of the API (CLAUDE.md §9, §10.1). Types mirror the Python
 // schemas in slas_orchestrator.coding; the sentences the fake produces are the same ones
 // the toolchain resolver produces, so the UI copy is exercised end to end in tests.
-// `FakeCodingApi` stands in until apps/api exposes these calls over HTTP.
+// `HttpCodingApi` (./http.ts) is what production uses; `FakeCodingApi` serves `pnpm dev`.
 
 export type LanguageId =
   | "python"
@@ -95,7 +95,8 @@ export interface CodingApi {
   resolveToolchains(choices: LanguageChoice[]): Promise<ToolchainResolution[]>;
   listRemotes(): Promise<string[]>;
   listSkills(): Promise<SkillSummary[]>;
-  start(breakdown: Breakdown, plan: string): Promise<CodingTask>;
+  /** `filename` is the plan file's name (default plan.md); the api records it on the ticket. */
+  start(breakdown: Breakdown, plan: string, filename?: string): Promise<CodingTask>;
   listTasks(): Promise<CodingTask[]>;
 }
 
