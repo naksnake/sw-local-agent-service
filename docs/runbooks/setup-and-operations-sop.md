@@ -1,7 +1,7 @@
 # SOP — Setting up and running SW Local Agent Service
 
-Version 1.0 · 2026-09-15 · Chinese twin: `setup-and-operations-sop.zh-Hant.md` (INV-13).
-Written against branch `claude/focused-mayer-5fiqnz`. Every "works today" line is covered by a
+Version 1.1 · 2026-09-16 · Chinese twin: `setup-and-operations-sop.zh-Hant.md` (INV-13).
+Written against branch `claude/vigilant-gauss-tsqua0`. Every "works today" line is covered by a
 test or was run while writing; every "waits" line names what it waits on.
 
 ## 1 · Purpose and scope
@@ -57,9 +57,9 @@ Files to carry in: the release bundle `slas-bundle-<version>.tgz`, `config/cosig
 
 | # | Do | Done when |
 |---|---|---|
-| A1 | `git clone` the repository; `uv sync --frozen && uv run pytest` | 788 tests pass |
+| A1 | `git clone` the repository; `uv sync --frozen && uv run pytest` | every test passes |
 | A2 | `config/model-sources.txt` ships filled in, every line pinned to a commit; change a line only to pick another build | every line names a repository and a commit |
-| A3 | `scripts/fetch_models.py fetch --sources config/model-sources.txt --profile prod --dry-run --dest ./models`, then the same without `--dry-run`; `export HF_TOKEN=…` only for gated repositories | "Total: 6 models, …" and the free disk, then one sentence per model and `models/manifest.json` |
+| A3 | `scripts/fetch_models.py fetch --sources config/model-sources.txt --profile prod --dry-run --dest ./models`, then the same without `--dry-run`; `export HF_TOKEN=…` only for gated repositories | "Total: 7 models, …" and the free disk, then one sentence per model and `models/manifest.json` |
 | A4 | Rerun A3 after any interruption; it resumes and keeps complete files | "Done: N models" |
 | A5 | Waits: `scripts/lock-images.sh --sign` then `scripts/build-bundle.sh --profile prod`; commit the filled lock | `compose/images.lock.*` has no null digest |
 | A6 | Copy `models/`, the bundle and `config/cosign.pub` to the sneakernet disk | checksums recorded |
@@ -70,8 +70,8 @@ Files to carry in: the release bundle `slas-bundle-<version>.tgz`, `config/cosig
 |---|---|---|
 | B1 | `./install.sh --preflight-only` | no ✗ line; every ! line understood |
 | B2 | Mount the data and model volumes; `mkdir -p /AI/Agent/Models` | preflight Disk space ✓ |
-| B3 | Copy `models/` next to `install.sh`, or anywhere and pass `--models DIR`; `./install.sh --dry-run` says what will be copied | "Would copy 6 models (…) … into /AI/Agent/Models" |
-| B4 | Nothing to write: the install verifies the checksums, places the weights and writes `/AI/Agent/Models/models.yaml` from `config/models.prod.yaml` when there is none; it never overwrites one. Edit roles later on the Models page | "Wrote /AI/Agent/Models/models.yaml from the prod template." |
+| B3 | Copy `models/` next to `install.sh`, or anywhere and pass `--models DIR`; `./install.sh --profile prod --models-only --dry-run` says what will be copied | "Would copy 7 models (…) … into /AI/Agent/Models" |
+| B4 | `./install.sh --profile prod --models-only`: verifies the checksums, places the weights and writes `/AI/Agent/Models/models.yaml` from `config/models.prod.yaml` when there is none; it never overwrites one. Edit roles later on the Models page. Works before the bundle exists | "Placed 7 models under /AI/Agent/Models" and "Wrote /AI/Agent/Models/models.yaml from the prod template." |
 | B5 | Waits: `tar xzf slas-bundle-<version>.tgz && cd slas-bundle-<version>`; `./install.sh --profile prod --dry-run` | "Dry run finished: every read-only step passed" |
 | B6 | Waits: `./install.sh --profile prod` | the sign-in URL and one-time administrator password print |
 | B7 | Waits: sign in, choose a new password; Admin → People; Admin → Git hosts | first person added |
@@ -81,13 +81,14 @@ GPU layout for the B300 (eight GPUs, about 288 GB each):
 
 | GPUs | Instance | Serves |
 |---|---|---|
-| 0–3 | DeepSeek-V4 Pro, tensor parallel 4 | planner, voter |
-| 4 | DeepSeek-V4 Flash | triage, voter, stand-in planner during a Pro swap |
-| 5 | Qwen3.8-27B FP8 | coder, voter |
-| 6 | BGE-M3, BGE reranker, Qwen3.8-27B BF16 | embed, rerank, eval reference |
-| 7 | free | blue/green candidates or a third-family voter |
+| 0–3 | DeepSeek-V4 Pro, tensor parallel 4 | planner |
+| 4 | DeepSeek-V4 Flash | triage; stand-in planner during a Pro swap |
+| 5 | Qwen3.8-27B FP8 ×2, BGE-M3, BGE reranker, Qwen3.8-27B BF16 | coder, voter, embed, rerank, eval reference |
+| 6 | DeepSeek-V4 Flash (second instance) | voter |
+| 7 | MiniMax-M2.7 | voter, the third family |
 
-`quant: fp4` waits on ADR-0014; until then the DeepSeek entries validate as `fp8`.
+`quant: fp4` waits on an ADR; until then the DeepSeek entries validate as `fp8`. The model
+manager starts one instance per role and one per voter (CLAUDE.md §15, decision 14).
 
 ## 7 · Procedure C — Daily operation
 
@@ -119,8 +120,8 @@ input to a person, never the approval (INV-11); the model never controls hardwar
 | Edit by hand | `roles:` in `/AI/Agent/Models/models.yaml`; each role's model must list that role | the registry validates in one sentence |
 
 Quantisation: FP8 or FP4 on Blackwell, AWQ 4-bit on Ada and Ampere, one BF16 copy only for
-eval regression (CLAUDE.md §7). Voters should come from three model families; with two
-DeepSeek voters the registry says "2 model families" every time it loads.
+eval regression (CLAUDE.md §7). Voters should come from three model families; prod ships DeepSeek,
+Qwen and MiniMax, quickstart two families (CLAUDE.md §15, decision 12).
 
 ## 9 · Procedure E — Backups, restore, upgrade
 

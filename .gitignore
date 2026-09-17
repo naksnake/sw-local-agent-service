@@ -32,6 +32,8 @@ preflight.json
 /AI/
 data/
 Models/
+# scripts/fetch_models.py --dest ./models, which install.sh picks up by default
+/models/
 Backups/
 
 # editors / OS

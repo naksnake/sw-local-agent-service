@@ -1,5 +1,7 @@
-"""scripts/fetch_models.py against a fake hub on loopback: tree listing, resume, checksums,
-redundant-format skipping, the offline verify, and the three-part errors."""
+"""scripts/fetch_models.py against a fake hub on loopback: tree listing, the plan and disk
+check, resume, checksums (sha256 for LFS files, git blob ids for small ones),
+redundant-format skipping, sections and profiles, the offline verify, manifest merging, and
+the three-part errors."""
 
 from __future__ import annotations
 
@@ -39,6 +41,10 @@ README = b"# demo\n"
 BIN = b"old-format-weights"
 
 
+def blob_id(content: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(content) + content).hexdigest()  # noqa: S324
+
+
 class FakeHub:
     """Enough of the hub's API for the script: tree, revision, resolve with Range support."""
 
@@ -47,14 +53,14 @@ class FakeHub:
         self.cut_after: int | None = None  # serve at most this many bytes once, then behave
         self.gated = False
         self.corrupt = False
-        outer = self
-        files = {
+        self.files: dict[str, bytes] = {
             "model.safetensors": WEIGHTS,
             "config.json": CONFIG,
             "README.md": README,
             "pytorch_model.bin": BIN,
             "onnx/model.onnx": b"onnx",
         }
+        outer = self
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, format: str, *args: object) -> None:
@@ -81,13 +87,14 @@ class FakeHub:
                     return
                 if self.path.startswith("/api/models/demo/tiny/tree/"):
                     entries: list[dict[str, object]] = [{"type": "directory", "path": "onnx"}]
-                    for name, content in files.items():
+                    for name, content in outer.files.items():
                         entry: dict[str, object] = {
                             "type": "file",
                             "path": name,
                             "size": len(content),
+                            "oid": blob_id(content),
                         }
-                        if len(content) > 100:
+                        if len(content) > 100:  # the hub keeps large files in LFS
                             entry["lfs"] = {
                                 "oid": hashlib.sha256(content).hexdigest(),
                                 "size": len(content),
@@ -101,7 +108,7 @@ class FakeHub:
                 prefix = "/demo/tiny/resolve/main/"
                 if self.path.startswith(prefix):
                     name = self.path[len(prefix) :]
-                    data: bytes | None = files.get(name)
+                    data: bytes | None = outer.files.get(name)
                     if data is None:
                         self._send(404, b"")
                         return
@@ -174,6 +181,7 @@ def test_fetch_writes_files_checksums_and_manifest_and_skips_redundant_formats(
     assert not (dest / "tiny" / "onnx").exists()
     sums = fm.read_sums(dest / "tiny" / "SHA256SUMS")
     assert sums["model.safetensors"] == hashlib.sha256(WEIGHTS).hexdigest()
+    assert sums["config.json"] == hashlib.sha256(CONFIG).hexdigest()
     assert set(sums) == {"model.safetensors", "config.json", "README.md"}
     manifest = json.loads((dest / "manifest.json").read_text())
     (entry,) = manifest["models"]
@@ -185,6 +193,7 @@ def test_fetch_writes_files_checksums_and_manifest_and_skips_redundant_formats(
     assert (
         "tiny: 3 files, 1.0 MiB, from demo/tiny at abc123def456; 2 redundant files skipped." in out
     )
+    assert "Done: 1 model, 1.0 MiB," in out
     assert f"Next: on the platform host run `./install.sh --models {dest}`" in out
     # The plan came first: every model listed with its size, then the disk check.
     assert out.index("Total: 1 model, 1.0 MiB; 1.0 MiB still to fetch;") < out.index("fetched ")
@@ -213,76 +222,13 @@ def test_dry_run_lists_sizes_checks_the_disk_and_downloads_nothing(
     monkeypatch.setattr(fm.shutil, "disk_usage", lambda _path: SimpleNamespace(free=1000))
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(tmp_path / "small"))
     assert code == 1
-    assert "Not enough free disk at" in out and "1000 B is free." in out
+    assert "Not enough free disk at" in out and "1000 B is free, 1,047,611 bytes short." in out
     assert "point --dest at a larger volume" in out
     assert not (tmp_path / "small").exists(), "the disk check runs before any download"
 
 
-def test_verify_can_be_limited_to_named_models(hub: FakeHub, tmp_path: Path) -> None:
-    dest = tmp_path / "models"
-    assert run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))[0] == 0
-    code, out = run("verify", "--dest", str(dest), "--model", "tiny")
-    assert code == 0 and out.endswith("tiny matches its checksums.\n")
-    code, out = run("verify", "--dest", str(dest), "--model", "tiny", "--model", "nope")
-    assert code == 1 and f"{dest / 'nope'} has no SHA256SUMS file." in out
-
-
-def test_sources_sections_select_the_models_a_profile_needs(tmp_path: Path) -> None:
-    sources = tmp_path / "sources.txt"
-    sources.write_text(
-        "# shared by every profile\ncommon demo/common\n"
-        "[quickstart]\nsmall demo/small\n"
-        "[prod]\nlarge demo/large abc\n"
-    )
-    assert [s.path for s in fm.read_sources(sources)] == ["common", "small", "large"]
-    assert [s.path for s in fm.read_sources(sources, profile="quickstart")] == ["common", "small"]
-    prod = fm.read_sources(sources, profile="prod")
-    assert [s.path for s in prod] == ["common", "small", "large"] and prod[-1].revision == "abc"
-
-    with pytest.raises(fm.FetchError) as bad_profile:
-        fm.read_sources(sources, profile="staging")
-    assert "The profile 'staging' is not known." in bad_profile.value.what_happened
-
-    sources.write_text("[staging]\nx demo/x\n")
-    with pytest.raises(fm.FetchError) as bad_section:
-        fm.read_sources(sources)
-    assert "The section [staging] in sources.txt is not an install profile." in str(
-        bad_section.value
-    )
-
-    sources.write_text("[prod]\nlarge demo/large\n")
-    with pytest.raises(fm.FetchError) as empty:
-        fm.read_sources(sources, profile="quickstart")
-    assert "lists no models for the quickstart profile." in empty.value.what_happened
-
-
-def test_the_shipped_sources_are_pinned_and_match_the_profile_registries() -> None:
-    from slas_model_manager.registry import PROFILE_REGISTRIES
-
-    shipped = REPO_ROOT / "config" / "model-sources.txt"
-    every = fm.read_sources(shipped)
-    assert {s.repo for s in every} == {
-        "deepseek-ai/DeepSeek-V4-Flash",
-        "Qwen/Qwen3.8-27B-FP8",
-        "BAAI/bge-m3",
-        "BAAI/bge-reranker-v2-m3",
-        "deepseek-ai/DeepSeek-V4-Pro",
-        "Qwen/Qwen3.8-27B",
-    }
-    for source in every:
-        assert re.fullmatch(r"[0-9a-f]{40}", source.revision), f"{source.path} is not pinned"
-    for profile, registry in PROFILE_REGISTRIES.items():
-        models = cast(list[dict[str, object]], registry["models"])
-        wanted = {str(model["path"]) for model in models}
-        fetched = {s.path for s in fm.read_sources(shipped, profile=profile)}
-        assert fetched == wanted, (
-            f"{profile}: sources and models.{profile}.yaml name different paths"
-        )
-    assert len(fm.read_sources(shipped, profile="quickstart")) < len(every)
-
-
-def test_a_cut_download_resumes_with_a_range_request_and_a_rerun_keeps_complete_files(
-    hub: FakeHub, tmp_path: Path
+def test_a_cut_download_resumes_and_the_disk_check_counts_the_partial_file(
+    hub: FakeHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     dest = tmp_path / "models"
     hub.cut_after = 300_000
@@ -291,32 +237,79 @@ def test_a_cut_download_resumes_with_a_range_request_and_a_rerun_keeps_complete_
     assert "model.safetensors is 300000 bytes, but the hub says 1048576." in out
     assert "it resumes where it stopped" in out
     assert (dest / "tiny" / "model.safetensors.part").stat().st_size == 300_000
+
+    # Room only for the remainder: the plan subtracts the .part and the rerun goes ahead.
+    remainder = 1_048_576 - 300_000 + len(CONFIG) + len(README)
+    real_disk_usage = fm.shutil.disk_usage
+    monkeypatch.setattr(fm.shutil, "disk_usage", lambda _path: SimpleNamespace(free=remainder + 10))
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))
     assert code == 0, out
+    assert "3 files, 1.0 MiB, 731.1 KiB still to fetch (293.0 KiB already here resumes)" in out
     assert (dest / "tiny" / "model.safetensors").read_bytes() == WEIGHTS
     ranges = [r for path, r in hub.requests if path.endswith("/model.safetensors") and r]
     assert ranges == ["bytes=300000-"]
+    monkeypatch.setattr(fm.shutil, "disk_usage", real_disk_usage)
+
     hub.requests.clear()
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))
     assert code == 0 and "kept    model.safetensors (already complete)" in out
     assert not any(path.endswith("/model.safetensors") for path, _ in hub.requests)
 
 
-def test_a_corrupted_file_is_removed_and_reported(hub: FakeHub, tmp_path: Path) -> None:
+def test_a_changed_small_file_is_fetched_again_and_a_corrupted_one_is_removed(
+    hub: FakeHub, tmp_path: Path
+) -> None:
+    dest = tmp_path / "models"
+    assert run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))[0] == 0
+    # Upstream moved (a new commit): config.json has other bytes of the same length.
+    hub.files["config.json"] = b'{"architectures": ["Demo"]} \n'[: len(CONFIG)]
+    assert len(hub.files["config.json"]) == len(CONFIG)
+    code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))
+    assert code == 0, out
+    assert "kept    config.json" not in out and "fetched config.json" in out
+    assert (dest / "tiny" / "config.json").read_bytes() == hub.files["config.json"]
+    sums = fm.read_sums(dest / "tiny" / "SHA256SUMS")
+    assert sums["config.json"] == hashlib.sha256(hub.files["config.json"]).hexdigest()
+
     hub.corrupt = True
-    code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(tmp_path))
+    code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(tmp_path / "other"))
     assert code == 1
     assert "tiny/model.safetensors does not match the checksum the hub publishes." in out
-    assert not (tmp_path / "tiny" / "model.safetensors").exists()
+    assert not (tmp_path / "other" / "tiny" / "model.safetensors").exists()
 
 
-def test_verify_is_offline_and_names_what_is_wrong(hub: FakeHub, tmp_path: Path) -> None:
+def test_a_model_without_safetensors_keeps_its_pytorch_weights(
+    hub: FakeHub, tmp_path: Path
+) -> None:
+    del hub.files["model.safetensors"]
+    hub.files["tf_model.h5"] = b"tensorflow"
+    hub.files["flax_model.msgpack"] = b"flax"
+    code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(tmp_path))
+    assert code == 0, out
+    assert (tmp_path / "tiny" / "pytorch_model.bin").read_bytes() == BIN
+    for skipped in ("tf_model.h5", "flax_model.msgpack", "onnx"):
+        assert not (tmp_path / "tiny" / skipped).exists()
+    assert set(fm.read_sums(tmp_path / "tiny" / "SHA256SUMS")) == {
+        "pytorch_model.bin",
+        "config.json",
+        "README.md",
+    }
+    assert "3 redundant files skipped" in out
+
+
+def test_verify_is_offline_names_what_is_wrong_and_can_be_limited(
+    hub: FakeHub, tmp_path: Path
+) -> None:
     dest = tmp_path / "models"
     assert run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))[0] == 0
     hub.requests.clear()
     code, out = run("verify", "--dest", str(dest))
     assert code == 0 and "tiny: 3 files, every file matches." in out
     assert hub.requests == [], "verify never touches the network"
+    code, out = run("verify", "--dest", str(dest), "--model", "tiny")
+    assert code == 0 and out.endswith("tiny matches its checksums.\n")
+    code, out = run("verify", "--dest", str(dest), "--model", "tiny", "--model", "nope")
+    assert code == 1 and f"{dest / 'nope'} has no SHA256SUMS file." in out
     (dest / "tiny" / "config.json").write_bytes(b"{}")
     (dest / "tiny" / "README.md").unlink()
     code, out = run("verify", "--dest", str(dest))
@@ -328,11 +321,36 @@ def test_verify_is_offline_and_names_what_is_wrong(hub: FakeHub, tmp_path: Path)
     assert code == 1 and "has a SHA256SUMS file" in out
 
 
+def test_merge_manifest_folds_entries_by_path(tmp_path: Path) -> None:
+    target = tmp_path / "Models"
+    target.mkdir()
+    (target / "manifest.json").write_text(
+        json.dumps({"models": [{"path": "a", "commit": "1"}, {"path": "b", "commit": "1"}]})
+    )
+    source = tmp_path / "carried.json"
+    source.write_text(
+        json.dumps({"models": [{"path": "b", "commit": "2"}, {"path": "c", "commit": "1"}]})
+    )
+    code, out = run("merge-manifest", "--dest", str(target), "--from", str(source))
+    assert code == 0 and "1 models added, 1 updated" in out
+    merged = json.loads((target / "manifest.json").read_text())
+    assert [(m["path"], m["commit"]) for m in merged["models"]] == [
+        ("a", "1"),
+        ("b", "2"),
+        ("c", "1"),
+    ]
+    assert "generated_at" in merged
+    code, out = run("merge-manifest", "--dest", str(tmp_path / "fresh"), "--from", str(source))
+    assert code == 0 and json.loads((tmp_path / "fresh" / "manifest.json").read_text())["models"]
+    code, out = run("merge-manifest", "--dest", str(target), "--from", str(tmp_path / "none.json"))
+    assert code == 1 and "does not exist." in out and "Likely cause:" in out
+
+
 def test_sources_file_gated_repo_and_errors_speak_in_three_parts(
     hub: FakeHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sources = tmp_path / "sources.txt"
-    sources.write_text("# comment\n\ntiny demo/tiny main\n")
+    sources.write_text("# comment\n\ntiny demo/tiny main   # the demo model\n")
     hub.gated = True
     code, out = run("fetch", "--sources", str(sources), "--dest", str(tmp_path / "m"))
     assert code == 1 and "refused" in out and "export HF_TOKEN" in out
@@ -353,3 +371,83 @@ def test_sources_file_gated_repo_and_errors_speak_in_three_parts(
 
     code, out = run("fetch", "--dest", str(tmp_path / "m"))
     assert code == 1 and "No model was named." in out
+
+    code, out = run(
+        "fetch", "--profile", "prod", "--model", "tiny=demo/tiny", "--dest", str(tmp_path / "m")
+    )
+    assert code == 1 and "--profile was given without --sources." in out
+
+
+def test_sources_sections_select_the_models_a_profile_needs(hub: FakeHub, tmp_path: Path) -> None:
+    sources = tmp_path / "sources.txt"
+    sources.write_text(
+        "# shared by every profile\ncommon demo/common\n"
+        "[quickstart]   # the small set\nsmall demo/small\n"
+        "[ prod ]\nlarge demo/large abc\n"
+    )
+    assert [s.path for s in fm.read_sources(sources)] == ["common", "small", "large"]
+    assert [s.path for s in fm.read_sources(sources, profile="quickstart")] == ["common", "small"]
+    prod = fm.read_sources(sources, profile="prod")
+    assert [s.path for s in prod] == ["common", "small", "large"] and prod[-1].revision == "abc"
+    # A repository whose name merely contains "todo" is not a placeholder.
+    assert fm.Source.parse("autodoc someone/AutoDoc-7B").repo == "someone/AutoDoc-7B"
+
+    with pytest.raises(fm.FetchError) as bad_profile:
+        fm.read_sources(sources, profile="staging")
+    assert "The profile 'staging' is not known." in bad_profile.value.what_happened
+
+    sources.write_text("[staging]\nx demo/x\n")
+    with pytest.raises(fm.FetchError) as bad_section:
+        fm.read_sources(sources)
+    assert "The section [staging] in sources.txt is not an install profile." in str(
+        bad_section.value
+    )
+
+    sources.write_text("[prod]\nlarge demo/large\n")
+    with pytest.raises(fm.FetchError) as empty:
+        fm.read_sources(sources, profile="quickstart")
+    assert "lists no models for the quickstart profile." in empty.value.what_happened
+
+    # Through the command line: the prod section is left out for quickstart.
+    sources.write_text("tiny demo/tiny\n[prod]\nbig demo/missing\n")
+    code, out = run(
+        "fetch", "--sources", str(sources), "--profile", "quickstart", "--dest", str(tmp_path / "q")
+    )
+    assert code == 0, out
+    assert (tmp_path / "q" / "tiny" / "SHA256SUMS").exists() and "big" not in out
+
+
+def test_the_shipped_sources_are_pinned_and_match_the_profile_registries() -> None:
+    from slas_model_manager.registry import PROFILE_REGISTRIES
+
+    shipped = REPO_ROOT / "config" / "model-sources.txt"
+    every = fm.read_sources(shipped)
+    assert {s.repo for s in every} == {
+        "deepseek-ai/DeepSeek-V4-Flash",
+        "Qwen/Qwen3.8-27B-FP8",
+        "BAAI/bge-m3",
+        "BAAI/bge-reranker-v2-m3",
+        "deepseek-ai/DeepSeek-V4-Pro",
+        "MiniMaxAI/MiniMax-M2.7",
+        "Qwen/Qwen3.8-27B",
+    }
+    for source in every:
+        assert re.fullmatch(r"[0-9a-f]{40}", source.revision), f"{source.path} is not pinned"
+    for profile, registry in PROFILE_REGISTRIES.items():
+        models = cast(list[dict[str, object]], registry["models"])
+        wanted = {str(model["path"]) for model in models}
+        fetched = {s.path for s in fm.read_sources(shipped, profile=profile)}
+        assert fetched == wanted, (
+            f"{profile}: sources and models.{profile}.yaml name different paths"
+        )
+    assert len(fm.read_sources(shipped, profile="quickstart")) < len(every)
+    # The commented example lines are ready to uncomment: full commits, no TODO.
+    for line in shipped.read_text().splitlines():
+        if re.match(r"# [a-z0-9.-]+\s+\S+/\S+\s+[0-9a-f]+$", line):
+            assert re.search(r"\s[0-9a-f]{40}$", line), line
+
+
+def test_human_sizes_round_to_the_next_unit() -> None:
+    assert fm.human(1048552) == "1.0 MiB"
+    assert fm.human(1023) == "1023 B"
+    assert fm.human(100 * 2**30 + 40 * 2**20) == "100.0 GiB"

@@ -4,9 +4,13 @@
 # models.yaml when none exists there yet, and never overwrites one (INV-9).
 # Every `path` is a directory under Models/ that scripts/fetch_models.py fetches from the
 # matching line of config/model-sources.txt; never a URL (INV-1).
-# vram_gib is the weights on the hub plus headroom for the KV cache at `context`; it is
-# an assumption until real instances run. DeepSeek-V4 Pro runs tensor parallel over
-# four GPUs. Change roles on the Models page or here; no restart is needed.
+# Assumes GPUs of about 288 GB each (HGX B300 class); on smaller GPUs pick smaller or
+# AWQ builds on the Models page. The model manager starts one instance per role and one
+# per voter. vram_gib is the weights on the hub plus headroom for the KV cache at
+# `context`; an assumption until real instances run. Change roles on the Models page or
+# here; no restart is needed.
+# Three voters from three families (DeepSeek, Qwen, MiniMax); DeepSeek-V4 Pro serves
+# the planner only, tensor parallel over four GPUs.
 version: 1
 models:
   - id: deepseek-v4-pro
@@ -33,6 +37,14 @@ models:
     vram_gib: 40
     context: 131072
     roles: [coder, planner]
+  - id: minimax-m2.7
+    display_name: "MiniMax-M2.7"
+    family: "MiniMax"
+    path: "minimax-m2.7"
+    quant: fp8
+    vram_gib: 235
+    context: 131072
+    roles: [planner]
   - id: qwen3.8-27b-bf16
     display_name: "Qwen3.8-27B (BF16 reference)"
     family: "Qwen"
@@ -64,6 +76,6 @@ roles:
   embed: bge-m3
   rerank: bge-reranker-v2-m3
 voters:
-  - deepseek-v4-pro
   - deepseek-v4-flash
   - qwen3.8-27b-fp8
+  - minimax-m2.7

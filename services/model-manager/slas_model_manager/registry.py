@@ -218,7 +218,13 @@ def example_registry() -> Registry:
 # weights scripts/fetch_models.py fetches are the ones these entries name. Sizes come from
 # the hub's file listings on 2026-09-16; vram_gib adds headroom for the KV cache at the
 # stated context and is an assumption until real instances run (same note as fit.py).
-# `quant` stays within fp8 | awq4 | bf16 until ADR-0014 admits fp4.
+# `quant` stays within fp8 | awq4 | bf16 until an ADR admits fp4.
+#
+# The model manager starts one vLLM instance per role and one per voter (reconcile.py), so a
+# model that is both a role and a voter runs twice; the layouts below count that. `slas model
+# fit` compares vram_gib with one GPU and has no tensor-parallel field yet, so the DeepSeek-V4
+# Pro entry reads as not fitting until the registry gains one (CLAUDE.md §15, decision 14).
+# TODO(SLAS-MODELS): add a gpus/tensor_parallel field with that ADR.
 
 _DEEPSEEK_V4_FLASH: Final[dict[str, object]] = {
     "id": "deepseek-v4-flash",
@@ -236,7 +242,7 @@ _QWEN38_27B_FP8: Final[dict[str, object]] = {
     "family": "Qwen",
     "path": "qwen3.8-27b-fp8",
     "quant": "fp8",
-    "vram_gib": 40.0,  # 29 GiB of FP8 weights on the hub
+    "vram_gib": 40.0,  # 29 GiB of FP8 weights; a vision-language checkpoint served text-only
     "context": 131072,
     "roles": ["coder", "planner"],
 }
@@ -270,6 +276,16 @@ _DEEPSEEK_V4_PRO: Final[dict[str, object]] = {
     "context": 131072,
     "roles": ["planner"],
 }
+_MINIMAX_M2_7: Final[dict[str, object]] = {
+    "id": "minimax-m2.7",
+    "display_name": "MiniMax-M2.7",
+    "family": "MiniMax",
+    "path": "minimax-m2.7",
+    "quant": "fp8",
+    "vram_gib": 235.0,  # 214 GiB of FP8 weights on the hub; the third voter family
+    "context": 131072,
+    "roles": ["planner"],
+}
 _QWEN38_27B_BF16: Final[dict[str, object]] = {
     "id": "qwen3.8-27b-bf16",
     "display_name": "Qwen3.8-27B (BF16 reference)",
@@ -281,8 +297,10 @@ _QWEN38_27B_BF16: Final[dict[str, object]] = {
     "roles": [],  # eval regression only (CLAUDE.md §7); the gateway never routes to it
 }
 
-#: Quickstart (CLAUDE.md §3): one coder, one triage, embed and rerank. The planner role is a
-#: second instance of the coder so nothing large runs twice; two voters from two families.
+#: Quickstart (CLAUDE.md §3): the planner role is a second instance of the small coder, so
+#: the instances are Flash ×2 (triage, voter), Qwen ×3 (coder, planner, voter) and the two
+#: BGE models: about 490 GiB over three GPUs of the B300 class. Two voters from two families,
+#: so every cross-check is reported as a weaker check (CLAUDE.md §15, decision 12).
 QUICKSTART_REGISTRY: Final[dict[str, object]] = {
     "version": 1,
     "models": [_DEEPSEEK_V4_FLASH, _QWEN38_27B_FP8, _BGE_M3, _BGE_RERANKER_V2_M3],
@@ -296,14 +314,16 @@ QUICKSTART_REGISTRY: Final[dict[str, object]] = {
     "voters": ["deepseek-v4-flash", "qwen3.8-27b-fp8"],
 }
 
-#: Prod (docs/runbooks/deploy-hgx-b300.md §4): DeepSeek-V4 Pro as planner on four GPUs,
-#: three voters (two DeepSeek, one Qwen), and the BF16 reference copy for eval regression.
+#: Prod (docs/runbooks/deploy-hgx-b300.md §4): DeepSeek-V4 Pro as planner on GPUs 0-3, Flash
+#: as triage and as a voter (two instances), Qwen as coder and voter, MiniMax-M2.7 as the third
+#: voter family, the BF16 reference for eval regression. Eight GPUs, one instance each.
 PROD_REGISTRY: Final[dict[str, object]] = {
     "version": 1,
     "models": [
         _DEEPSEEK_V4_PRO,
         _DEEPSEEK_V4_FLASH,
         _QWEN38_27B_FP8,
+        _MINIMAX_M2_7,
         _QWEN38_27B_BF16,
         _BGE_M3,
         _BGE_RERANKER_V2_M3,
@@ -315,7 +335,7 @@ PROD_REGISTRY: Final[dict[str, object]] = {
         "embed": "bge-m3",
         "rerank": "bge-reranker-v2-m3",
     },
-    "voters": ["deepseek-v4-pro", "deepseek-v4-flash", "qwen3.8-27b-fp8"],
+    "voters": ["deepseek-v4-flash", "qwen3.8-27b-fp8", "minimax-m2.7"],
 }
 
 PROFILE_REGISTRIES: Final[dict[str, dict[str, object]]] = {
@@ -325,6 +345,13 @@ PROFILE_REGISTRIES: Final[dict[str, dict[str, object]]] = {
 
 
 def profile_registry_header(profile: str) -> str:
+    voters = (
+        "Two voters from two families: every cross-check is reported as a weaker check until a\n"
+        "third family is added (CLAUDE.md §15, decision 12; models.prod.yaml adds MiniMax-M2.7)."
+        if profile == "quickstart"
+        else "Three voters from three families (DeepSeek, Qwen, MiniMax); DeepSeek-V4 Pro serves\n"
+        "the planner only, tensor parallel over four GPUs."
+    )
     return (
         f"Models/models.yaml for the {profile} profile of SW Local Agent Service (CLAUDE.md §7).\n"
         f"Rendered from slas_model_manager.registry.PROFILE_REGISTRIES[{profile!r}]; a unit test\n"
@@ -332,9 +359,11 @@ def profile_registry_header(profile: str) -> str:
         "models.yaml when none exists there yet, and never overwrites one (INV-9).\n"
         "Every `path` is a directory under Models/ that scripts/fetch_models.py fetches from the\n"
         "matching line of config/model-sources.txt; never a URL (INV-1).\n"
-        "vram_gib is the weights on the hub plus headroom for the KV cache at `context`; it is\n"
-        "an assumption until real instances run. DeepSeek-V4 Pro runs tensor parallel over\n"
-        "four GPUs. Change roles on the Models page or here; no restart is needed."
+        "Assumes GPUs of about 288 GB each (HGX B300 class); on smaller GPUs pick smaller or\n"
+        "AWQ builds on the Models page. The model manager starts one instance per role and one\n"
+        "per voter. vram_gib is the weights on the hub plus headroom for the KV cache at\n"
+        "`context`; an assumption until real instances run. Change roles on the Models page or\n"
+        f"here; no restart is needed.\n{voters}"
     )
 
 

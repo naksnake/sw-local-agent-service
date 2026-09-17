@@ -4,9 +4,13 @@
 # models.yaml when none exists there yet, and never overwrites one (INV-9).
 # Every `path` is a directory under Models/ that scripts/fetch_models.py fetches from the
 # matching line of config/model-sources.txt; never a URL (INV-1).
-# vram_gib is the weights on the hub plus headroom for the KV cache at `context`; it is
-# an assumption until real instances run. DeepSeek-V4 Pro runs tensor parallel over
-# four GPUs. Change roles on the Models page or here; no restart is needed.
+# Assumes GPUs of about 288 GB each (HGX B300 class); on smaller GPUs pick smaller or
+# AWQ builds on the Models page. The model manager starts one instance per role and one
+# per voter. vram_gib is the weights on the hub plus headroom for the KV cache at
+# `context`; an assumption until real instances run. Change roles on the Models page or
+# here; no restart is needed.
+# Two voters from two families: every cross-check is reported as a weaker check until a
+# third family is added (CLAUDE.md §15, decision 12; models.prod.yaml adds MiniMax-M2.7).
 version: 1
 models:
   - id: deepseek-v4-flash

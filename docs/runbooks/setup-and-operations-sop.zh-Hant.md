@@ -1,7 +1,7 @@
 # SOP — SW Local Agent Service 安裝與營運
 
-版本 1.0 · 2026-09-15 · 英文原文：`setup-and-operations-sop.md`（INV-13）。
-依分支 `claude/focused-mayer-5fiqnz` 撰寫。每一條「今日可用」都有測試涵蓋或已實際執行；每一條
+版本 1.1 · 2026-09-16 · 英文原文：`setup-and-operations-sop.md`（INV-13）。
+依分支 `claude/vigilant-gauss-tsqua0` 撰寫。每一條「今日可用」都有測試涵蓋或已實際執行；每一條
 「待決」都寫明所等待的項目。
 
 ## 1 · 目的與範圍
@@ -55,9 +55,9 @@
 
 | # | 動作 | 完成判準 |
 |---|---|---|
-| A1 | `git clone` 儲存庫；`uv sync --frozen && uv run pytest` | 788 項測試通過 |
+| A1 | `git clone` 儲存庫；`uv sync --frozen && uv run pytest` | 所有測試通過 |
 | A2 | `config/model-sources.txt` 已填妥，每一行都釘選至一個提交；只有要改用其他版本時才修改該行 | 每一行都寫有儲存庫與提交 |
-| A3 | 先執行 `scripts/fetch_models.py fetch --sources config/model-sources.txt --profile prod --dry-run --dest ./models`，再去掉 `--dry-run` 執行一次；僅在受限儲存庫時 `export HF_TOKEN=…` | 先顯示「Total: 6 models, …」與可用磁碟空間，之後每個模型一句話，並產生 `models/manifest.json` |
+| A3 | 先執行 `scripts/fetch_models.py fetch --sources config/model-sources.txt --profile prod --dry-run --dest ./models`，再去掉 `--dry-run` 執行一次；僅在受限儲存庫時 `export HF_TOKEN=…` | 先顯示「Total: 7 models, …」與可用磁碟空間，之後每個模型一句話，並產生 `models/manifest.json` |
 | A4 | 任何中斷後重新執行 A3；會續傳並保留已完成的檔案 | 顯示「Done: N models」 |
 | A5 | 待決：`scripts/lock-images.sh --sign`，再 `scripts/build-bundle.sh --profile prod`；提交填妥的鎖定檔 | `compose/images.lock.*` 沒有 null 摘要 |
 | A6 | 將 `models/`、安裝包與 `config/cosign.pub` 複製到攜帶磁碟 | 已記錄校驗和 |
@@ -68,8 +68,8 @@
 |---|---|---|
 | B1 | `./install.sh --preflight-only` | 沒有 ✗；每一行 ! 均已理解 |
 | B2 | 掛載資料與模型磁碟區；`mkdir -p /AI/Agent/Models` | 預檢的 Disk space 為 ✓ |
-| B3 | 將 `models/` 複製到 `install.sh` 旁，或放在任何位置並加上 `--models DIR`；`./install.sh --dry-run` 會說明將複製的內容 | 顯示「Would copy 6 models (…) … into /AI/Agent/Models」 |
-| B4 | 無需手寫：安裝程式會驗證校驗和、放置權重，並在 `/AI/Agent/Models/models.yaml` 不存在時依 `config/models.prod.yaml` 寫入，且永不覆寫既有檔案。之後在 Models 頁面調整角色 | 顯示「Wrote /AI/Agent/Models/models.yaml from the prod template.」 |
+| B3 | 將 `models/` 複製到 `install.sh` 旁，或放在任何位置並加上 `--models DIR`；`./install.sh --profile prod --models-only --dry-run` 會說明將複製的內容 | 顯示「Would copy 7 models (…) … into /AI/Agent/Models」 |
+| B4 | `./install.sh --profile prod --models-only`：驗證校驗和、放置權重，並在 `/AI/Agent/Models/models.yaml` 不存在時依 `config/models.prod.yaml` 寫入，且永不覆寫既有檔案。之後在 Models 頁面調整角色。在安裝包存在之前即可執行 | 顯示「Placed 7 models under /AI/Agent/Models」與「Wrote /AI/Agent/Models/models.yaml from the prod template.」 |
 | B5 | 待決：`tar xzf slas-bundle-<version>.tgz && cd slas-bundle-<version>`；`./install.sh --profile prod --dry-run` | 顯示「Dry run finished: every read-only step passed」 |
 | B6 | 待決：`./install.sh --profile prod` | 印出登入網址與一次性管理員密碼 |
 | B7 | 待決：登入、設定新密碼；Admin → People；Admin → Git hosts | 已新增第一位人員 |
@@ -79,13 +79,13 @@ B300 的 GPU 配置（8 顆 GPU，每顆約 288 GB）：
 
 | GPU | 實例 | 服務角色 |
 |---|---|---|
-| 0–3 | DeepSeek-V4 Pro，tensor parallel 4 | planner、投票模型 |
-| 4 | DeepSeek-V4 Flash | triage、投票模型、Pro 更換期間的代理 planner |
-| 5 | Qwen3.8-27B FP8 | coder、投票模型 |
-| 6 | BGE-M3、BGE reranker、Qwen3.8-27B BF16 | embed、rerank、評測基準 |
-| 7 | 保留空閒 | 藍綠更換的候選實例，或第三家族的投票模型 |
+| 0–3 | DeepSeek-V4 Pro，tensor parallel 4 | planner |
+| 4 | DeepSeek-V4 Flash | triage；Pro 更換期間的代理 planner |
+| 5 | Qwen3.8-27B FP8 ×2、BGE-M3、BGE reranker、Qwen3.8-27B BF16 | coder、投票模型、embed、rerank、評測基準 |
+| 6 | DeepSeek-V4 Flash（第二個實例） | 投票模型 |
+| 7 | MiniMax-M2.7 | 投票模型，第三個模型家族 |
 
-`quant: fp4` 等待 ADR-0014；在此之前 DeepSeek 條目以 `fp8` 通過驗證。
+`quant: fp4` 等待 ADR；在此之前 DeepSeek 條目以 `fp8` 通過驗證。模型管理器為每個角色與每個投票模型各啟動一個實例（CLAUDE.md §15，決議 14）。
 
 ## 7 · 程序 C — 日常營運
 
@@ -117,8 +117,8 @@ B300 的 GPU 配置（8 顆 GPU，每顆約 288 GB）：
 | 手動編輯 | 修改 `/AI/Agent/Models/models.yaml` 的 `roles:`；每個角色的模型必須列出該角色 | 登錄檔以一句話通過驗證 |
 
 量化：Blackwell 用 FP8 或 FP4，Ada 與 Ampere 用 AWQ 4-bit，僅保留一份 BF16 供評測回歸
-（CLAUDE.md §7）。投票模型應來自三個模型家族；若有兩個 DeepSeek 投票模型，登錄檔每次載入都會顯示
-「2 model families」。
+（CLAUDE.md §7）。投票模型應來自三個模型家族；prod 隨附 DeepSeek、Qwen 與 MiniMax，quickstart 為兩個家族
+（CLAUDE.md §15，決議 12）。
 
 ## 9 · 程序 E — 備份、還原、升級
 

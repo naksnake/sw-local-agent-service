@@ -91,7 +91,8 @@ def test_profile_models_yaml_files_are_in_step_and_valid() -> None:
     assert quickstart.sentence().endswith("2 voters from 2 model families.")
     prod = profile_registry("prod")
     assert prod.roles["planner"] == "deepseek-v4-pro"
-    assert prod.sentence().endswith("3 voters from 2 model families.")
+    assert prod.sentence().endswith("3 voters from 3 model families.")
+    assert prod.model("minimax-m2.7").family == "MiniMax"
     assert prod.model("qwen3.8-27b-bf16").roles == [], "the BF16 copy is for eval only"
     # Prod is a superset of quickstart: the same weights serve, plus the planner and the reference.
     assert {m.path for m in quickstart.models} < {m.path for m in prod.models}

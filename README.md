@@ -34,6 +34,7 @@ installer verify, place it and write `models.yaml`:
 ```bash
 scripts/fetch_models.py fetch --sources config/model-sources.txt --profile quickstart --dest ./models
 ./install.sh --models ./models          # on the platform host; ./models next to install.sh is found on its own
+./install.sh --models ./models --models-only   # place the weights now, before the bundle exists
 ```
 
 Deploying to a specific GPU host, and what runs today versus what still waits on a

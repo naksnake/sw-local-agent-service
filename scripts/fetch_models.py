@@ -1,29 +1,32 @@
 #!/usr/bin/env python3
-"""Fetch model weights on a CONNECTED build host and write checksums for the air-gapped box.
+"""Fetch model weights on a CONNECTED host and write checksums for the air-gapped box.
 
 Standard library only, so it runs on any host with Python 3.12 and no virtualenv. The
-platform host never runs this (INV-1): the weights travel by sneakernet and are verified on
-arrival with `--verify`, which needs no network.
+running platform never downloads anything (INV-1): the weights are fetched here, normally on
+a separate build host, travel by sneakernet, and `./install.sh --models <dir>` checks them on
+arrival with the offline `verify` subcommand. Whether the platform host itself may run the
+fetch while it is being prepared is CLAUDE.md §15 open decision (13).
 
-    scripts/fetch_models.py fetch  --sources config/model-sources.txt --profile quickstart \
+    scripts/fetch_models.py fetch  --sources config/model-sources.txt --profile quickstart \\
                                    --dest ./models
-    scripts/fetch_models.py fetch  --sources config/model-sources.txt --profile prod --dry-run \
+    scripts/fetch_models.py fetch  --sources config/model-sources.txt --profile prod --dry-run \\
                                    --dest ./models
     scripts/fetch_models.py fetch  --model qwen3.8-27b-fp8=Qwen/Qwen3.8-27B-FP8 --dest ./models
-    scripts/fetch_models.py verify --dest /AI/Agent/Models            # on the box, offline
+    scripts/fetch_models.py verify --dest /AI/Agent/Models [--model <path>]     # offline
+    scripts/fetch_models.py merge-manifest --dest /AI/Agent/Models --from ./models/manifest.json
 
 Each model lands in <dest>/<path>/ (the `path` the registry names), with SHA256SUMS beside
 the files and one manifest.json for the whole set. Before anything downloads, the script
-lists every model with its size and checks the free disk at --dest; `--dry-run` stops there.
-Downloads resume; every large file is checked against the sha256 the hub publishes, and
-small files are hashed after download. A token for gated repositories comes from HF_TOKEN
-in the environment, never from argv; HF_ENDPOINT points at a mirror inside the perimeter
-when one exists.
+lists every model with its size and checks the free disk at --dest, counting a partial
+download that will resume; `--dry-run` stops there. Downloads resume; every large file is
+checked against the sha256 the hub publishes, every small file against its git blob id, and
+a file already on disk is kept only when it matches. A token for gated repositories comes
+from HF_TOKEN in the environment, never from argv; HF_ENDPOINT points at a mirror inside the
+perimeter when one exists.
 
 The sources file may carry `[quickstart]` and `[prod]` sections: `--profile quickstart`
 fetches the lines above any section and the `[quickstart]` ones, `--profile prod` also the
-`[prod]` ones. Without `--profile`, every line is fetched. `./install.sh --models <dest>`
-then verifies the checksums and puts the weights under the data root.
+`[prod]` ones. Without `--profile`, every line is fetched. A `# comment` may follow a line.
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import urllib.error
@@ -102,7 +106,7 @@ class Source:
                 )
             path, rest = parts[0], "@".join(parts[1:])
         repo, _, revision = rest.partition("@")
-        if "TODO" in raw.upper():
+        if re.search(r"\bTODO\b", raw):
             raise FetchError(
                 f"The source line for {path} still says TODO.",
                 "The repository id for this model has not been filled in.",
@@ -115,6 +119,11 @@ class Source:
                 "Fix the line and run again.",
             )
         return cls(path=path, repo=repo, revision=revision or "main")
+
+
+def strip_comment(line: str) -> str:
+    """Drop a `# …` comment: a `#` counts when it starts the line or follows whitespace."""
+    return re.sub(r"(^|\s)#.*$", "", line).strip()
 
 
 def read_sources(path: Path, *, profile: str | None = None) -> list[Source]:
@@ -133,11 +142,12 @@ def read_sources(path: Path, *, profile: str | None = None) -> list[Source]:
     sources: list[Source] = []
     section: str | None = None
     for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        stripped = strip_comment(line)
+        if not stripped:
             continue
-        if stripped.startswith("[") and stripped.endswith("]"):
-            section = stripped[1:-1].strip()
+        header = re.fullmatch(r"\[\s*([A-Za-z0-9_-]+)\s*\]", stripped)
+        if header:
+            section = header.group(1)
             if section not in PROFILES:
                 raise FetchError(
                     f"The section [{section}] in {path.name} is not an install profile.",
@@ -167,7 +177,8 @@ def read_sources(path: Path, *, profile: str | None = None) -> list[Source]:
 class RemoteFile:
     path: str
     size: int
-    sha256: str | None  # the hub publishes it for LFS files; small files are hashed after download
+    sha256: str | None  # the hub publishes it for LFS files
+    blob_oid: str | None = None  # the git blob id the hub publishes for every other file
 
 
 Opener = Callable[[urllib.request.Request], Any]
@@ -251,6 +262,8 @@ class Hub:
                     path=str(entry["path"]),
                     size=int(entry.get("size") or lfs.get("size") or 0),
                     sha256=str(lfs["oid"]) if lfs.get("oid") else None,
+                    # For an LFS file the entry's oid is the pointer's blob, not the content's.
+                    blob_oid=str(entry["oid"]) if entry.get("oid") and not lfs else None,
                 )
             )
         return files
@@ -263,7 +276,7 @@ class Hub:
 
     def download(self, url: str, target: Path, *, expected_size: int, log: TextIO) -> None:
         """Resume into `<target>.part`, then rename. Nothing about the token is ever printed."""
-        part = target.with_name(target.name + ".part")
+        part = part_of(target)
         part.parent.mkdir(parents=True, exist_ok=True)
         have = part.stat().st_size if part.exists() else 0
         if expected_size and have > expected_size:
@@ -303,10 +316,14 @@ class Hub:
         log.write(f"  fetched {target.name} ({human(have)})\n")
 
 
+def part_of(target: Path) -> Path:
+    return target.with_name(target.name + ".part")
+
+
 def human(size: int) -> str:
     value = float(size)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if value < 1024 or unit == "TiB":
+        if unit == "TiB" or round(value, 1) < 1024:
             return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
         value /= 1024
     return f"{value:.1f} TiB"
@@ -320,10 +337,41 @@ def sha256_of(path: Path) -> str:
     return digest.hexdigest()
 
 
+def blob_sha1(path: Path) -> str:
+    """The git blob id of a file: what the hub publishes for files it does not keep in LFS."""
+    digest = hashlib.sha1(b"blob %d\0" % path.stat().st_size)  # noqa: S324 — a git id, not security
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(CHUNK), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def is_complete(target: Path, remote: RemoteFile) -> bool:
+    """Does the file on disk match what the hub describes?
+
+    sha256 for LFS files, the git blob id for the others, the size when neither is known.
+    """
+    if not target.is_file():
+        return False
+    if remote.sha256 is not None:
+        return sha256_of(target) == remote.sha256
+    if remote.blob_oid is not None:
+        return blob_sha1(target) == remote.blob_oid
+    return not remote.size or target.stat().st_size == remote.size
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """Write through a temporary file and rename, so a reader (or a hard link) never sees a
+    half-written file and an existing hard link is not rewritten in place."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
 def select(
     files: list[RemoteFile], *, include: Sequence[str], exclude: Sequence[str]
 ) -> tuple[list[RemoteFile], list[str]]:
-    """Which files to fetch, and the ones skipped because safetensors make them redundant."""
+    """Which files to fetch, and the ones skipped because they are redundant."""
     has_safetensors = any(f.path.endswith(".safetensors") for f in files)
     patterns = [*exclude, *ALWAYS_REDUNDANT]
     if has_safetensors:
@@ -367,16 +415,21 @@ class ModelPlan:
     commit: str
     files: list[RemoteFile]
     skipped: list[str]
-    present: list[str] = field(default_factory=list)  # relative paths already complete-looking
+    present: list[str] = field(default_factory=list)  # relative paths already complete
+    partial: dict[str, int] = field(default_factory=dict)  # relative path → bytes of a .part
 
     @property
     def bytes_total(self) -> int:
         return sum(f.size for f in self.files)
 
     @property
+    def bytes_resumed(self) -> int:
+        return sum(self.partial.values())
+
+    @property
     def bytes_to_fetch(self) -> int:
         have = set(self.present)
-        return sum(f.size for f in self.files if f.path not in have)
+        return sum(f.size - self.partial.get(f.path, 0) for f in self.files if f.path not in have)
 
     def sentence(self) -> str:
         source = self.source
@@ -384,8 +437,10 @@ class ModelPlan:
             f"{source.path} ← {source.repo}@{source.revision} ({self.commit[:12]}): "
             f"{len(self.files)} files, {human(self.bytes_total)}"
         )
-        if self.present:
+        if self.present or self.partial:
             text += f", {human(self.bytes_to_fetch)} still to fetch"
+        if self.partial:
+            text += f" ({human(self.bytes_resumed)} already here resumes)"
         if self.skipped:
             text += f"; {len(self.skipped)} redundant files skipped"
         return text
@@ -409,13 +464,16 @@ def plan_model(
             "Loosen the patterns, or check the repository on the hub.",
         )
     target_dir = dest / source.path
-    present = [
-        remote.path
-        for remote in chosen
-        if (target_dir / remote.path).is_file()
-        and (not remote.size or (target_dir / remote.path).stat().st_size == remote.size)
-    ]
-    return ModelPlan(source=source, commit=commit, files=chosen, skipped=skipped, present=present)
+    plan = ModelPlan(source=source, commit=commit, files=chosen, skipped=skipped)
+    for remote in chosen:
+        target = target_dir / remote.path
+        if is_complete(target, remote):
+            plan.present.append(remote.path)
+            continue
+        part = part_of(target)
+        if part.is_file() and (not remote.size or part.stat().st_size <= remote.size):
+            plan.partial[remote.path] = part.stat().st_size
+    return plan
 
 
 def free_bytes(dest: Path) -> int:
@@ -439,10 +497,11 @@ def check_disk(plans: Sequence[ModelPlan], dest: Path, *, log: TextIO) -> None:
     )
     if needed > free:
         raise FetchError(
-            f"Not enough free disk at {dest}: {human(needed)} is still to fetch, "
-            f"{human(free)} is free.",
+            f"Not enough free disk at {dest}: {human(needed)} is still to fetch and "
+            f"{human(free)} is free, {needed - free:,} bytes short.",
             "The destination volume is too small for this set of models.",
-            "Free space or point --dest at a larger volume, then run the same command again.",
+            "Free space or point --dest at a larger volume, then run the same command again; "
+            "a download that was cut short resumes and is not counted twice.",
         )
 
 
@@ -460,21 +519,32 @@ def fetch_planned(hub: Hub, plan: ModelPlan, dest: Path, *, log: TextIO) -> Fetc
         commit=plan.commit,
         skipped=plan.skipped,
     )
+    present = set(plan.present)
     for remote in plan.files:
         target = target_dir / remote.path
-        if target.exists() and (remote.sha256 is None or sha256_of(target) == remote.sha256):
-            if remote.sha256 is not None:
-                log.write(f"  kept    {remote.path} (already complete)\n")
+        if remote.path in present:
+            log.write(f"  kept    {remote.path} (already complete)\n")
+            actual = remote.sha256 if remote.sha256 is not None else sha256_of(target)
         else:
             hub.download(hub.file_url(source, remote), target, expected_size=remote.size, log=log)
-        actual = sha256_of(target)
-        if remote.sha256 is not None and actual != remote.sha256:
-            target.unlink()
-            raise FetchError(
-                f"{source.path}/{remote.path} does not match the checksum the hub publishes.",
-                "The file was corrupted in transit or altered by a proxy.",
-                "Run the same command again; the bad file was removed and will be fetched anew.",
-            )
+            actual = sha256_of(target)
+            if remote.sha256 is not None and actual != remote.sha256:
+                target.unlink()
+                raise FetchError(
+                    f"{source.path}/{remote.path} does not match the checksum the hub publishes.",
+                    "The file was corrupted in transit or altered by a proxy.",
+                    "Run the same command again; the bad file was removed and will be fetched "
+                    "anew.",
+                )
+            if remote.blob_oid is not None and blob_sha1(target) != remote.blob_oid:
+                target.unlink()
+                raise FetchError(
+                    f"{source.path}/{remote.path} does not match the git blob id the hub "
+                    "publishes.",
+                    "The file was corrupted in transit or altered by a proxy.",
+                    "Run the same command again; the bad file was removed and will be fetched "
+                    "anew.",
+                )
         fetched.files[remote.path] = actual
         fetched.bytes += target.stat().st_size
     write_sums(target_dir, fetched.files)
@@ -484,7 +554,7 @@ def fetch_planned(hub: Hub, plan: ModelPlan, dest: Path, *, log: TextIO) -> Fetc
 def write_sums(target_dir: Path, files: dict[str, str]) -> Path:
     path = target_dir / "SHA256SUMS"
     lines = [f"{digest}  {name}" for name, digest in sorted(files.items())]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_atomic(path, "\n".join(lines) + "\n")
     return path
 
 
@@ -498,12 +568,16 @@ def read_sums(path: Path) -> dict[str, str]:
     return sums
 
 
+def read_manifest(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {"models": []}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else {"models": []}
+
+
 def write_manifest(dest: Path, models: list[FetchedModel], *, now: datetime) -> Path:
     path = dest / "manifest.json"
-    existing: dict[str, Any] = {}
-    if path.is_file():
-        existing = json.loads(path.read_text(encoding="utf-8"))
-    entries = {m["path"]: m for m in existing.get("models", [])}
+    entries = {m["path"]: m for m in read_manifest(path).get("models", [])}
     for model in models:
         entries[model.path] = {
             "path": model.path,
@@ -515,8 +589,31 @@ def write_manifest(dest: Path, models: list[FetchedModel], *, now: datetime) -> 
             "fetched_at": now.isoformat(),
         }
     payload = {"generated_at": now.isoformat(), "models": [entries[k] for k in sorted(entries)]}
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    write_atomic(path, json.dumps(payload, indent=2) + "\n")
     return path
+
+
+def merge_manifest(dest: Path, source: Path, *, now: datetime) -> tuple[int, int]:
+    """Fold the entries of `source` into dest/manifest.json by path. Returns (added, updated)."""
+    if not source.is_file():
+        raise FetchError(
+            f"{source} does not exist.",
+            "The models directory carries no manifest.json.",
+            "Run the fetch again on the connected host; it writes one.",
+        )
+    dest.mkdir(parents=True, exist_ok=True)
+    target = dest / "manifest.json"
+    entries = {m["path"]: m for m in read_manifest(target).get("models", [])}
+    added = updated = 0
+    for entry in read_manifest(source).get("models", []):
+        if entry["path"] in entries:
+            updated += entries[entry["path"]] != entry
+        else:
+            added += 1
+        entries[entry["path"]] = entry
+    payload = {"generated_at": now.isoformat(), "models": [entries[k] for k in sorted(entries)]}
+    write_atomic(target, json.dumps(payload, indent=2) + "\n")
+    return added, updated
 
 
 def verify(dest: Path, *, log: TextIO, only: Sequence[str] = ()) -> list[str]:
@@ -554,6 +651,12 @@ def verify(dest: Path, *, log: TextIO, only: Sequence[str] = ()) -> list[str]:
 def iter_sources(args: argparse.Namespace) -> Iterator[Source]:
     if args.sources:
         yield from read_sources(Path(args.sources), profile=args.profile)
+    elif args.profile:
+        raise FetchError(
+            "--profile was given without --sources.",
+            "A profile selects sections of a sources file; --model lines are always fetched.",
+            "Add --sources config/model-sources.txt, or drop --profile.",
+        )
     for spec in args.model or []:
         yield Source.parse(spec)
 
@@ -600,6 +703,12 @@ def main(
         default=[],
         help="Only this model directory under --dest (repeatable); default: every one.",
     )
+    merge = commands.add_parser(
+        "merge-manifest",
+        help="Fold another manifest.json into --dest/manifest.json (install.sh uses it).",
+    )
+    merge.add_argument("--dest", required=True)
+    merge.add_argument("--from", dest="source", required=True, help="The manifest.json to fold in.")
     args = parser.parse_args(list(argv) if argv is not None else None)
     dest = Path(args.dest)
     try:
@@ -614,6 +723,13 @@ def main(
                 return 1
             scope = ", ".join(args.model) if args.model else f"Every model under {dest}"
             out.write(f"{scope} matches its checksums.\n")
+            return 0
+        if args.command == "merge-manifest":
+            added, updated = merge_manifest(dest, Path(args.source), now=datetime.now(UTC))
+            out.write(
+                f"{dest / 'manifest.json'}: {added} models added, {updated} updated from "
+                f"{args.source}.\n"
+            )
             return 0
         sources = list(iter_sources(args))
         if not sources:

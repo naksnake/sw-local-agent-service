@@ -84,7 +84,15 @@ def test_help_names_the_prod_options() -> None:
         ["bash", str(INSTALL_SH), "--help"], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0
-    for option in ("--profile", "--bundle DIR", "--registry HOST", "--dry-run", "--preflight-only"):
+    for option in (
+        "--profile",
+        "--bundle DIR",
+        "--registry HOST",
+        "--models DIR",
+        "--models-only",
+        "--dry-run",
+        "--preflight-only",
+    ):
         assert option in result.stdout
 
 

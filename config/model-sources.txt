@@ -1,39 +1,50 @@
-# Where the model weights come from, for scripts/fetch_models.py on a CONNECTED build host.
-# One line per model:  <path> <owner/repo> [revision]
+# Where the model weights come from, for scripts/fetch_models.py on a CONNECTED host.
+# One line per model:  <path> <owner/repo> [revision]   # a trailing comment is allowed
 #   <path> is the directory name under Models/ and the `path` field in Models/models.yaml
 #   (config/models.quickstart.yaml and config/models.prod.yaml name exactly these paths).
 #   [revision] pins a branch, tag or commit; every line below pins the commit that was
 #   current on 2026-09-16, so a fetch is reproducible and a silent upstream change is not
-#   picked up. Move a pin on purpose, then update vram_gib in the registry if the size moved.
-# The platform host never reads this file and never downloads anything (INV-1).
+#   picked up. Move a pin on purpose, then update vram_gib in the registry if the size moved;
+#   the fetch re-downloads every changed file, small ones included, and install.sh refuses to
+#   mix the old and the new revision under Models/.
+# The running platform never downloads anything (INV-1). The fetch normally runs on a separate
+# build host; running it on the platform host before it is installed is CLAUDE.md §15 open
+# decision (13).
 #
 # Sections name the install profile that needs the models below them (CLAUDE.md §3):
 #   `--profile quickstart` fetches the [quickstart] lines; `--profile prod` fetches both.
-# Sizes are what the script downloads after skipping redundant formats (ONNX, TensorFlow,
-# Flax, and PyTorch pickles when safetensors exist).
+# Sizes are what the script downloads after skipping the formats vLLM never reads (ONNX,
+# TensorFlow, Flax, Rust and Lightning files, and PyTorch pickles when safetensors exist).
 #
 #   scripts/fetch_models.py fetch --sources config/model-sources.txt --profile quickstart --dry-run --dest ./models
 #   scripts/fetch_models.py fetch --sources config/model-sources.txt --profile quickstart --dest ./models
 #   ./install.sh --models ./models          # on the platform host: verify, place under Models/, write models.yaml
+#   ./install.sh --models ./models --models-only   # the same before the bundle exists
 
 [quickstart]
 # triage (and a voter): DeepSeek-V4 Flash, FP8 as published, 149 GiB, MIT
 deepseek-v4-flash      deepseek-ai/DeepSeek-V4-Flash      60d8d70770c6776ff598c94bb586a859a38244f1
-# coder and planner (and a voter): Qwen3.8-27B in the FP8 serving build, 29 GiB, Apache-2.0
+# coder and planner (and a voter): Qwen3.8-27B in the FP8 serving build, 29 GiB, Apache-2.0.
+# A vision-language checkpoint (Qwen3_5ForConditionalGeneration) served text-only.
 qwen3.8-27b-fp8        Qwen/Qwen3.8-27B-FP8               017b9c7af6b5689d5dd426a76e0bc077eb5ca20a
 # embed: BGE-M3, 2.1 GiB (ships PyTorch weights only, so the .bin is kept), MIT
 bge-m3                 BAAI/bge-m3                        5617a9f61b028005a4858fdac845db406aefb181
 # rerank: BGE Reranker v2 M3, 2.1 GiB, Apache-2.0
 bge-reranker-v2-m3     BAAI/bge-reranker-v2-m3            953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e
+# Quickstart has two voters from two families (CLAUDE.md §15, decision 12). To add the third
+# family here as well, copy the minimax-m2.7 line up and add it to models.yaml: about 215 GiB
+# more and a fourth GPU.
 
 [prod]
-# planner (and a voter): DeepSeek-V4 Pro, FP8 as published, 805 GiB, MIT; tensor parallel over GPUs 0-3
+# planner: DeepSeek-V4 Pro, FP8 as published, 805 GiB, MIT; tensor parallel over GPUs 0-3
 deepseek-v4-pro        deepseek-ai/DeepSeek-V4-Pro        b5968e9190ef611bbf34a7229255be88a0e937c1
+# the third voter family: MiniMax-M2.7, FP8 as published, 214 GiB, one GPU; licence "other"
+# (the MiniMax model licence on the hub; read it before use)
+minimax-m2.7           MiniMaxAI/MiniMax-M2.7             d494266a4affc0d2995ba1fa35c8481cbd84294b
 # the BF16 reference copy of the coder, kept for eval regression only (CLAUDE.md §7), 52 GiB
 qwen3.8-27b-bf16       Qwen/Qwen3.8-27B                   1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
 
-# A third model family for the voters (CLAUDE.md §5.3) is not in the default layout: the
-# candidates checked on 2026-09-16 do not fit the one free GPU. GLM-5.3 Flash is 306 GiB of
-# FP8 (two GPUs, tensor parallel 2); Kimi K2.6 is 554 GiB and not FP8. To add one, put a
-# line here, add the model to models.yaml with roles [planner] and to voters, and free the GPUs.
-# glm-5.3-flash        zai-org/GLM-5.3-Flash              eb9eb208eb0d
+# Other third-family candidates checked on 2026-09-16 and why they are not the default:
+# GLM-5.3 Flash is 306 GiB of FP8 (two GPUs, tensor parallel 2); Kimi K2.6 is 554 GiB and not
+# FP8; gpt-oss-120b is MXFP4, which the registry does not admit without an ADR.
+# glm-5.3-flash        zai-org/GLM-5.3-Flash              eb9eb208eb0d988989d07a6a12d0fdeb5f52574a

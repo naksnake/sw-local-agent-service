@@ -4,9 +4,10 @@
 > this file first and treats it as authoritative. Where this file conflicts with a
 > request, surface the conflict; never resolve it silently.
 >
-> **Version 3.1 · 2026-09-10** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
+> **Version 3.2 · 2026-09-16** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
 > (phases, done criteria) and `docs/PROMPTS.md` (copy-paste session prompts).
-> 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14).
+> 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14). 3.2 records open decisions
+> 12–14 (model weights and voters) raised by the shipped model registries.
 
 ---
 
@@ -809,6 +810,17 @@ PDU vs relay; (4) BMC fleet homogeneity → HAL quirk scope; (5) `.xlsx` suite s
 (8) MES integration: file drop, REST, or database; (9) Chinese default zh-Hant confirmed?
 (10) Git host allowlist — internal GitLab/Gitea only, or is `github.com` an approved INV-1
 exception? (11) Default remote auth — deploy keys / project tokens recommended over personal
-credentials; confirm the policy.
+credentials; confirm the policy. (12) Quickstart voters — `config/models.quickstart.yaml`
+ships two voters from two families (DeepSeek-V4 Flash, Qwen3.8), so with the router's fixed
+panel of 3 (§5.3) every quickstart cross-check is reported as a weaker check and unanimous
+decisions cannot be met; accept that for quickstart, add a third family (about 215 GiB more
+on a fourth GPU, as `models.prod.yaml` does with MiniMax-M2.7), or make the panel size a
+per-profile rule. (13) Fetching weights on the platform host — INV-1 covers the running
+platform; the runbooks assume a separate connected build host, and `scripts/fetch_models.py`
+also works on the platform host before it is installed. Decide whether that preparation
+window is allowed. (14) Voter instances — the model manager starts one vLLM instance per
+role and one per voter; a voter that is the same model as a role gets a second instance. The
+shipped registries are laid out for that; letting a voter share the role's instance would
+free GPUs and needs an ADR (boundary of `services/model-manager`).
 
 *End of CLAUDE.md*

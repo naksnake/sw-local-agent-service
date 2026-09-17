@@ -59,3 +59,24 @@ def test_slas_doctor_imports_with_site_packages_disabled(tmp_path: Path) -> None
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "SW Local Agent Service"
+
+
+def test_fetch_models_runs_with_site_packages_disabled(tmp_path: Path) -> None:
+    """install.sh runs `scripts/fetch_models.py verify` on the bare host as well."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            str(REPO_ROOT / "scripts" / "fetch_models.py"),
+            "verify",
+            "--dest",
+            str(tmp_path),
+        ],
+        env={"PATH": os.environ.get("PATH", "")},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "has a SHA256SUMS file" in result.stdout
