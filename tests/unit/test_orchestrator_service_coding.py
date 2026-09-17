@@ -306,7 +306,18 @@ class FakeGateway:
             raise self.fail
         edits = self.edits.pop(0) if self.edits else EditSet()
         value = model_type.model_validate(edits.model_dump())
-        return StructuredResult(value=value, instance=f"vllm-{role}", attempts=1, tokens=12)
+        return StructuredResult(
+            value=value,
+            instance=f"vllm-{role}",
+            attempts=1,
+            tokens=12,
+            response=CompletionResponse(
+                instance=f"vllm-{role}",
+                text=edits.model_dump_json(),
+                prompt_tokens=8,
+                completion_tokens=4,
+            ),
+        )
 
     def cross_check(self, decision: str, evidence: list[Message]) -> ConsensusVerdict:
         self.cross_checks.append((decision, evidence))
@@ -540,14 +551,20 @@ def test_a_task_runs_over_http_to_done_with_zip_votes_and_feed(tmp_path: Path) -
         assert archive.namelist() == ["fan_ctl.py"]
     assert ticket.sop is not None and Path(ticket.sop.zh).exists()
 
-    # The sandbox manager saw the contract's session body and argv-only execs with stdin.
+    # The sandbox manager saw the contract's session body and argv-only execs (no stdin).
     (session_body,) = harness.sandbox_service.session_bodies
     assert session_body["user"] == "pat" and session_body["slug"] == "fan-controller"
     assert session_body["ticket_id"] == ticket_id
     assert session_body["languages"] == [{"language": "python", "version": "3.12.6"}]
     assert session_body["display_name"] == "Pat Lin"
-    commits = [e for e in harness.sandbox_service.execs if e["argv"][-1:] == ["--file=-"]]
-    assert commits and "Slas-Ticket: " + ticket_id in commits[0]["stdin"]
+    commits = [
+        e
+        for e in harness.sandbox_service.execs
+        if e["argv"][:1] == ["git"] and "commit" in e["argv"]
+    ]
+    assert commits and any("Slas-Ticket: " + ticket_id in part for part in commits[0]["argv"])
+    assert commits[0]["argv"].count("-m") >= 2, "subject, body and trailers as -m paragraphs"
+    assert all("stdin" not in e for e in commits)
     assert all(isinstance(e["argv"], list) for e in harness.sandbox_service.execs)
     assert harness.sandbox_service.runtime.created[0].runtime == "runsc"
 
@@ -680,9 +697,16 @@ def test_route_table_matches_the_contract(tmp_path: Path) -> None:
     app = create_app(
         Settings.from_env({"SLAS_DATA_ROOT": str(tmp_path)}), gateway=None, broker=None
     )
-    served = set(route_table(app)) - {("GET", "/health"), ("GET", "/metrics")}
+    served = {
+        (method, path)
+        for method, path in route_table(app)
+        if path.startswith(("/v1/coding", "/v1/skills", "/v1/tickets"))
+    }
     assert served == documented
     assert ("GET", "/health") in route_table(app)
+    # The Validation and Factory routers are wired too (their own tests hold them to §5).
+    assert ("POST", "/v1/validation/runs") in route_table(app)
+    assert ("POST", "/v1/factory/jobs") in route_table(app)
 
 
 def test_cli_parses_serve_and_prints_routes(

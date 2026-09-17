@@ -23,9 +23,11 @@ from fastapi import APIRouter, FastAPI, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.routing import APIRoute
 
+from slas_factory_executor.mes import FileDropMesAdapter, MesAdapter
+from slas_factory_executor.templates import load_templates
 from slas_http.app import METRICS_CONTENT_TYPE, TraceMiddleware, health_response
 from slas_http.client import ServiceClient
-from slas_http.errors import install_exception_handlers
+from slas_http.errors import ServiceError, install_exception_handlers
 from slas_kernel.clock import Clock, SystemClock
 from slas_kernel.kernel import Kernel
 from slas_kernel.skills import SkillGate
@@ -36,11 +38,15 @@ from slas_orchestrator.clients import HttpSandboxManager, TicketBoundExecutor
 from slas_orchestrator.coding.agent import CodingAgent
 from slas_orchestrator.coding.coder import GatewayCoder, GatewayLike
 from slas_orchestrator.coding.executor import Coder, CodingExecutor, EditRequest, EditSet
+from slas_orchestrator.factory.agent import FactoryAgent
 from slas_orchestrator.gateway import GatewayCrossChecker
-from slas_orchestrator.service import coding, skills, tickets
+from slas_orchestrator.remote import ExecutorReader, HttpExecutor
+from slas_orchestrator.service import coding, factory, skills, tickets, validation
 from slas_orchestrator.service.deps import Deps, KernelFactory, Probe
-from slas_orchestrator.service.runs import RunRegistry
+from slas_orchestrator.service.runs import RunRegistry, RunStartError
 from slas_orchestrator.service.settings import MANDATORY_CHECKS, SERVICE_NAME, Settings
+from slas_orchestrator.service.validation import WatchedTicketStore
+from slas_orchestrator.validation.agent import ValidationAgent
 from slas_sandbox_manager.toolchains import (
     Manifest,
     ToolchainError,
@@ -48,6 +54,7 @@ from slas_sandbox_manager.toolchains import (
     load_manifest,
 )
 from slas_schemas.errors import ThreePartMessage
+from slas_schemas.ticket import Ticket
 from slas_skills.state import SkillStateStore
 from slas_sop.glossary import Glossary, GlossaryError, default_glossary, glossary_from_mapping
 from slas_triage.routing import OwnerRouting, OwnerRoutingError, routing_from_mapping
@@ -201,6 +208,79 @@ def assemble(service: str, log: EventLog, routers: tuple[APIRouter, ...]) -> Fas
     return app
 
 
+class RegistryRunner:
+    """The Validation and Factory routers' `Runner` over the shared `RunRegistry`: the run
+    happens in a thread; a run that never creates its ticket becomes a three-part answer."""
+
+    def __init__(self, registry: RunRegistry) -> None:
+        self.registry = registry
+
+    def start(self, key: str, fn: Callable[[], Ticket]) -> None:
+        try:
+            self.registry.start(key, fn)
+        except RunStartError as exc:
+            raise ServiceError(exc.status, exc.message) from exc
+
+
+def wire_validation(
+    deps: Deps, *, executor: ServiceClient, store: WatchedTicketStore
+) -> validation.ValidationDeps:
+    """The Validation Agent: steps go to the validation executor over HTTP (contract §6);
+    the kernel writes through the same store the routes read."""
+    agent = ValidationAgent(plans_dir=deps.data_root / "Validation" / "Plans")
+    kernel = Kernel(
+        data_root=deps.data_root,
+        agent=agent,
+        executor=HttpExecutor(executor),
+        store=store,
+        clock=deps.clock,
+        glossary=deps.glossary,
+        plan_checker=GatewayCrossChecker(deps.gateway) if deps.gateway is not None else None,
+    )
+    return validation.ValidationDeps(
+        kernel=kernel,
+        agent=agent,
+        store=store,
+        executor_reader=ExecutorReader(executor),
+        runner=RegistryRunner(deps.registry),
+    )
+
+
+def wire_factory(
+    deps: Deps,
+    *,
+    executor: ServiceClient,
+    store: WatchedTicketStore,
+    mes: MesAdapter | None,
+) -> factory.FactoryDeps:
+    """The Factory Agent: templates from `Factory/Templates` (the executor renders the shipped
+    ones there), skills through the kernel's gate, steps to the factory executor over HTTP."""
+    library = skills.load_library(deps.settings.skills_library)
+    agent = FactoryAgent(
+        templates=load_templates(deps.data_root / "Factory" / "Templates"),
+        plans_dir=deps.data_root / "Factory" / "Plans",
+        now=deps.clock.now,
+    )
+    kernel = Kernel(
+        data_root=deps.data_root,
+        agent=agent,
+        executor=HttpExecutor(executor),
+        store=store,
+        clock=deps.clock,
+        glossary=deps.glossary,
+        plan_checker=GatewayCrossChecker(deps.gateway) if deps.gateway is not None else None,
+        skill_gate=SkillGate(library=library, state=deps.skill_state, clock=deps.clock),
+    )
+    return factory.FactoryDeps(
+        kernel=kernel,
+        agent=agent,
+        store=store,
+        executor_reader=ExecutorReader(executor),
+        runner=RegistryRunner(deps.registry),
+        mes=mes,
+    )
+
+
 def route_table(app: FastAPI) -> list[tuple[str, str]]:
     """Every (method, path) the app serves, sorted; a test compares it with the contract."""
     pairs: set[tuple[str, str]] = set()
@@ -226,6 +306,9 @@ def create_app(
     kernel_factory: KernelFactory | None = None,
     registry: RunRegistry | None = None,
     probe: Probe | None = None,
+    validation_executor: ServiceClient | None = None,
+    factory_executor: ServiceClient | None = None,
+    mes: MesAdapter | _Auto | None = AUTO,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     event_log = log if log is not None else EventLog(SERVICE_NAME, StreamSink())
@@ -270,11 +353,30 @@ def create_app(
         owner_routing=load_owner_routing(settings.owner_routing_file, event_log),
         probe=probe or http_probe(settings.probe_timeout_s),
     )
-    routers = (ops_router(deps), coding.router, skills.router, tickets.router)
-    # The Validation and Factory routers arrive with the executor slice; the integrator
-    # includes them here (each module exports `router` and a `build(...)` helper):
-    # from slas_orchestrator.service import factory, validation
-    # routers = (*routers, validation.router, factory.router)
+    # The Validation and Factory kernels write through the registry's tracking store, wrapped
+    # so a route can answer with the ticket id the moment the kernel saves it.
+    watched = WatchedTicketStore(registry.store)
+    validation_client = validation_executor or ServiceClient(
+        "validation-executor", settings.validation_executor_url
+    )
+    factory_client = factory_executor or ServiceClient(
+        "factory-executor", settings.factory_executor_url
+    )
+    mes_adapter: MesAdapter | None = (
+        FileDropMesAdapter(settings.data_root / "Factory" / "mes")
+        if isinstance(mes, _Auto)
+        else mes
+    )
+    routers = (
+        ops_router(deps),
+        coding.router,
+        skills.router,
+        tickets.router,
+        validation.router,
+        factory.router,
+    )
     app = assemble(SERVICE_NAME, event_log, routers)
     app.state.deps = deps
+    app.state.validation = wire_validation(deps, executor=validation_client, store=watched)
+    app.state.factory = wire_factory(deps, executor=factory_client, store=watched, mes=mes_adapter)
     return app

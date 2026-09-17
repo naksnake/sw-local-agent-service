@@ -24,12 +24,14 @@ Standard library only: settings are facts, never secrets (the sandbox manager ho
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, get_args
 
 from slas_sandbox_manager.manager import Profile
+from slas_sandbox_manager.runtime import DEFAULT_SANDBOX_USER
 from slas_sandbox_manager.spec import SECCOMP_PROFILE, Runtime, Tier
 from slas_sandbox_manager.toolchains import DEFAULT_REGISTRY, REGISTRY_ENV
 
@@ -64,6 +66,17 @@ def _int(env: Mapping[str, str], name: str, default: int, *, minimum: int = 1) -
     return value
 
 
+_USER = re.compile(r"^[0-9]{1,10}:[0-9]{1,10}$")
+
+
+def _user(raw: str) -> str:
+    if not raw:
+        return DEFAULT_SANDBOX_USER
+    if not _USER.match(raw):
+        raise SettingsError(f"SLAS_SANDBOX_USER is {raw!r}; it must be `uid:gid` as numbers.")
+    return raw
+
+
 @dataclass(frozen=True)
 class Settings:
     runtime_socket: str = DEFAULT_SOCKET
@@ -82,6 +95,9 @@ class Settings:
     memory: str = "4g"
     reap_interval_s: int = 60
     seccomp_profile: Path = Path(SECCOMP_PROFILE)
+    #: `uid:gid` the sandboxes run as; compose sets the platform's data owner so the sandbox
+    #: can write the project directory the services own (SLAS_SANDBOX_USER).
+    sandbox_user: str = DEFAULT_SANDBOX_USER
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -118,5 +134,6 @@ class Settings:
             cpus=cpus,
             memory=source.get("SLAS_SANDBOX_MEMORY", "").strip() or "4g",
             reap_interval_s=_int(source, "SLAS_REAP_INTERVAL_S", 60),
+            sandbox_user=_user(source.get("SLAS_SANDBOX_USER", "").strip()),
             seccomp_profile=Path(source.get("SLAS_SECCOMP_PROFILE", "").strip() or SECCOMP_PROFILE),
         )

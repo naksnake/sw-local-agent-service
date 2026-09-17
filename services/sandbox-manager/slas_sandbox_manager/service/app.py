@@ -91,6 +91,7 @@ class Services:
                 default_runtime=self.settings.default_runtime,
                 tier=self.settings.tier,
                 probe_images=self.probe_images(),
+                user=self.settings.sandbox_user,
             )
         except ContainerError as exc:
             self.isolation = None
@@ -180,6 +181,7 @@ def build_services(
             host_data_root=settings.host_data_root,
             container_data_root=settings.data_root,
             seccomp_profile=settings.seccomp_profile,
+            user=settings.sandbox_user,
         )
     )
     loaded = manifest if manifest is not None else load_manifest_file(settings.toolchain_manifest)

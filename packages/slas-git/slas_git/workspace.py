@@ -289,15 +289,23 @@ class GitWorkspace:
     def commit(
         self, subject: str, *, body: str = "", trailers: Mapping[str, str] | None = None
     ) -> str:
-        """Commit the index with the message on stdin; returns the new sha."""
+        """Commit the index; returns the new sha.
+
+        The message travels as `-m` paragraphs (argv, never a shell line): subject, body,
+        trailers. A sandbox exec over the runtime socket carries no stdin, so `--file=-` is
+        not an option there, and a commit message is not a secret (CLAUDE.md §11).
+        """
         if not subject.strip():
             raise ValueError("a commit needs a subject")
-        message = subject.strip()
+        paragraphs = [subject.strip()]
         if body.strip():
-            message += "\n\n" + body.strip()
+            paragraphs.append(body.strip())
         if trailers:
-            message += "\n\n" + "\n".join(f"{k}: {v}" for k, v in trailers.items())
-        self.git("commit", "--quiet", "--no-verify", "--file=-", stdin=message + "\n")
+            paragraphs.append("\n".join(f"{k}: {v}" for k, v in trailers.items()))
+        argv: list[str] = ["commit", "--quiet", "--no-verify"]
+        for paragraph in paragraphs:
+            argv += ["-m", paragraph]
+        self.git(*argv)
         sha = self.head_sha()
         if sha is None:  # pragma: no cover — commit succeeded, HEAD exists
             raise GitError(

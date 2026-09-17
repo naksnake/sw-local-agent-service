@@ -617,6 +617,7 @@ def test_settings_from_env_defaults_overrides_and_refusals() -> None:
             "SLAS_SANDBOX_MEMORY": "8g",
             "SLAS_REAP_INTERVAL_S": "30",
             "SLAS_SECCOMP_PROFILE": "/etc/slas/custom.json",
+            "SLAS_SANDBOX_USER": "1000:1000",
         }
     )
     assert custom.runtime_socket == "/var/run/docker.sock"

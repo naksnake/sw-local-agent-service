@@ -44,6 +44,7 @@ SANDBOX_LABEL_KEY: Final = "slas.kind"
 SANDBOX_LABEL_VALUE: Final = "sandbox"
 #: What keeps the container idle until `exec` gives it work; every image ships GNU sleep.
 IDLE_ARGV: Final[tuple[str, ...]] = ("sleep", "infinity")
+DEFAULT_SANDBOX_USER: Final = f"{SANDBOX_UID}:{SANDBOX_UID}"
 _SIZE = re.compile(r"^(\d+)([kmg])$")
 _UNITS: Final[dict[str, int]] = {"k": 1024, "m": 1024**2, "g": 1024**3}
 
@@ -227,12 +228,17 @@ class ContainerApiRuntime:
         container_data_root: str | Path = "/data",
         seccomp_profile: Path | None = Path(SECCOMP_PROFILE),
         stop_timeout_s: int = 5,
+        user: str = DEFAULT_SANDBOX_USER,
     ) -> None:
         self.api = api
         self.host_data_root = str(host_data_root)
         self.container_data_root = str(container_data_root)
         self.seccomp_profile = seccomp_profile
         self.stop_timeout_s = stop_timeout_s
+        #: `uid:gid` the sandbox runs as. The image's own user is 10001; compose sets the
+        #: platform's data owner (`${SLAS_UID}:${SLAS_GID}`) so the sandbox can write the
+        #: project directory the services own, and the services can read what it wrote.
+        self.user = user
 
     # --- translation --------------------------------------------------------------------
 
@@ -265,7 +271,7 @@ class ContainerApiRuntime:
             ],
             tmpfs={"/tmp": f"rw,nosuid,nodev,noexec,size={spec.resources.tmp_size}"},  # noqa: S108 — the container's private tmpfs
             runtime=spec.runtime,
-            user=f"{SANDBOX_UID}:{SANDBOX_UID}",
+            user=self.user,
             workdir=WORKSPACE,
             read_only_rootfs=True,
             cap_drop_all=True,
@@ -327,7 +333,7 @@ class ContainerApiRuntime:
             handle.name,
             list(argv),
             cwd=cwd,
-            user=f"{SANDBOX_UID}:{SANDBOX_UID}",
+            user=self.user,
             timeout_s=float(timeout_s),
         )
         return ExecResult(
@@ -364,7 +370,11 @@ class Isolation:
 
 
 def probe_runtime(
-    api: ContainerApiLike, runtime: Runtime, images: Sequence[str]
+    api: ContainerApiLike,
+    runtime: Runtime,
+    images: Sequence[str],
+    *,
+    user: str = DEFAULT_SANDBOX_USER,
 ) -> tuple[bool | None, str]:
     """Start and remove a throwaway container under `runtime`.
 
@@ -381,7 +391,7 @@ def probe_runtime(
         argv=["true"],
         network="none",
         runtime=runtime,
-        user=f"{SANDBOX_UID}:{SANDBOX_UID}",
+        user=user,
         read_only_rootfs=True,
         labels={SANDBOX_LABEL_KEY: "probe"},
         stop_timeout_s=1,
@@ -403,6 +413,7 @@ def detect_isolation(
     default_runtime: Runtime = "runsc",
     tier: str = "gvisor",
     probe_images: Sequence[str] = (),
+    user: str = DEFAULT_SANDBOX_USER,
 ) -> Isolation:
     """Ping the socket, then find out whether gVisor (and, for the kata tier, kata-fc) is there.
 
@@ -413,13 +424,13 @@ def detect_isolation(
     kata_available = False
     kata_detail = ""
     if tier == "kata":
-        kata_found, kata_detail = probe_runtime(api, "kata-fc", probe_images)
+        kata_found, kata_detail = probe_runtime(api, "kata-fc", probe_images, user=user)
         kata_available = bool(kata_found)
     if default_runtime != "runsc":
         found: bool | None = False
         detail = f"DEFAULT_RUNTIME is {default_runtime}, so gVisor was not probed"
     else:
-        found, detail = probe_runtime(api, "runsc", probe_images)
+        found, detail = probe_runtime(api, "runsc", probe_images, user=user)
     if found is None:
         # Keep the configured default; the first sandbox to open reports the truth.
         runsc_available = default_runtime == "runsc"
