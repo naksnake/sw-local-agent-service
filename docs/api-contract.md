@@ -15,8 +15,8 @@ the UI does not invent its own.
 
 Requests carry `traceparent` and `X-Slas-Trace-Id` (apps/webui/src/trace.ts,
 slas_observability.tracing); the api echoes `X-Slas-Trace-Id` on every response. Every
-state-changing request (POST, PATCH, DELETE) must carry `X-Requested-With: slas-webui`, or
-the api answers 403 in three parts.
+state-changing request (POST, PUT, PATCH, DELETE) must carry `X-Requested-With: slas-webui`,
+or the api answers 403 in three parts.
 
 ## Health and metrics (no auth, not under /api)
 
@@ -89,8 +89,8 @@ After every change and at api start, the three runtime keys are mirrored into
 
 ## The Home lists (any signed-in person)
 
-Round 1 answers empty lists; the shapes are the WebUI's own types so later rounds only fill
-them in.
+Round 1 answered empty lists; the shapes are the WebUI's own types. Since round 2 the same
+three routes proxy to the orchestrator and return the real lists (see "Round 2" below).
 
 | Route | Answer |
 |---|---|
@@ -116,3 +116,86 @@ At first start with an empty `people` table the api creates `admin@slas.local`
 `/run/secrets/admin-initial-password` and `must_change_password = true`, in one transaction
 guarded by the unique email index. The secret file is never rewritten; the first successful
 change records `bootstrap_consumed_at`.
+
+## Round 2 — the browser routes that proxy to the other services
+
+`docs/api-contract-round-2.md` §8 is the contract; this section is its route table on the
+api's side so `test_route_table_matches_the_contract` keeps the app and the documents in
+step. Each route sits behind a valid session past the one-time password (the
+`must_change_password` gate of round 1), the `X-Requested-With: slas-webui` rule for POST,
+PUT and DELETE, and the capability in the last column, which the api requires **before**
+forwarding (the downstream checks again where the action executes, CLAUDE.md §11).
+
+The api builds the identity headers of round-2 §1 (`X-Slas-User`, `X-Slas-Display-Name`,
+`X-Slas-Capabilities`) from the session and forwards method, path, query and JSON body
+unchanged with `slas_http.ServiceClient`. The downstream JSON comes back as the answer with
+200 (an answer without a body is a 204); a downstream three-part error keeps its status and
+its sentences, with the api's own `trace_id`. A service that does not answer is a 503 that
+names it and `slas logs <service>`, for example *"The agent-core-orchestrator did not
+answer."*. `POST /api/v1/git/projects/{slug}/terminal` is the one two-step route: the api
+asks the sandbox manager for the person's session on that slug and, when there is none,
+answers 409 *"No sandbox is open for {slug}."* / *"Start a coding task or open the project
+first."*
+
+Service URLs on the api (round-2 §1, set by compose): `SLAS_ORCHESTRATOR_URL`,
+`SLAS_GIT_BROKER_URL`, `SLAS_SANDBOX_MANAGER_URL`, `SLAS_FACTORY_EXECUTOR_URL`,
+`SLAS_MODEL_MANAGER_URL`; the defaults are the compose service names on port 8000.
+"signed in" in the last column means any signed-in person; two names mean either one.
+
+| Browser route | Forwards to | Capability |
+|---|---|---|
+| `POST /api/v1/coding/languages/detect` | orchestrator `/v1/coding/languages/detect` | signed in |
+| `POST /api/v1/coding/propose` | orchestrator `/v1/coding/propose` | signed in |
+| `POST /api/v1/coding/toolchains/resolve` | orchestrator `/v1/coding/toolchains/resolve` | signed in |
+| `GET /api/v1/coding/remotes` | orchestrator `/v1/coding/remotes` | signed in |
+| `GET /api/v1/coding/skills` | orchestrator `/v1/coding/skills` | signed in |
+| `POST /api/v1/coding/tasks` | orchestrator `/v1/coding/tasks` | signed in |
+| `GET /api/v1/coding/tasks` | orchestrator `/v1/coding/tasks` | signed in |
+| `GET /api/v1/coding/tasks/{ticket_id}` | orchestrator `/v1/coding/tasks/{ticket_id}` | signed in |
+| `POST /api/v1/validation/suites/parse` | orchestrator `/v1/validation/suites/parse` | signed in |
+| `GET /api/v1/validation/targets` | orchestrator `/v1/validation/targets` | signed in |
+| `POST /api/v1/validation/preview` | orchestrator `/v1/validation/preview` | signed in |
+| `POST /api/v1/validation/runs` | orchestrator `/v1/validation/runs` | signed in |
+| `POST /api/v1/validation/runs/{id}/approve` | orchestrator `/v1/validation/runs/{id}/approve` | `approve:destructive` |
+| `GET /api/v1/validation/runs` | orchestrator `/v1/validation/runs` | signed in |
+| `GET /api/v1/validation/runs/{id}` | orchestrator `/v1/validation/runs/{id}` | signed in |
+| `GET /api/v1/factory/mes-tickets` | orchestrator `/v1/factory/mes-tickets` | signed in |
+| `POST /api/v1/factory/labels/parse` | orchestrator `/v1/factory/labels/parse` | signed in |
+| `GET /api/v1/factory/stations` | orchestrator `/v1/factory/stations` | signed in |
+| `GET /api/v1/factory/templates` | orchestrator `/v1/factory/templates` | signed in |
+| `POST /api/v1/factory/jobs` | orchestrator `/v1/factory/jobs` | signed in |
+| `POST /api/v1/factory/jobs/{id}/decide` | orchestrator `/v1/factory/jobs/{id}/decide` | `factory:verdict` |
+| `POST /api/v1/factory/jobs/{id}/control` | orchestrator `/v1/factory/jobs/{id}/control` | `factory:control` |
+| `GET /api/v1/factory/jobs` | orchestrator `/v1/factory/jobs` | signed in |
+| `GET /api/v1/factory/jobs/{id}` | orchestrator `/v1/factory/jobs/{id}` | signed in |
+| `GET /api/v1/skills` | orchestrator `/v1/skills` | signed in |
+| `POST /api/v1/skills/import` | orchestrator `/v1/skills/import` | signed in |
+| `POST /api/v1/skills/{id}/enable` | orchestrator `/v1/skills/{id}/enable` | signed in |
+| `POST /api/v1/skills/{id}/disable` | orchestrator `/v1/skills/{id}/disable` | signed in |
+| `GET /api/v1/skills/{id}/export` | orchestrator `/v1/skills/{id}/export` | signed in |
+| `GET /api/v1/tickets` | orchestrator `/v1/tickets` | signed in |
+| `GET /api/v1/tickets/{id}` | orchestrator `/v1/tickets/{id}` | signed in |
+| `GET /api/v1/git/remotes` | git-broker `/v1/remotes` | signed in |
+| `POST /api/v1/git/remotes` | git-broker `/v1/remotes` | `git:remote_manage` |
+| `POST /api/v1/git/remotes/{id}/rotate` | git-broker `/v1/remotes/{id}/rotate` | `git:remote_manage` |
+| `DELETE /api/v1/git/remotes/{id}` | git-broker `/v1/remotes/{id}` | `git:remote_manage` |
+| `POST /api/v1/git/remotes/{id}/test` | git-broker `/v1/remotes/{id}/test` | `git:clone` or `git:pull` |
+| `GET /api/v1/git/hosts` | git-broker `/v1/hosts` | signed in |
+| `POST /api/v1/git/hosts` | git-broker `/v1/hosts` | `git:hosts_manage` |
+| `GET /api/v1/git/projects/{slug}/status` | git-broker `/v1/projects/{slug}/status` | signed in |
+| `POST /api/v1/git/projects/{slug}/commit` | git-broker `/v1/projects/{slug}/commit` | signed in |
+| `GET /api/v1/git/projects/{slug}/history` | git-broker `/v1/projects/{slug}/history` | signed in |
+| `POST /api/v1/git/projects/{slug}/push` | git-broker `/v1/projects/{slug}/push` | `git:push_branch` |
+| `POST /api/v1/git/projects/{slug}/pull` | git-broker `/v1/projects/{slug}/pull` | `git:pull` |
+| `POST /api/v1/git/projects/{slug}/bundle/export` | git-broker `/v1/projects/{slug}/bundle/export` | `git:bundle` |
+| `POST /api/v1/git/projects/{slug}/bundle/import` | git-broker `/v1/projects/{slug}/bundle/import` | `git:bundle` |
+| `GET /api/v1/stations` | factory-executor `/v1/station-records` | signed in |
+| `POST /api/v1/stations` | factory-executor `/v1/station-records` | `factory:stations_manage` |
+| `PUT /api/v1/stations/{name}/tuning` | factory-executor `/v1/station-records/{name}/tuning` | `factory:stations_manage` |
+| `POST /api/v1/stations/{name}/code` | factory-executor `/v1/station-records/{name}/code` | `factory:stations_manage` |
+| `POST /api/v1/stations/{name}/revoke` | factory-executor `/v1/station-records/{name}/revoke` | `factory:stations_manage` |
+| `DELETE /api/v1/stations/{name}` | factory-executor `/v1/station-records/{name}` | `factory:stations_manage` |
+| `GET /api/v1/models/status` | model-manager `/v1/status` | signed in |
+| `POST /api/v1/models/swap` | model-manager `/v1/swap` | `model:manage` |
+| `POST /api/v1/models/rollback` | model-manager `/v1/rollback` | `model:manage` |
+| `POST /api/v1/git/projects/{slug}/terminal` | sandbox-manager: `/v1/sessions` (query `user`, `slug`), then `/v1/sessions/{session}/terminal` | `git:terminal` |

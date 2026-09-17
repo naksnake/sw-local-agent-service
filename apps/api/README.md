@@ -1,10 +1,14 @@
 # apps/api
 
 FastAPI application: sign-in and sessions, people, runtime settings, the model registry
-view, health and metrics — round 1 of `docs/api-contract.md`. Later rounds add quota,
-leases, approvals and the Ticket Service. No hardware, no LLM (CLAUDE.md §11). Runtime
-stack and its dependency pins: ADR-0005; identity and the CLI transport: ADR-0007; settings
-in Postgres mirrored to `.env`: ADR-0008; roles: ADR-0006.
+view, health and metrics — round 1 of `docs/api-contract.md` — and, since round 2, the
+browser-facing routes that proxy to the orchestrator, git broker, sandbox manager, factory
+executor and model manager with the identity headers of `docs/api-contract-round-2.md` §1
+(`SLAS_ORCHESTRATOR_URL`, `SLAS_GIT_BROKER_URL`, `SLAS_SANDBOX_MANAGER_URL`,
+`SLAS_FACTORY_EXECUTOR_URL`, `SLAS_MODEL_MANAGER_URL`). Later rounds add quota, leases,
+approvals and the Ticket Service. No hardware, no LLM (CLAUDE.md §11). Runtime stack and its
+dependency pins: ADR-0005; identity and the CLI transport: ADR-0007; settings in Postgres
+mirrored to `.env`: ADR-0008; roles: ADR-0006; service HTTP surfaces: ADR-0015.
 
 Package `slas_api`, distribution `slas-api`, console script `slas-api`.
 
@@ -23,8 +27,10 @@ Package `slas_api`, distribution `slas-api`, console script `slas-api`.
 | `runtime_settings.py` | The three runtime keys, their validation sentences, the `.env` mirror under `# managed by Admin → Settings`, the seed-when-empty rule and the install-time facts. |
 | `registry_view.py` | `GET /api/v1/models`: `Models/models.yaml` parsed and validated on every request, `present` from `Models/<path>/SHA256SUMS`. |
 | `service.py` | People, sessions, audit rows and the bootstrap administrator — shared by the routes (`via=webui`) and the CLI (`SYSTEM`, `via=cli`). |
-| `routes.py` | The contract's routes; `signed_in` and `ready` (must-change gate) dependencies; cookie `__Host-slas_session`. |
-| `app.py` | `create_app(settings, engine=…, throttle=…, clock=…, log=…)`, the trace-id and `X-Requested-With` ASGI middlewares, `route_table()`. |
+| `routes.py` | The round-1 routes; `signed_in` and `ready` (must-change gate) dependencies; cookie `__Host-slas_session`. |
+| `proxy.py` | Round 2: `Identity` from the principal, `forward()` through `slas_http.ServiceClient` (a downstream three-part error keeps its status and sentences; an unreachable service is the 503 naming `slas logs <service>`), the JSON-body dependency. |
+| `routes_round2.py` | The explicit table of docs/api-contract-round-2.md §8 (`ROUTES`: method, browser path, service, downstream path, capability required before forwarding) and the two-step terminal route through the sandbox manager. |
+| `app.py` | `create_app(settings, engine=…, throttle=…, clock=…, log=…, services=…)`, the trace-id and `X-Requested-With` ASGI middlewares, `route_table()`; `build_services(…, downstream=…)` takes the `Downstream` clients (tests inject `httpx.MockTransport`-backed ones). |
 | `cli.py` | `slas-api migrate | bootstrap status | user add | user list | serve`. |
 
 ## Running it locally

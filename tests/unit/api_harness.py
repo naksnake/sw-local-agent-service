@@ -8,6 +8,7 @@ or a real Postgres; `slas_api.db.migrate()` runs the real Alembic scripts on SQL
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -22,9 +23,10 @@ from sqlalchemy.orm import Session
 from slas_api.app import build_services, create_app
 from slas_api.db import make_engine, migrate
 from slas_api.models import AuditRow
-from slas_api.service import Services, bootstrap
+from slas_api.service import Downstream, Services, bootstrap
 from slas_api.settings import ADMIN_INITIAL_PASSWORD_SECRET, Settings
 from slas_api.throttle import MemoryThrottle
+from slas_http import ServiceClient
 from slas_observability.events import EventLog, ListSink
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -160,12 +162,43 @@ class Harness:
         return self.settings.env_file
 
 
+#: The compose service name of every downstream, as `slas logs <service>` names it.
+DOWNSTREAM_SERVICES = {
+    "orchestrator": "agent-core-orchestrator",
+    "git_broker": "git-broker",
+    "sandbox_manager": "sandbox-manager",
+    "factory_executor": "factory-executor",
+    "model_manager": "model-manager",
+}
+
+
+def _unreachable(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("no downstream in this test", request=request)
+
+
+def fake_downstream(
+    handlers: dict[str, Callable[[httpx.Request], httpx.Response]] | None = None,
+) -> Downstream:
+    """A `Downstream` over `httpx.MockTransport`: one handler per field, unreachable otherwise."""
+    given = handlers or {}
+    clients = {
+        field_name: ServiceClient(
+            service,
+            f"http://{service}:8000",
+            transport=httpx.MockTransport(given.get(field_name, _unreachable)),
+        )
+        for field_name, service in DOWNSTREAM_SERVICES.items()
+    }
+    return Downstream(**clients)
+
+
 def make_harness(
     tmp_path: Path,
     *,
     initial_env: str | None = None,
     bootstrap_admin: bool = True,
     migrate_first: bool = True,
+    downstream: Downstream | None = None,
     **overrides: Any,
 ) -> Harness:
     settings = make_settings(tmp_path, **overrides)
@@ -180,7 +213,14 @@ def make_harness(
     engine = make_engine(settings.database_url())
     if migrate_first:
         migrate(engine)
-    services = build_services(settings, engine=engine, clock=clock, log=EventLog("api", sink))
+    services = build_services(
+        settings,
+        engine=engine,
+        clock=clock,
+        log=EventLog("api", sink),
+        # No unit test reaches a network: every downstream is a fake unless given.
+        downstream=downstream if downstream is not None else fake_downstream(),
+    )
     if bootstrap_admin:
         bootstrap(services)
     throttle = MemoryThrottle(clock)

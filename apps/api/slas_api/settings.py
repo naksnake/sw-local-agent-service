@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     slas_cookie_secure: bool = True
     slas_bind: str = "0.0.0.0:8000"  # the container's own interface
 
+    # The services the browser-facing routes proxy to (docs/api-contract-round-2.md §1).
+    # Defaults are the compose service names on the slas-backend network.
+    slas_orchestrator_url: str = "http://agent-core-orchestrator:8000"
+    slas_git_broker_url: str = "http://git-broker:8000"
+    slas_sandbox_manager_url: str = "http://sandbox-manager:8000"
+    slas_factory_executor_url: str = "http://factory-executor:8000"
+    slas_model_manager_url: str = "http://model-manager:8000"
+
     # --- derived ------------------------------------------------------------------------
 
     def auth_modes(self) -> list[str]:

@@ -319,11 +319,14 @@ def test_an_unexpected_exception_becomes_a_generic_500(
 
 def test_route_table_matches_the_contract() -> None:
     contract = (REPO_ROOT / "docs" / "api-contract.md").read_text(encoding="utf-8")
-    documented = set(re.findall(r"`(GET|POST|PATCH|DELETE) (/[^\s`]+)`", contract))
+    documented = set(re.findall(r"`(GET|POST|PUT|PATCH|DELETE) (/[^\s`]+)`", contract))
     assert documented, "the contract names its routes in backticks"
     assert set(route_table()) == documented
     assert route_table() == sorted(route_table())
     assert ("GET", "/health") in route_table() and ("GET", "/metrics") in route_table()
+    # round 2 joins the same table (docs/api-contract.md "Round 2")
+    assert ("POST", "/api/v1/git/projects/{slug}/terminal") in route_table()
+    assert ("PUT", "/api/v1/stations/{name}/tuning") in route_table()
 
 
 def test_health_is_200_with_both_checks(harness: Harness) -> None:
@@ -361,11 +364,15 @@ def test_metrics_is_prometheus_text(harness: Harness) -> None:
     assert "# TYPE slas_agent_turns_total counter" in response.text
 
 
-def test_home_lists_are_empty_in_round_one(harness: Harness) -> None:
+def test_home_lists_proxy_to_the_orchestrator_since_round_two(harness: Harness) -> None:
+    """Round 1 answered `[]`; now the lists come from the orchestrator. With no orchestrator
+    behind the harness the answer is the 503 that names it (tests/unit/test_api_round2.py
+    covers the forwarding itself)."""
     harness.sign_in_admin()
     for path in ("/api/v1/coding/tasks", "/api/v1/validation/runs", "/api/v1/factory/jobs"):
-        response = harness.client.get(path)
-        assert response.status_code == 200 and response.json() == [], path
+        body = assert_problem(harness.client.get(path), 503)
+        assert body["what_happened"] == "The agent-core-orchestrator did not answer.", path
+        assert "slas logs agent-core-orchestrator" in body["what_to_do"]
     assert_problem(harness.new_client().get("/api/v1/coding/tasks"), 401, reason="none")
 
 

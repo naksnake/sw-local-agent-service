@@ -4,7 +4,9 @@ it against SQLite, an in-memory throttle and a fixed clock.
 No docs, redoc or OpenAPI page is served (nothing may load a CDN, INV-1). Two small ASGI
 middlewares wrap everything: one binds the trace id and turns an unexpected exception into
 a three-part 500; the other refuses a state-changing request that does not carry
-`X-Requested-With: slas-webui`.
+`X-Requested-With: slas-webui`. Round 1's routes live in `routes.py`; the round-2 routes
+that proxy to the other services (`routes_round2.py`) join the same app and the same
+middlewares.
 """
 
 from __future__ import annotations
@@ -18,13 +20,13 @@ from fastapi.routing import APIRoute
 from sqlalchemy import Engine
 from starlette.datastructures import MutableHeaders
 
-from slas_api import routes
+from slas_api import routes, routes_round2
 from slas_api.authz import RolesLoader
 from slas_api.db import make_engine, session_scope
 from slas_api.errors import UNEXPECTED, install_exception_handlers, problem_response
 from slas_api.runtime_settings import mirror_to_env, read_runtime, seed_if_empty
 from slas_api.security import Passwords
-from slas_api.service import Services, utc_now
+from slas_api.service import Downstream, Services, utc_now
 from slas_api.settings import Settings
 from slas_api.throttle import RedisThrottle, Throttle
 from slas_observability import tracing
@@ -123,7 +125,7 @@ class RequestedWithMiddleware:
 def route_table() -> list[tuple[str, str]]:
     """Every (method, path) the app serves, sorted; a test compares it with the contract."""
     pairs: set[tuple[str, str]] = set()
-    for router in (routes.ops, routes.api):
+    for router in (routes.ops, routes.api, routes_round2.round2):
         for route in router.routes:
             if isinstance(route, APIRoute):
                 pairs.update((method, route.path) for method in route.methods or ())
@@ -136,6 +138,7 @@ def build_services(
     engine: Engine | None = None,
     clock: Callable[[], datetime] | None = None,
     log: EventLog | None = None,
+    downstream: Downstream | None = None,
 ) -> Services:
     event_log = log if log is not None else EventLog("api", StreamSink())
     return Services(
@@ -144,6 +147,7 @@ def build_services(
         roles=RolesLoader(settings.slas_roles_file, event_log),
         passwords=Passwords(settings.slas_argon2_profile),
         log=event_log,
+        downstream=downstream if downstream is not None else Downstream.from_settings(settings),
         clock=clock if clock is not None else utc_now,
         version=__version__,
     )
@@ -193,6 +197,7 @@ def create_app(
     app.state.throttle = limiter
     app.include_router(routes.ops)
     app.include_router(routes.api)
+    app.include_router(routes_round2.round2)
     install_exception_handlers(app)
     app.add_middleware(RequestedWithMiddleware)
     app.add_middleware(TraceMiddleware, log=svc.log)

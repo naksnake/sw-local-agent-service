@@ -43,6 +43,7 @@ from slas_api.security import (
 from slas_api.settings import ADMIN_INITIAL_PASSWORD_SECRET, Settings
 from slas_api.throttle import Throttle, ThrottleUnavailableError
 from slas_authz import SYSTEM, Capability, Principal, RoleSet
+from slas_http import ServiceClient
 from slas_observability import tracing
 from slas_observability.events import EventLog
 from slas_observability.tracing import current_trace_id
@@ -151,6 +152,44 @@ def utc_now() -> datetime:
 
 
 @dataclass
+class Downstream:
+    """One `ServiceClient` per service the browser-facing routes proxy to (contract §8).
+
+    The client's `service` is the compose service name, so an unreachable answer names the
+    right `slas logs <service>` command. Tests inject clients over `httpx.MockTransport`.
+    """
+
+    orchestrator: ServiceClient
+    git_broker: ServiceClient
+    sandbox_manager: ServiceClient
+    factory_executor: ServiceClient
+    model_manager: ServiceClient
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> Downstream:
+        return cls(
+            orchestrator=ServiceClient("agent-core-orchestrator", settings.slas_orchestrator_url),
+            git_broker=ServiceClient("git-broker", settings.slas_git_broker_url),
+            sandbox_manager=ServiceClient("sandbox-manager", settings.slas_sandbox_manager_url),
+            factory_executor=ServiceClient("factory-executor", settings.slas_factory_executor_url),
+            model_manager=ServiceClient("model-manager", settings.slas_model_manager_url),
+        )
+
+    def clients(self) -> tuple[ServiceClient, ...]:
+        return (
+            self.orchestrator,
+            self.git_broker,
+            self.sandbox_manager,
+            self.factory_executor,
+            self.model_manager,
+        )
+
+    def close(self) -> None:
+        for client in self.clients():
+            client.close()
+
+
+@dataclass
 class Services:
     """Everything a request or a CLI command needs, built once per process."""
 
@@ -159,6 +198,7 @@ class Services:
     roles: RolesLoader
     passwords: Passwords
     log: EventLog
+    downstream: Downstream
     clock: Clock = utc_now
     version: str = "0.0.1"
 

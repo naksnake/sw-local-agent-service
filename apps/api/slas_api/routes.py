@@ -367,24 +367,11 @@ def patch_settings(
     return {"runtime": runtime.model_dump(), "notice": notice_sentence(notice)}
 
 
-# --- models and the Home lists -------------------------------------------------------------
+# --- models ----------------------------------------------------------------------------------
+# The Home lists (`GET /coding/tasks`, `/validation/runs`, `/factory/jobs`) answered `[]` in
+# round 1; since round 2 they proxy to the orchestrator in `routes_round2.py`.
 
 
 @api.get("/models")
 def models(_auth: Ready, svc: ServicesDep) -> dict[str, Any]:
     return models_view(svc.settings)
-
-
-@api.get("/coding/tasks")
-def coding_tasks(_auth: Ready) -> list[dict[str, Any]]:
-    return []
-
-
-@api.get("/validation/runs")
-def validation_runs(_auth: Ready) -> list[dict[str, Any]]:
-    return []
-
-
-@api.get("/factory/jobs")
-def factory_jobs(_auth: Ready) -> list[dict[str, Any]]:
-    return []
