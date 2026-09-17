@@ -52,6 +52,7 @@ from slas_git.workspace import (
 from slas_git_broker.askpass import token_pipe
 from slas_git_broker.runner import ProcessRunner
 from slas_git_broker.sshkey import key_file
+from slas_observability.tracing import current_trace_id
 from slas_schemas.common import SlasModel
 from slas_schemas.errors import ThreePartMessage
 
@@ -127,6 +128,14 @@ class TokenGitExec:
             return self.runner.run(argv, cwd=cwd, env=merged, stdin=stdin, pass_fds=(read_fd,))
 
 
+def git_identity(subject: str, display_name: str) -> Identity:
+    """The commit identity of the acting person (CLAUDE.md §5.7 Method 2): the display name,
+    and the subject as the email when it already is one (the api forwards the person's
+    email), else `<subject>@slas.local`."""
+    email = subject if "@" in subject else f"{subject}@slas.local"
+    return Identity(name=display_name.strip() or subject, email=email)
+
+
 class ConnectionReport(SlasModel):
     ok: bool
     branches: list[str] = Field(default_factory=list)
@@ -194,7 +203,7 @@ class GitBroker:
         return GitWorkspace(
             exec_,
             cwd=str(path),
-            identity=Identity.for_user(principal.subject, principal.display_name),
+            identity=git_identity(principal.subject, principal.display_name),
         )
 
     def _remote_and_host(self, principal: Principal, remote_id: str) -> tuple[Remote, GitHost]:
@@ -254,6 +263,7 @@ class GitBroker:
                 result=result,
                 duration_s=max(0.0, time.monotonic() - started),
                 detail=redact(detail),
+                trace_id=current_trace_id(),
             )
         )
 
