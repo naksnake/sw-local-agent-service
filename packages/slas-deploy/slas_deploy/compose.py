@@ -58,7 +58,10 @@ SOLE_MEMBERS: Final[dict[str, str]] = {
 
 #: Services allowed to see the container runtime socket (§12: they start containers).
 RUNTIME_SOCKET_HOLDERS: Final[frozenset[str]] = frozenset({"model-manager", "sandbox-manager"})
-RUNTIME_SOCKET: Final = "/run/podman/podman.sock"
+#: The host side of that mount: rootless Podman by default; SLAS_RUNTIME_SOCKET in .env points
+#: at another socket (an empty value keeps the default). Inside the container the path is fixed.
+RUNTIME_SOCKET: Final = "${SLAS_RUNTIME_SOCKET:-/run/podman/podman.sock}"
+RUNTIME_SOCKET_IN_CONTAINER: Final = "/run/podman/podman.sock"
 
 #: Every file secret the installer generates (ADR-0003) plus the prod additions.
 QUICKSTART_SECRETS: Final[tuple[str, ...]] = (
@@ -158,6 +161,10 @@ def base_compose() -> dict[str, Any]:
         cap_add=["NET_BIND_SERVICE"],
         healthcheck=_health("slas-health", "https://127.0.0.1/healthz", "--insecure-local"),
         depends_on=["webui", "api"],
+        # Port 443 as ${SLAS_UID}:${SLAS_GID}: a non-root uid does not keep NET_BIND_SERVICE
+        # across Caddy's execve (no ambient capabilities), so the container's own port
+        # threshold is lowered instead. It affects this network namespace only.
+        extra={"sysctls": {"net.ipv4.ip_unprivileged_port_start": "0"}},
     )
     services["webui"] = _slas(
         "webui",
@@ -227,7 +234,10 @@ def base_compose() -> dict[str, Any]:
         "model-manager",
         networks=["slas-backend", "slas-inference"],
         environment={"SLAS_GPU_IDS": "${SLAS_GPU_IDS}", "VLLM_NO_USAGE_STATS": "1"},
-        volumes=[f"{RUNTIME_SOCKET}:{RUNTIME_SOCKET}", f"{DATA}/Models:/data/Models"],
+        volumes=[
+            f"{RUNTIME_SOCKET}:{RUNTIME_SOCKET_IN_CONTAINER}",
+            f"{DATA}/Models:/data/Models",
+        ],
     )
     services["vector-db"] = _service(
         "vector-db",
@@ -253,7 +263,10 @@ def base_compose() -> dict[str, Any]:
             "DEFAULT_NETWORK": "none",
             "PIDS_LIMIT": "512",
         },
-        volumes=[f"{RUNTIME_SOCKET}:{RUNTIME_SOCKET}", f"{DATA}/Coding:/data/Coding"],
+        volumes=[
+            f"{RUNTIME_SOCKET}:{RUNTIME_SOCKET_IN_CONTAINER}",
+            f"{DATA}/Coding:/data/Coding",
+        ],
     )
     services["git-broker"] = _slas(
         "git-broker",

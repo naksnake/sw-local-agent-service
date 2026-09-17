@@ -1,0 +1,84 @@
+#!/bin/sh
+# slas-edge — writes the Caddyfile from the environment, then runs Caddy in the foreground.
+#
+#   SLAS_TLS_MODE    self-signed (default): Caddy's own CA issues the certificate; its root is
+#                    /data/tls/caddy/pki/authorities/local/root.crt for browsers to trust.
+#                    provided: /data/tls/server.crt and /data/tls/server.key (cert.pem and
+#                    key.pem are accepted too).
+#   SLAS_TLS_NAMES   the names the certificate is for, comma-separated (install.sh writes
+#                    127.0.0.1,localhost,<hostname>); each becomes a Caddy site address.
+#   SLAS_AUTH_UPSTREAM  prod only: Keycloak behind /auth (http://keycloak:8080).
+#
+# Routes: /healthz answered here · /api/* → api:8000 · /grafana/* → grafana:3000 (the prefix
+# is kept: Grafana serves from the /grafana sub-path) · everything else → webui:8000.
+set -eu
+
+mode="${SLAS_TLS_MODE:-self-signed}"
+names="$(printf '%s' "${SLAS_TLS_NAMES:-localhost}" | tr ',' ' ')"
+caddyfile="${SLAS_CADDYFILE:-/tmp/Caddyfile}"
+
+three_part() {
+  echo "$1" >&2
+  echo "Likely cause: $2" >&2
+  echo "What to do: $3" >&2
+  exit 1
+}
+
+case "$mode" in
+  self-signed)
+    tls="tls internal" ;;
+  provided)
+    if [ -f /data/tls/server.crt ] && [ -f /data/tls/server.key ]; then
+      tls="tls /data/tls/server.crt /data/tls/server.key"
+    elif [ -f /data/tls/cert.pem ] && [ -f /data/tls/key.pem ]; then
+      tls="tls /data/tls/cert.pem /data/tls/key.pem"
+    else
+      three_part "The edge cannot start: SLAS_TLS_MODE is provided, but no certificate and key were found under /data/tls." \
+        "server.crt and server.key (or cert.pem and key.pem) were not copied into <data root>/tls." \
+        "Put them there, or set SLAS_TLS_MODE=self-signed in .env, then run docker compose up -d again."
+    fi ;;
+  *)
+    three_part "The edge cannot start: SLAS_TLS_MODE is \"$mode\"." \
+      "Only self-signed and provided are known." \
+      "Set SLAS_TLS_MODE to one of them in .env, then run docker compose up -d again." ;;
+esac
+
+auth_block=""
+if [ -n "${SLAS_AUTH_UPSTREAM:-}" ]; then
+  auth_block="
+	handle /auth/* {
+		reverse_proxy ${SLAS_AUTH_UPSTREAM}
+	}"
+fi
+
+cat > "$caddyfile" <<EOF
+{
+	admin off
+	skip_install_trust
+	auto_https disable_redirects
+	storage file_system {
+		root /data/tls/caddy
+	}
+}
+
+$names {
+	$tls
+	encode gzip
+	redir /grafana /grafana/ 308
+	handle /healthz {
+		respond 200
+	}
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+	handle /grafana/* {
+		reverse_proxy grafana:3000
+	}$auth_block
+	handle {
+		reverse_proxy webui:8000
+	}
+}
+EOF
+
+echo "edge: TLS $mode for $names; /api → api:8000, /grafana → grafana:3000, everything else → webui:8000."
+exec caddy run --config "$caddyfile" --adapter caddyfile

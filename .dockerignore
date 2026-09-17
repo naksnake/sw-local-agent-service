@@ -1,0 +1,26 @@
+# Build context for every first-party image is the repository root (images/README.md).
+# Keep it small: nothing here is COPYed by a Dockerfile.
+.git
+.venv
+.uv-cache
+.uv
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+.claude
+apps/webui/dist
+dist
+bundle
+models
+Models
+AI
+data
+Backups
+playwright-report
+test-results
+tests
+docs
+*.tgz
+*.tar

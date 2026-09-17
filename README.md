@@ -17,7 +17,22 @@ No cloud. No external APIs. Nothing leaves the perimeter.
 | Driving the build with prompts | [`docs/PROMPTS.md`](docs/PROMPTS.md) — copy-paste prompts per phase |
 | Reviewing the intended UI | [`docs/ui-demo/slas-ui-demo.html`](docs/ui-demo/slas-ui-demo.html) — open in a browser, no server needed. The WebUI follows it: shell, tokens and Home in `apps/webui`, copy in `docs/ui/home.md` |
 
-## Quick start (target state, Phase 1)
+## Quick start
+
+On a connected Ubuntu host with Docker and Compose (ADR-0014; quickstart profile):
+
+```bash
+git clone <this repository> && cd sw-local-agent-service
+./install.sh --build --fetch-models   # preflight → weights → build and pull images → .env → up → sign-in URL
+```
+
+The images are built from this checkout with every base pinned by digest and every
+dependency from the lock files; the filled image lock lands under `/AI/Agent`. What runs
+today: sign-in, Home, Admin → People, Admin → Settings, Models; the other services answer
+`/health` and `/metrics` only until their rounds land. `--dry-run` first prints what would
+be built, pulled and written.
+
+The air-gapped path (target state, Phase 1), from a signed bundle built on a release host:
 
 ```bash
 tar xzf slas-bundle-<version>.tar.gz

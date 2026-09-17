@@ -25,11 +25,17 @@ bundle="$stage/slas-bundle-$version"
 mkdir -p "$bundle/images" "$bundle/tools"
 
 echo "Building first-party images offline."
-for dir in "$repo"/images/*/; do
-  name="$(basename "$dir")"
-  [[ -f "$dir/Dockerfile" ]] || continue
-  docker build --network none --quiet -t "$registry/slas/$name:$version" "$dir" >/dev/null
-done
+# Every first-party image the profile starts, from images/<name>/Dockerfile with the repository
+# root as the build context (images/README.md). The sandbox images are not in the lock; they
+# are built with the toolchain bundle beside them.
+while IFS= read -r name; do
+  [[ -f "$repo/images/$name/Dockerfile" ]] || { echo "images/$name/Dockerfile is missing; the lock names it."; exit 1; }
+  docker build --network none --quiet -f "$repo/images/$name/Dockerfile" -t "$registry/slas/$name:$version" "$repo" >/dev/null
+done < <(python3 -c '
+import json, sys
+for image in json.load(open(sys.argv[1]))["images"]:
+    if image["first_party"] and sys.argv[2] in image["profiles"]:
+        print(image["name"])' "$repo/compose/images.lock.json" "$profile")
 
 echo "Saving every image the $profile profile starts."
 python3 - "$repo/compose/images.lock.json" "$profile" "$registry" "$version" "$bundle" <<'PY'

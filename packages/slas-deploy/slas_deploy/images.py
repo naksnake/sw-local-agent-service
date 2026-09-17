@@ -54,7 +54,14 @@ class LockedImage(SlasModel):
 
     @property
     def pinned(self) -> bool:
-        return bool(self.digest and _DIGEST.match(self.digest)) and bool(self.image_id)
+        """Third-party: the upstream manifest digest and the image ID. First-party: the image
+        ID alone — a local build (`install.sh --build`, ADR-0014) has no registry digest, and
+        the ID is what `docker inspect` reports for the tag compose starts."""
+        if not (self.image_id and _DIGEST.match(self.image_id)):
+            return False
+        if self.first_party:
+            return True
+        return bool(self.digest and _DIGEST.match(self.digest))
 
     def compose_ref(self) -> str:
         return f"{REGISTRY}/{self.reference}"
@@ -241,7 +248,8 @@ def check_lock(lock: ImageLock, profile: Profile) -> list[LockedImage]:
                 "The lock has no digest or image ID for them yet; nothing has verified what "
                 "those tags point at.",
                 "On a connected build host run scripts/lock-images.sh, commit the lock and the "
-                "bundle it produces, then install from that bundle.",
+                "bundle it produces, then install from that bundle; or, on a connected "
+                "quickstart host, run ./install.sh --build (ADR-0014).",
             )
         )
     return wanted

@@ -88,6 +88,8 @@ services:
         condition: service_healthy
     ports:
       - "${SLAS_HTTPS_PORT}:443"
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
   webui:
     image: "${SLAS_REGISTRY}/slas/webui:${SLAS_VERSION}"
     restart: unless-stopped
@@ -323,7 +325,7 @@ services:
       retries: 8
       start_period: 30s
     volumes:
-      - /run/podman/podman.sock:/run/podman/podman.sock
+      - "${SLAS_RUNTIME_SOCKET:-/run/podman/podman.sock}:/run/podman/podman.sock"
       - "${SLAS_DATA_ROOT}/Models:/data/Models"
   vector-db:
     image: "${SLAS_REGISTRY}/qdrant/qdrant:v1.13.4"
@@ -428,7 +430,7 @@ services:
       retries: 8
       start_period: 30s
     volumes:
-      - /run/podman/podman.sock:/run/podman/podman.sock
+      - "${SLAS_RUNTIME_SOCKET:-/run/podman/podman.sock}:/run/podman/podman.sock"
       - "${SLAS_DATA_ROOT}/Coding:/data/Coding"
   git-broker:
     image: "${SLAS_REGISTRY}/slas/git-broker:${SLAS_VERSION}"
