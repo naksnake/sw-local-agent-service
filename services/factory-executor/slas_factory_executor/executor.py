@@ -16,7 +16,7 @@ from __future__ import annotations
 import base64
 import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -110,15 +110,19 @@ class FactoryExecutor:
         lease_hours: int = 8,
         batch_ttl_s: int = 300,
         sleep: Callable[[float], None] | None = None,
-        station_keys: Mapping[str, tuple[str, str]] | None = None,
+        station_keys: MutableMapping[str, tuple[str, str]] | None = None,
     ) -> None:
-        self.runners = dict(runners)
+        #: Kept by reference, not copied: the service passes live views of the station
+        #: registry, so a station enrolled after start is reachable without a restart (INV-9).
+        self.runners: Mapping[str, RunnerClient] = runners
         self.resolver = resolver
         self.signing_key_ref = signing_key_ref
         self.signing_key_id = signing_key_id
         #: Per-station (key_ref, key_id) from enrolment (P10); a station without one uses the
         #: line-wide key above. Refs resolve at dispatch; the key never lands in a plan or log.
-        self.station_keys = dict(station_keys or {})
+        self.station_keys: MutableMapping[str, tuple[str, str]] = (
+            station_keys if station_keys is not None else {}
+        )
         self.data_root = data_root
         self.clock = clock
         self.cross_checker = cross_checker
