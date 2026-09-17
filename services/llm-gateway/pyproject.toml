@@ -4,8 +4,8 @@ version = "0.0.1"
 description = "LLM gateway: role routing, redaction, guided_json enforcement, circuit breaker, Consensus Router"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-# The HTTP surface (FastAPI, httpx to vLLM) is added once those dependencies are approved
-# (ADR-0005). Everything here runs against the in-process fake vLLM.
+# The HTTP surface (FastAPI app, httpx to vLLM) comes through slas-http, the shared stack of
+# ADR-0015 (the dependency set of ADR-0005). Tests run against the in-process fake vLLM.
 dependencies = [
   "slas-observability",
   "slas-schemas",
@@ -13,6 +13,9 @@ dependencies = [
   "pyyaml==6.0.3",
   "types-PyYAML==6.0.12.20260906",
 ]
+
+[project.scripts]
+slas-gateway = "slas_llm_gateway.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9.0"]
