@@ -453,3 +453,16 @@ def test_cookie_secure_flag_is_a_setting_that_defaults_on(tmp_path: Path) -> Non
     assert response.status_code == 200
     assert "secure" not in response.headers["set-cookie"].lower()
     assert client.get("/api/v1/me").status_code == 200, "plain http works only when relaxed"
+
+
+def test_a_development_server_without_secure_uses_a_prefixless_cookie(tmp_path: Path) -> None:
+    """A `__Host-` cookie is dropped by browsers unless it is Secure, so plain-http development
+    gets `slas_session`; the production name keeps the prefix (ADR-0007)."""
+    dev = make_harness(tmp_path / "dev", slas_cookie_secure=False)
+    response = dev.sign_in(ADMIN_EMAIL, INITIAL_PASSWORD)
+    assert response.status_code == 200, response.text
+    cookie = response.headers["set-cookie"]
+    assert cookie.startswith("slas_session=") and "secure" not in cookie.lower()
+    assert dev.client.get("/api/v1/me").status_code == 200, "the browser sends it back"
+    assert routes.session_cookie_name(dev.services) == "slas_session"
+    assert routes.SESSION_COOKIE == "__Host-slas_session"

@@ -37,6 +37,15 @@ from slas_observability.metrics import REGISTRY
 from slas_schemas.errors import ThreePartMessage
 
 SESSION_COOKIE = "__Host-slas_session"
+#: Browsers accept a `__Host-` cookie only with the Secure flag, so a development server on
+#: plain http (SLAS_COOKIE_SECURE=false) uses the prefix-less name; production keeps the prefix.
+INSECURE_SESSION_COOKIE = "slas_session"
+
+
+def session_cookie_name(svc: Services) -> str:
+    return SESSION_COOKIE if svc.settings.slas_cookie_secure else INSECURE_SESSION_COOKIE
+
+
 METRICS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
 ops = APIRouter()
@@ -90,7 +99,7 @@ ThrottleDep = Annotated[Throttle, Depends(get_throttle)]
 
 
 def signed_in(request: Request, svc: ServicesDep, db: DbDep) -> Auth:
-    person, row = service.resolve_session(svc, db, request.cookies.get(SESSION_COOKIE))
+    person, row = service.resolve_session(svc, db, request.cookies.get(session_cookie_name(svc)))
     return Auth(person, row, principal_for(person, svc.roles.current()))
 
 
@@ -108,7 +117,7 @@ Ready = Annotated[Auth, Depends(ready)]
 
 def _set_session_cookie(response: Response, svc: Services, token: str, hours: int) -> None:
     response.set_cookie(
-        SESSION_COOKIE,
+        session_cookie_name(svc),
         token,
         max_age=hours * 3600,
         path="/",
@@ -120,7 +129,7 @@ def _set_session_cookie(response: Response, svc: Services, token: str, hours: in
 
 def _clear_session_cookie(response: Response, svc: Services) -> None:
     response.delete_cookie(
-        SESSION_COOKIE,
+        session_cookie_name(svc),
         path="/",
         secure=svc.settings.slas_cookie_secure,
         httponly=True,
@@ -214,7 +223,7 @@ def create_session(
 
 @api.delete("/session", status_code=204)
 def delete_session(request: Request, svc: ServicesDep, db: DbDep) -> Response:
-    service.sign_out(db, request.cookies.get(SESSION_COOKIE))
+    service.sign_out(db, request.cookies.get(session_cookie_name(svc)))
     response = Response(status_code=204)
     _clear_session_cookie(response, svc)
     return response
