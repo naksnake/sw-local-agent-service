@@ -18,7 +18,7 @@ The only component that starts inference containers (CLAUDE.md §7, §11).
 
 Environment (defaults): `SLAS_RUNTIME_SOCKET` (`/run/podman/podman.sock`), `SLAS_MODELS_FILE`
 (`/data/Models/models.yaml`), `SLAS_GATEWAY_URL` (`http://llm-gateway:8000`), `SLAS_GPU_IDS`
-(`0,1,2,3`), `SLAS_GPU_VRAM_GIB` (`180`), `SLAS_HOST_MODELS_DIR` (`${SLAS_DATA_ROOT}/Models`),
+(`0,1,2,3`), `SLAS_GPU_VRAM_GIB` (`270`), `SLAS_HOST_MODELS_DIR` (`${SLAS_DATA_ROOT}/Models`),
 `SLAS_INFERENCE_NETWORK` (`slas_slas-inference`), `SLAS_VLLM_IMAGE` (required; empty is a
 sentence on the Models page, not a start), `SLAS_VLLM_SHM` (`16g`), `SLAS_RECONCILE_INTERVAL_S`
 (`30`), `SLAS_MODEL_START_TIMEOUT_S` (`900`, how long a swap waits for the candidate),

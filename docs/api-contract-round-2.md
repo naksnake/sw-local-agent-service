@@ -124,7 +124,7 @@ and Prometheus), `ipc_host=True`, shm 16 GiB, `mounts=[host models dir → /data
 `0..n-1`, since the request already selects the devices), `restart="unless-stopped"`, labels
 `slas.kind=vllm`, `slas.instance=<name>`, `slas.model=<id>`. Embedding and rerank entries
 start vLLM with `--task embed` / `--task score` and no generate flags. Placement: greedy by
-`vram_gib` against `SLAS_GPU_VRAM_GIB` per GPU (default 180); an instance that does not fit
+`vram_gib` against `SLAS_GPU_VRAM_GIB` per GPU (default 270, an HGX B300 GPU); an instance that does not fit
 is reported `failed` with the fit sentence, never started. A crashed container's last 40 log
 lines go into the `sentence`.
 

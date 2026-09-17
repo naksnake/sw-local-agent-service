@@ -21,7 +21,7 @@ from slas_model_manager.fit import needed_gib
 from slas_model_manager.registry import Registry, instance_name, voter_instance_name
 from slas_schemas.common import SlasModel
 
-DEFAULT_GPU_VRAM_GIB = 180.0
+DEFAULT_GPU_VRAM_GIB = 270.0  # an HGX B300 GPU has 288 GB HBM3e; 18 GB headroom for the driver
 
 # TODO(SLAS-MODELS): vLLM's tensor parallel size must divide the model's attention heads;
 # the registry has no field for it yet (CLAUDE.md §15, decision 14), so the GPU count here is

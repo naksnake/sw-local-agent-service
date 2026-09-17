@@ -987,7 +987,7 @@ def test_settings_read_the_environment_with_the_contract_defaults() -> None:
     assert default.runtime_socket == "/run/podman/podman.sock"
     assert str(default.models_file) == "/data/Models/models.yaml"
     assert default.gateway_url == "http://llm-gateway:8000"
-    assert default.gpu_ids == (0, 1, 2, 3) and default.gpu_vram_gib == 180.0
+    assert default.gpu_ids == (0, 1, 2, 3) and default.gpu_vram_gib == 270.0
     assert default.host_models_dir == "/AI/Agent/Models"
     assert default.inference_network == "slas_slas-inference"
     assert default.vllm_image == "" and default.vllm_shm_bytes == 16 * 1024**3
