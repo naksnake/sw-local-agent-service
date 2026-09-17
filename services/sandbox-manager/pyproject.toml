@@ -4,7 +4,12 @@ version = "0.0.1"
 description = "Rootless Podman + gVisor sandboxes for the Coding Agent; no network, no credentials"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = ["slas-observability", "slas-schemas"]
+dependencies = [
+  "slas-observability",
+  "slas-schemas",
+  "slas-http",
+  "slas-container",
+]
 
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9.0"]
@@ -16,3 +21,5 @@ module-root = ""
 [tool.uv.sources]
 slas-observability = { workspace = true }
 slas-schemas = { workspace = true }
+slas-http = { workspace = true }
+slas-container = { workspace = true }

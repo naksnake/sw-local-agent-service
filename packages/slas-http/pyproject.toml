@@ -1,0 +1,28 @@
+[project]
+name = "slas-http"
+version = "0.0.1"
+description = "The HTTP surface every service shares: app factory, three-part errors, trace and identity headers, the inter-service client"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+# The dependency set of ADR-0005, extended to every service by ADR-0015, each pinned with ==
+# (INV-8). Nothing here reaches the network at install time: the client only talks to the
+# other containers of the stack over the backend network.
+dependencies = [
+  "fastapi==0.141.1",
+  "uvicorn==0.53.0",
+  "httpx==0.28.1",
+  "pydantic==2.13.5",
+  "slas-observability",
+  "slas-schemas",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.uv.sources]
+slas-observability = { workspace = true }
+slas-schemas = { workspace = true }

@@ -7,6 +7,7 @@ members = [
     "slas-api",
     "slas-authz",
     "slas-cli",
+    "slas-container",
     "slas-deploy",
     "slas-diff",
     "slas-eval",
@@ -14,6 +15,7 @@ members = [
     "slas-git",
     "slas-git-broker",
     "slas-hal",
+    "slas-http",
     "slas-kernel",
     "slas-llm-gateway",
     "slas-model-manager",
@@ -647,6 +649,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "redis" },
     { name = "slas-authz" },
+    { name = "slas-http" },
     { name = "slas-model-manager" },
     { name = "slas-observability" },
     { name = "slas-schemas" },
@@ -666,6 +669,7 @@ requires-dist = [
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "redis", specifier = "==8.1.0" },
     { name = "slas-authz", editable = "packages/slas-authz" },
+    { name = "slas-http", editable = "packages/slas-http" },
     { name = "slas-model-manager", editable = "services/model-manager" },
     { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
@@ -703,6 +707,23 @@ requires-dist = [
     { name = "slas-kernel", editable = "packages/slas-kernel" },
     { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-sandbox-manager", editable = "services/sandbox-manager" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+]
+
+[[package]]
+name = "slas-container"
+version = "0.0.1"
+source = { editable = "packages/slas-container" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "slas-schemas" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "pydantic", specifier = "==2.13.5" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
 ]
 
@@ -758,24 +779,30 @@ name = "slas-factory-executor"
 version = "0.0.1"
 source = { editable = "services/factory-executor" }
 dependencies = [
+    { name = "pyyaml" },
     { name = "slas-hal" },
+    { name = "slas-http" },
     { name = "slas-kernel" },
     { name = "slas-observability" },
     { name = "slas-schemas" },
     { name = "slas-skills" },
     { name = "slas-station-runner" },
     { name = "slas-triage" },
+    { name = "types-pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "pyyaml", specifier = "==6.0.3" },
     { name = "slas-hal", editable = "packages/slas-hal" },
+    { name = "slas-http", editable = "packages/slas-http" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
     { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
     { name = "slas-skills", editable = "packages/slas-skills" },
     { name = "slas-station-runner", editable = "services/station-runner" },
     { name = "slas-triage", editable = "packages/slas-triage" },
+    { name = "types-pyyaml", specifier = "==6.0.12.20260906" },
 ]
 
 [[package]]
@@ -794,16 +821,24 @@ name = "slas-git-broker"
 version = "0.0.1"
 source = { editable = "services/git-broker" }
 dependencies = [
+    { name = "pyyaml" },
     { name = "slas-authz" },
     { name = "slas-git" },
+    { name = "slas-http" },
+    { name = "slas-observability" },
     { name = "slas-schemas" },
+    { name = "types-pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "pyyaml", specifier = "==6.0.3" },
     { name = "slas-authz", editable = "packages/slas-authz" },
     { name = "slas-git", editable = "packages/slas-git" },
+    { name = "slas-http", editable = "packages/slas-http" },
+    { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "types-pyyaml", specifier = "==6.0.12.20260906" },
 ]
 
 [[package]]
@@ -816,6 +851,29 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "slas-schemas", editable = "packages/slas-schemas" }]
+
+[[package]]
+name = "slas-http"
+version = "0.0.1"
+source = { editable = "packages/slas-http" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "slas-observability" },
+    { name = "slas-schemas" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = "==0.141.1" },
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "pydantic", specifier = "==2.13.5" },
+    { name = "slas-observability", editable = "packages/slas-observability" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "uvicorn", specifier = "==0.53.0" },
+]
 
 [[package]]
 name = "slas-kernel"
@@ -845,14 +903,20 @@ name = "slas-llm-gateway"
 version = "0.0.1"
 source = { editable = "services/llm-gateway" }
 dependencies = [
+    { name = "pyyaml" },
+    { name = "slas-http" },
     { name = "slas-observability" },
     { name = "slas-schemas" },
+    { name = "types-pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "pyyaml", specifier = "==6.0.3" },
+    { name = "slas-http", editable = "packages/slas-http" },
     { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "types-pyyaml", specifier = "==6.0.12.20260906" },
 ]
 
 [[package]]
@@ -860,14 +924,24 @@ name = "slas-model-manager"
 version = "0.0.1"
 source = { editable = "services/model-manager" }
 dependencies = [
+    { name = "pyyaml" },
+    { name = "slas-container" },
+    { name = "slas-http" },
     { name = "slas-llm-gateway" },
+    { name = "slas-observability" },
     { name = "slas-schemas" },
+    { name = "types-pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "pyyaml", specifier = "==6.0.3" },
+    { name = "slas-container", editable = "packages/slas-container" },
+    { name = "slas-http", editable = "packages/slas-http" },
     { name = "slas-llm-gateway", editable = "services/llm-gateway" },
+    { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "types-pyyaml", specifier = "==6.0.12.20260906" },
 ]
 
 [[package]]
@@ -886,28 +960,38 @@ name = "slas-orchestrator"
 version = "0.0.1"
 source = { editable = "services/agent-core-orchestrator" }
 dependencies = [
+    { name = "pyyaml" },
+    { name = "slas-authz" },
     { name = "slas-factory-executor" },
     { name = "slas-git" },
     { name = "slas-hal" },
+    { name = "slas-http" },
     { name = "slas-kernel" },
     { name = "slas-llm-gateway" },
     { name = "slas-observability" },
     { name = "slas-sandbox-manager" },
     { name = "slas-schemas" },
+    { name = "slas-skills" },
     { name = "slas-validation-executor" },
+    { name = "types-pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "pyyaml", specifier = "==6.0.3" },
+    { name = "slas-authz", editable = "packages/slas-authz" },
     { name = "slas-factory-executor", editable = "services/factory-executor" },
     { name = "slas-git", editable = "packages/slas-git" },
     { name = "slas-hal", editable = "packages/slas-hal" },
+    { name = "slas-http", editable = "packages/slas-http" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
     { name = "slas-llm-gateway", editable = "services/llm-gateway" },
     { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-sandbox-manager", editable = "services/sandbox-manager" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "slas-skills", editable = "packages/slas-skills" },
     { name = "slas-validation-executor", editable = "services/validation-executor" },
+    { name = "types-pyyaml", specifier = "==6.0.12.20260906" },
 ]
 
 [[package]]
@@ -926,12 +1010,16 @@ name = "slas-sandbox-manager"
 version = "0.0.1"
 source = { editable = "services/sandbox-manager" }
 dependencies = [
+    { name = "slas-container" },
+    { name = "slas-http" },
     { name = "slas-observability" },
     { name = "slas-schemas" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "slas-container", editable = "packages/slas-container" },
+    { name = "slas-http", editable = "packages/slas-http" },
     { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
 ]
@@ -1048,22 +1136,28 @@ name = "slas-validation-executor"
 version = "0.0.1"
 source = { editable = "services/validation-executor" }
 dependencies = [
+    { name = "pyyaml" },
     { name = "slas-diff" },
     { name = "slas-hal" },
+    { name = "slas-http" },
     { name = "slas-kernel" },
     { name = "slas-observability" },
     { name = "slas-schemas" },
     { name = "slas-triage" },
+    { name = "types-pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "pyyaml", specifier = "==6.0.3" },
     { name = "slas-diff", editable = "packages/slas-diff" },
     { name = "slas-hal", editable = "packages/slas-hal" },
+    { name = "slas-http", editable = "packages/slas-http" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
     { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
     { name = "slas-triage", editable = "packages/slas-triage" },
+    { name = "types-pyyaml", specifier = "==6.0.12.20260906" },
 ]
 
 [[package]]
@@ -1074,6 +1168,7 @@ dependencies = [
     { name = "slas-api" },
     { name = "slas-authz" },
     { name = "slas-cli" },
+    { name = "slas-container" },
     { name = "slas-deploy" },
     { name = "slas-diff" },
     { name = "slas-eval" },
@@ -1081,6 +1176,7 @@ dependencies = [
     { name = "slas-git" },
     { name = "slas-git-broker" },
     { name = "slas-hal" },
+    { name = "slas-http" },
     { name = "slas-kernel" },
     { name = "slas-llm-gateway" },
     { name = "slas-model-manager" },
@@ -1112,6 +1208,7 @@ requires-dist = [
     { name = "slas-api", editable = "apps/api" },
     { name = "slas-authz", editable = "packages/slas-authz" },
     { name = "slas-cli", editable = "packages/slas-cli" },
+    { name = "slas-container", editable = "packages/slas-container" },
     { name = "slas-deploy", editable = "packages/slas-deploy" },
     { name = "slas-diff", editable = "packages/slas-diff" },
     { name = "slas-eval", editable = "packages/slas-eval" },
@@ -1119,6 +1216,7 @@ requires-dist = [
     { name = "slas-git", editable = "packages/slas-git" },
     { name = "slas-git-broker", editable = "services/git-broker" },
     { name = "slas-hal", editable = "packages/slas-hal" },
+    { name = "slas-http", editable = "packages/slas-http" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
     { name = "slas-llm-gateway", editable = "services/llm-gateway" },
     { name = "slas-model-manager", editable = "services/model-manager" },

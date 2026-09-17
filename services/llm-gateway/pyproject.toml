@@ -6,7 +6,13 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 # The HTTP surface (FastAPI, httpx to vLLM) is added once those dependencies are approved
 # (ADR-0005). Everything here runs against the in-process fake vLLM.
-dependencies = ["slas-observability", "slas-schemas"]
+dependencies = [
+  "slas-observability",
+  "slas-schemas",
+  "slas-http",
+  "pyyaml==6.0.3",
+  "types-PyYAML==6.0.12.20260906",
+]
 
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9.0"]
@@ -18,3 +24,4 @@ module-root = ""
 [tool.uv.sources]
 slas-observability = { workspace = true }
 slas-schemas = { workspace = true }
+slas-http = { workspace = true }

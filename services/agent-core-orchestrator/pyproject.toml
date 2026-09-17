@@ -14,6 +14,11 @@ dependencies = [
   "slas-sandbox-manager",
   "slas-schemas",
   "slas-validation-executor",
+  "slas-http",
+  "pyyaml==6.0.3",
+  "types-PyYAML==6.0.12.20260906",
+  "slas-skills",
+  "slas-authz",
 ]
 
 [build-system]
@@ -33,3 +38,6 @@ slas-llm-gateway = { workspace = true }
 slas-sandbox-manager = { workspace = true }
 slas-schemas = { workspace = true }
 slas-validation-executor = { workspace = true }
+slas-http = { workspace = true }
+slas-skills = { workspace = true }
+slas-authz = { workspace = true }
