@@ -13,7 +13,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "redis",
@@ -26,7 +27,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "minio",
@@ -39,7 +41,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "mc",
@@ -51,7 +54,8 @@
       "signed_by": null,
       "profiles": [
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "qdrant",
@@ -64,7 +68,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "prometheus",
@@ -77,7 +82,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "alertmanager",
@@ -90,7 +96,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "grafana",
@@ -103,7 +110,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "dcgm-exporter",
@@ -116,7 +124,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "node-exporter",
@@ -129,7 +138,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "postgres-exporter",
@@ -142,7 +152,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "vault",
@@ -154,7 +165,8 @@
       "signed_by": null,
       "profiles": [
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "keycloak",
@@ -166,7 +178,8 @@
       "signed_by": null,
       "profiles": [
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "loki",
@@ -178,7 +191,8 @@
       "signed_by": null,
       "profiles": [
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "tempo",
@@ -190,7 +204,22 @@
       "signed_by": null,
       "profiles": [
         "prod"
-      ]
+      ],
+      "started_by": "compose"
+    },
+    {
+      "name": "vllm",
+      "reference": "vllm/vllm-openai:v0.29.0-x86_64-cu129",
+      "upstream": "docker.io/vllm/vllm-openai:v0.29.0-x86_64-cu129",
+      "first_party": false,
+      "digest": "sha256:3e10e8189823e0f7ae4620c271bcdaaf64127ec7d0edc351591a508498b7684a",
+      "image_id": null,
+      "signed_by": null,
+      "profiles": [
+        "quickstart",
+        "prod"
+      ],
+      "started_by": "model-manager"
     },
     {
       "name": "edge",
@@ -203,7 +232,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "webui",
@@ -216,7 +246,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "api",
@@ -229,7 +260,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "agent-core-orchestrator",
@@ -242,7 +274,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "llm-gateway",
@@ -255,7 +288,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "model-manager",
@@ -268,7 +302,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "sandbox-manager",
@@ -281,7 +316,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "screen-worker",
@@ -294,7 +330,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "git-broker",
@@ -307,7 +344,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "validation-executor",
@@ -320,7 +358,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "factory-executor",
@@ -333,7 +372,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "local-search-api",
@@ -346,7 +386,8 @@
       "profiles": [
         "quickstart",
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     },
     {
       "name": "postgres-pgbackrest",
@@ -358,7 +399,8 @@
       "signed_by": "slas-release",
       "profiles": [
         "prod"
-      ]
+      ],
+      "started_by": "compose"
     }
   ]
 }

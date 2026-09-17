@@ -4,13 +4,19 @@
 > this file first and treats it as authoritative. Where this file conflicts with a
 > request, surface the conflict; never resolve it silently.
 >
-> **Version 3.3 · 2026-09-17** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
+> **Version 3.4 · 2026-09-17** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
 > (phases, done criteria) and `docs/PROMPTS.md` (copy-paste session prompts).
 > 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14). 3.2 records open decisions
 > 12–14 (model weights and voters) raised by the shipped model registries. 3.3 accepts the
 > `apps/api` stack (ADR-0005) and the build-from-source path for a connected quickstart host
 > (ADR-0014: `./install.sh --build` builds and pulls images and fetches weights on that host
-> before the stack starts; the running platform still downloads nothing, INV-1).
+> before the stack starts; the running platform still downloads nothing, INV-1). 3.4 accepts
+> ADR-0015 (round 2, `docs/api-contract-round-2.md`): every service gets an HTTP surface
+> through `slas_http` and its console script's `serve` as container command; containers are
+> driven over the runtime socket with the Engine API (`slas_container`), so the model manager
+> starts the vLLM instances and the sandbox manager the sandboxes on Docker or Podman alike;
+> `install.sh --build` also builds the sandbox images, pulls the pinned vLLM image and names
+> the socket that exists.
 
 ---
 
@@ -679,7 +685,13 @@ one starting inference containers) · `services/sandbox-manager` · `services/sc
 · `services/git-broker` (only component holding Git credentials or reaching Git hosts)
 · `services/validation-executor` and `services/factory-executor` (only ones touching
 targets, via `slas_hal` / station runner) · `packages/slas-kernel`, `slas-hal`,
-`slas-skills`, `slas-authz` (shared; authz runs where the action executes).
+`slas-skills`, `slas-authz` (shared; authz runs where the action executes). Every service
+exposes HTTP through `packages/slas-http` (ADR-0015): `create_service_app()` gives it
+`/health` with named checks, `/metrics`, the trace middleware and three-part errors; uvicorn
+on `0.0.0.0:8000`; callers use `ServiceClient` with the identity headers, never a token. The
+routes are in `docs/api-contract-round-2.md`; compose hands every caller the `SLAS_*_URL` of
+what it calls. The two socket holders create containers through `packages/slas-container`
+(the Engine API over `SLAS_RUNTIME_SOCKET`), never a CLI.
 
 **Tool-call fallback tiers:** 0 constrained decoding (`guided_json`, mandatory) → 1 retry
 ≤ 2 with the validation error as a tool result → 2 simplified schema + one-shot → 3
@@ -732,23 +744,37 @@ services:
                  environment: { <<: *airgap, SCHEMA_ENFORCE: strict, CONSENSUS_DEFAULT_VOTERS: "3", CONSENSUS_TOKEN_BUDGET_PCT: "5" } }
   model-manager: { <<: *common, image: registry.internal/slas/model-manager@sha256:…,
                  networks: [slas-backend, slas-inference],
-                 volumes: ["/run/podman/podman.sock:/run/podman/podman.sock", "${SLAS_DATA_ROOT}/Models:/data/Models"] }
-  # vllm-cluster: vllm-coder, vllm-planner, vllm-triage, vllm-embed, vllm-rerank are CREATED by model-manager
-  #               from Models/models.yaml (networks: [slas-inference], ipc: host, shm 16g, VLLM_NO_USAGE_STATS=1, GPU ids per role).
+                 environment: { SLAS_GATEWAY_URL: "http://llm-gateway:8000", SLAS_VLLM_IMAGE: "${SLAS_REGISTRY}/vllm/vllm-openai:v0.29.0-x86_64-cu129",
+                                SLAS_INFERENCE_NETWORK: slas_slas-inference, SLAS_HOST_MODELS_DIR: "${SLAS_DATA_ROOT}/Models", SLAS_GPU_VRAM_GIB: "180" },
+                 volumes: ["${SLAS_RUNTIME_SOCKET:-/run/podman/podman.sock}:/run/podman/podman.sock", "${SLAS_DATA_ROOT}/Models:/data/Models"] }
+  # vllm-cluster: vllm-coder, vllm-planner, vllm-triage, vllm-embed, vllm-rerank and one vllm-voter-<model-id> per voter are
+  #               CREATED by model-manager over the runtime socket (Engine API, ADR-0015) from Models/models.yaml and the vLLM
+  #               image the lock pins (`started_by: model-manager`; pulled by install.sh --build, saved in the bundle, never a
+  #               compose service): network slas_slas-inference, ipc: host, shm 16g, VLLM_NO_USAGE_STATS=1, GPUs per placement.
+  # Round 2 (ADR-0015): every first-party service serves HTTP on 0.0.0.0:8000 (SLAS_BIND) and finds the others through
+  #               SLAS_GATEWAY_URL · SLAS_MODEL_MANAGER_URL · SLAS_SANDBOX_MANAGER_URL · SLAS_ORCHESTRATOR_URL ·
+  #               SLAS_GIT_BROKER_URL · SLAS_VALIDATION_EXECUTOR_URL · SLAS_FACTORY_EXECUTOR_URL (http://<service>:8000),
+  #               set by compose on the services that read them (docs/api-contract-round-2.md §1).
   vector-db:   { <<: *common, image: registry.internal/qdrant/qdrant@sha256:…, networks: [slas-knowledge, slas-observability],
                  environment: { QDRANT__TELEMETRY_DISABLED: "true" } }
   local-search-api: { <<: *common, image: registry.internal/slas/local-search-api@sha256:…,  # §8.3 Option A by default
                  networks: [slas-knowledge, slas-inference], environment: { SEARCH_MODE: internal_corpus } }
   sandbox-manager: { <<: *common, image: registry.internal/slas/sandbox-manager@sha256:…, networks: [slas-backend],
-                 environment: { DEFAULT_RUNTIME: runsc, DEFAULT_NETWORK: none, PIDS_LIMIT: "512" },
-                 volumes: ["/run/podman/podman.sock:/run/podman/podman.sock", "${SLAS_DATA_ROOT}/Coding:/data/Coding"],
+                 environment: { DEFAULT_RUNTIME: runsc, DEFAULT_NETWORK: none, PIDS_LIMIT: "512", SLAS_HOST_DATA_ROOT: "${SLAS_DATA_ROOT}",
+                                SLAS_TOOLCHAIN_MANIFEST: /data/Toolchains/manifest.json, SLAS_SANDBOX_REGISTRY: "${SLAS_REGISTRY}" },
+                 volumes: ["${SLAS_RUNTIME_SOCKET:-/run/podman/podman.sock}:/run/podman/podman.sock", "${SLAS_DATA_ROOT}/Coding:/data/Coding",
+                           "${SLAS_DATA_ROOT}/Toolchains:/data/Toolchains:ro"],
                  security_opt: ["no-new-privileges:true"], cap_drop: [ALL] }
-                 # sandbox images ship `git` for local commits; sandboxes get NO remote route and NO credentials (INV-14)
+                 # sandbox images ship `git` for local commits; sandboxes get NO remote route and NO credentials (INV-14).
+                 # install.sh --build builds them from the sandbox manager's list (`python -m slas_sandbox_manager.images list`)
+                 # and writes Toolchains/manifest.json; they are not compose services and not in compose/images.lock.*.
+                 # SLAS_RUNTIME_SOCKET: Podman's socket by default; install.sh names Docker's when only that one exists.
   git-broker:  { <<: *common, image: registry.internal/slas/git-broker@sha256:…,           # §5.7 — the ONLY holder of Git credentials
                  networks: [slas-backend, slas-git],                                       # ONLY member of slas-git
                  environment: { <<: *airgap, GIT_HOSTS_ALLOWLIST: /etc/slas/git-hosts.yaml, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0",
                                 CRED_STORE: "postgres+aesgcm" },                           # prod override: CRED_STORE: vault
-                 volumes: ["${SLAS_DATA_ROOT}/Coding:/data/Coding", "./config/git-hosts.yaml:/etc/slas/git-hosts.yaml:ro"],
+                 volumes: ["${SLAS_DATA_ROOT}/Coding:/data/Coding", "${SLAS_DATA_ROOT}/.git-broker:/data/.git-broker",
+                           "./config/git-hosts.yaml:/etc/slas/git-hosts.yaml:rw"],        # rw: Admin → Git hosts renders it (round 2)
                  tmpfs: ["/run/slas-keys:mode=700,size=16m"],                              # per-operation SSH key files, shredded after use
                  security_opt: ["no-new-privileges:true"], cap_drop: [ALL] }
   validation-executor: { <<: *common, image: registry.internal/slas/validation-executor@sha256:…,   # + NVQual, MFT, fio, stress-ng, perftest

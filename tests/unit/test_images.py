@@ -78,8 +78,25 @@ def test_python_service_dockerfiles_are_rendered_from_one_template() -> None:
     by_name = {service.name: service for service in dockerfiles.PYTHON_SERVICES}
     assert by_name["api"].cmd == ("slas-api", "serve")
     assert by_name["api"].package == "slas-api"
-    assert by_name["llm-gateway"].cmd == ("python", "-m", "slas_observability.serve", "llm-gateway")
+    # Contract round 2 §1: each service's console script `serve` is its container command.
+    for name, script in {
+        "llm-gateway": "slas-gateway",
+        "model-manager": "slas-model-manager",
+        "sandbox-manager": "slas-sandbox-manager",
+        "agent-core-orchestrator": "slas-orchestrator",
+        "git-broker": "slas-git-broker",
+        "validation-executor": "slas-validation-executor",
+        "factory-executor": "slas-factory-executor",
+    }.items():
+        assert by_name[name].cmd == (script, "serve"), name
+        assert dockerfile(name).rstrip().endswith(f'CMD ["{script}", "serve"]'), name
+    # Services whose entrypoint has not landed keep the placeholder health runner.
+    assert by_name["local-search-api"].cmd == (
+        "python", "-m", "slas_observability.serve", "local-search-api",
+    )  # fmt: skip
     assert "git" in by_name["git-broker"].apt
+    assert "openssl" in by_name["factory-executor"].apt, "the station CA is driven with openssl"
+    assert "openssh-client openssl" in dockerfile("factory-executor")
     assert "COPY apps/api/ apps/api/" in dockerfile("api")
 
 
@@ -136,6 +153,12 @@ def test_base_digests_are_documented_and_the_context_is_kept_small() -> None:
     for tag, reference in dockerfiles.BASES.values():
         digest = reference.rsplit("@", 1)[1]
         assert tag in readme and digest in readme, f"images/README.md must list {tag} {digest}"
+    for script in ("slas-gateway serve", "slas-model-manager serve", "slas-orchestrator serve"):
+        assert script in readme, f"images/README.md must name the container command {script}"
+    vllm = next(image for image in DEFAULT_IMAGES if image.name == "vllm")
+    assert vllm.reference in readme and "model manager" in readme, (
+        "images/README.md must say the vLLM image is started by the model manager"
+    )
     ignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     for entry in (".git", ".venv", "**/node_modules", ".claude", "models"):
         assert entry in ignore, f".dockerignore must exclude {entry}"

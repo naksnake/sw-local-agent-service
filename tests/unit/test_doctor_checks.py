@@ -38,7 +38,7 @@ def bare_host() -> FakeHost:
 
 def test_healthy_host_passes_every_check() -> None:
     results = run_checks(FakeHost.healthy(), SETTINGS)
-    assert len(results) == len(ALL_CHECKS) == 16
+    assert len(results) == len(ALL_CHECKS) == 19
     assert [result.status for result in results] == ["ok"] * len(ALL_CHECKS)
 
 
@@ -194,6 +194,170 @@ def test_container_runtime_unknown_docker_version() -> None:
     result = checks.check_container_runtime(host, SETTINGS)
     assert result.status == "ok"
     assert result.summary == "Docker of an unknown version with Compose 2.29.7 is ready."
+
+
+# --- the runtime socket and what is registered behind it (ADR-0015) ------------------------
+
+
+def test_runtime_socket_served_by_docker_when_there_is_no_podman_socket() -> None:
+    host = FakeHost.healthy()
+    result = checks.check_runtime_socket(host, SETTINGS)
+    assert result.status == "ok"
+    assert result.summary == (
+        "Docker Engine 29.0.1 serves the container-runtime socket /var/run/docker.sock (no "
+        "Podman socket at /run/podman/podman.sock, so .env will name it); only model-manager "
+        "and sandbox-manager will see it."
+    )
+    assert ("/var/run/docker.sock", "/version") in host.http_calls
+    assert all(argv[0] != "docker" or argv[1] != "info" for argv in host.calls[-1:]), (
+        "the engine is identified over the socket with the standard library, not a CLI"
+    )
+
+
+def test_runtime_socket_served_by_podman_is_the_default() -> None:
+    host = FakeHost.healthy()
+    host.serve_podman()
+    result = checks.check_runtime_socket(host, SETTINGS)
+    assert result.status == "ok"
+    assert result.summary == (
+        "Podman 4.9.3 serves the container-runtime socket /run/podman/podman.sock; only "
+        "model-manager and sandbox-manager will see it."
+    )
+
+
+def test_runtime_socket_configured_in_the_environment_or_env_file_wins() -> None:
+    host = FakeHost.healthy()
+    host.serve_podman("/run/user/1000/podman/podman.sock")
+    host.environment["SLAS_RUNTIME_SOCKET"] = "/run/user/1000/podman/podman.sock"
+    result = checks.check_runtime_socket(host, SETTINGS)
+    assert result.status == "ok"
+    assert result.summary.startswith(
+        "Podman 4.9.3 serves the container-runtime socket /run/user/1000/podman/podman.sock;"
+    )
+    del host.environment["SLAS_RUNTIME_SOCKET"]
+    host.files["/AI/Agent/.env"] = (
+        'SLAS_PROFILE=quickstart\nSLAS_RUNTIME_SOCKET="/run/user/1000/podman/podman.sock"\n'
+    )
+    assert checks.check_runtime_socket(host, SETTINGS).status == "ok"
+    host.files["/AI/Agent/.env"] = "SLAS_RUNTIME_SOCKET=/elsewhere.sock\n"
+    missing = checks.check_runtime_socket(host, SETTINGS)
+    assert missing.status == "fail"
+    assert missing.summary == "No container-runtime socket was found at /elsewhere.sock."
+
+
+def test_runtime_socket_missing_or_silent() -> None:
+    host = FakeHost.healthy()
+    host.sockets.clear()
+    result = checks.check_runtime_socket(host, SETTINGS)
+    assert result.status == "fail"
+    assert result.summary == (
+        "No container-runtime socket was found at /run/podman/podman.sock or /var/run/docker.sock."
+    )
+    assert result.detail is not None
+    assert "podman.socket" in result.detail.what_to_do
+    assert "Docker Engine" in result.detail.what_to_do
+    host.sockets.add("/var/run/docker.sock")
+    host.http.clear()
+    silent = checks.check_runtime_socket(host, SETTINGS)
+    assert silent.status == "fail"
+    assert silent.summary == (
+        "The container-runtime socket /var/run/docker.sock exists but did not answer."
+    )
+    assert silent.detail is not None and "docker group" not in silent.summary
+    host.http[("/var/run/docker.sock", "/version")] = "not json"
+    assert checks.check_runtime_socket(host, SETTINGS).status == "fail"
+
+
+def test_gvisor_runtime_registered_or_not() -> None:
+    host = FakeHost.healthy()
+    ok = checks.check_gvisor_runtime(host, SETTINGS)
+    assert ok.status == "ok"
+    assert ok.summary == (
+        "gVisor is registered with Docker Engine as the runsc runtime; sandboxes will use it."
+    )
+    host.http[("/var/run/docker.sock", "/info")] = '{"Runtimes":{"runc":{"path":"runc"}}}'
+    warn = checks.check_gvisor_runtime(host, SETTINGS)
+    assert warn.status == "warn"
+    assert warn.summary == (
+        "runsc is not registered with Docker Engine as a container runtime; sandboxes will "
+        "use hardened runc."
+    )
+    assert warn.detail is not None and "runsc install" in warn.detail.what_to_do
+    assert checks.check_gvisor_runtime(host, DoctorSettings(profile="prod")).status == "fail"
+    host.sockets.clear()
+    skipped = checks.check_gvisor_runtime(host, SETTINGS)
+    assert skipped.status == "skip"
+    assert skipped.summary == "Skipped because no container runtime answered on its socket."
+
+
+def test_gvisor_runtime_when_podman_does_not_list_its_runtimes() -> None:
+    host = FakeHost.healthy()
+    host.serve_podman()
+    del host.http[("/run/podman/podman.sock", "/info")]
+    result = checks.check_gvisor_runtime(host, SETTINGS)
+    assert result.status == "ok"
+    assert result.summary == (
+        "Podman does not list its runtimes, but runsc is installed; sandboxes use it when "
+        "containers.conf names it."
+    )
+    del host.commands["runsc"]
+    assert checks.check_gvisor_runtime(host, SETTINGS).status == "warn"
+
+
+def test_nvidia_runtime_registered_with_docker() -> None:
+    host = FakeHost.healthy()
+    result = checks.check_nvidia_runtime(host, SETTINGS)
+    assert result.status == "ok"
+    assert result.summary == (
+        "The NVIDIA runtime is registered with Docker Engine (nvidia-container-toolkit "
+        "1.16.2); the model instances get their GPUs."
+    )
+    host.http[("/var/run/docker.sock", "/info")] = '{"Runtimes":{"runc":{"path":"runc"}}}'
+    unregistered = checks.check_nvidia_runtime(host, SETTINGS)
+    assert unregistered.status == "fail"
+    assert unregistered.summary == (
+        "The NVIDIA runtime is not registered with Docker Engine, although "
+        "nvidia-container-toolkit 1.16.2 is installed."
+    )
+    assert unregistered.detail is not None
+    assert "nvidia-ctk runtime configure --runtime=docker" in unregistered.detail.what_to_do
+    del host.commands["nvidia-ctk"]
+    absent = checks.check_nvidia_runtime(host, SETTINGS)
+    assert absent.status == "fail"
+    assert absent.summary == (
+        "Neither the NVIDIA runtime nor the NVIDIA Container Toolkit was found for Docker Engine."
+    )
+    assert absent.detail is not None
+    assert "apt install nvidia-container-toolkit" in absent.detail.what_to_do
+
+
+def test_nvidia_runtime_skips_without_a_gpu_or_an_engine() -> None:
+    host = FakeHost.healthy()
+    host.sockets.clear()
+    assert checks.check_nvidia_runtime(host, SETTINGS).summary == (
+        "Skipped because no container runtime answered on its socket."
+    )
+    del host.commands["nvidia-smi"]
+    assert checks.check_nvidia_runtime(host, SETTINGS).summary == (
+        "Skipped because no GPU driver was found."
+    )
+
+
+def test_nvidia_runtime_on_podman_uses_the_cdi_spec() -> None:
+    host = FakeHost.healthy()
+    host.serve_podman()
+    host.http[("/run/podman/podman.sock", "/info")] = '{"Runtimes":{"crun":{"path":"crun"}}}'
+    missing = checks.check_nvidia_runtime(host, SETTINGS)
+    assert missing.status == "fail"
+    assert missing.summary == "No NVIDIA CDI specification was found for Podman."
+    assert missing.detail is not None and "nvidia-ctk cdi generate" in missing.detail.what_to_do
+    host.existing_paths.add("/etc/cdi/nvidia.yaml")
+    present = checks.check_nvidia_runtime(host, SETTINGS)
+    assert present.status == "ok"
+    assert present.summary == (
+        "The NVIDIA CDI specification /etc/cdi/nvidia.yaml is present; Podman attaches GPUs "
+        "to the model instances through it."
+    )
 
 
 # --- sandboxes -------------------------------------------------------------------------------

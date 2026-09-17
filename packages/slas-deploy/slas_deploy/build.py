@@ -3,8 +3,10 @@ pinned tags, build the first-party images from this checkout, and write a filled
 under the data root. The lock in git stays unpinned; the one written here is what
 `check-lock` and `compose up --pull never` then use on this host.
 
-    third-party   docker pull <upstream> · record its manifest digest and image ID ·
-                  docker tag <upstream> <registry>/<reference>
+    third-party   docker pull <upstream> (by digest when the lock records one) · record its
+                  manifest digest and image ID · docker tag <upstream> <registry>/<reference>
+                  The vLLM image is pulled and tagged like the rest; compose never starts it,
+                  the model manager does (SLAS_VLLM_IMAGE).
     first-party   docker build -f images/<name>/Dockerfile -t <registry>/slas/<name>:<version> .
                   · record the image ID (there is no registry digest for a local build; the
                   lock counts a first-party image as pinned by its image ID)
@@ -109,24 +111,30 @@ def plan(
                 )
             )
         else:
+            pulled = image.pull_reference  # by digest when the lock knows it (INV-8)
+            note = (
+                " The model manager starts it per role and voter; compose never does."
+                if image.started_by == "model-manager"
+                else ""
+            )
             steps.append(
                 Step(
                     image,
                     reference,
                     (
-                        ("docker", "pull", "--quiet", image.upstream),
+                        ("docker", "pull", "--quiet", pulled),
                         (
                             "docker",
                             "image",
                             "inspect",
                             "--format",
                             "{{index .RepoDigests 0}}",
-                            image.upstream,
+                            pulled,
                         ),
-                        ("docker", "image", "inspect", "--format", "{{.Id}}", image.upstream),
-                        ("docker", "tag", image.upstream, reference),
+                        ("docker", "image", "inspect", "--format", "{{.Id}}", pulled),
+                        ("docker", "tag", pulled, reference),
                     ),
-                    f"Would pull {image.upstream} and tag it {reference}.",
+                    f"Would pull {pulled} and tag it {reference}.{note}",
                 )
             )
     return steps
@@ -135,7 +143,7 @@ def plan(
 def _fail(step: Step, verb: str, result: Completed) -> BuildError:
     detail = (result.stderr or result.stdout).strip().splitlines()
     tail = " ".join(detail[-3:]) if detail else "no output"
-    subject = step.reference if step.first_party else step.image.upstream
+    subject = step.reference if step.first_party else step.image.pull_reference
     return BuildError(
         ThreePartMessage(
             f"{verb} {subject} did not finish (docker exited {result.exit_code}: {tail}).",
@@ -202,8 +210,20 @@ def build_images(
             tag = runner.run(step.argv[3])
             if not tag.ok:
                 raise _fail(step, "Tagging", tag)
+            if image.digest and digest != image.digest:
+                raise BuildError(
+                    ThreePartMessage(
+                        f"{image.pull_reference} came back with digest {digest[:19]}…, not the "
+                        f"{image.digest[:19]}… the lock records.",
+                        "The registry served a different manifest than the one the lock pins.",
+                        "Check the registry mirror in use; the lock's digest changes only with "
+                        "a reviewed change to slas_deploy.images.",
+                    )
+                )
             filled.append(image.model_copy(update={"digest": digest, "image_id": image_id}))
-            out.write(f"Pulled {image.upstream} ({digest[:19]}…) and tagged it {step.reference}.\n")
+            out.write(
+                f"Pulled {image.pull_reference} ({digest[:19]}…) and tagged it {step.reference}.\n"
+            )
         out.flush()
     return lock.model_copy(update={"images": filled})
 

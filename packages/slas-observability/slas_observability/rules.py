@@ -26,6 +26,28 @@ SERVICES: Final[tuple[str, ...]] = (
 
 VLLM_ROLES: Final[tuple[str, ...]] = ("coder", "planner", "triage", "embed", "rerank")
 
+#: The voters of each profile's shipped registry (config/models.<profile>.yaml, rendered from
+#: slas_model_manager.registry.PROFILE_REGISTRIES). The model manager starts one instance per
+#: voter beside the role instances, named `vllm-voter-<model id>` (CLAUDE.md §15, decision
+#: 14), so Prometheus scrapes them too. A test keeps this list equal to the registries'.
+VLLM_VOTERS: Final[dict[str, tuple[str, ...]]] = {
+    "quickstart": ("deepseek-v4-flash", "qwen3.8-27b-fp8"),
+    "prod": ("deepseek-v4-flash", "qwen3.8-27b-fp8", "minimax-m2.7"),
+}
+
+
+def vllm_targets(profile: str = "quickstart") -> list[dict[str, Any]]:
+    """The `vllm` job's static targets: one per role instance, one per voter instance."""
+    targets: list[dict[str, Any]] = [
+        {"targets": [f"vllm-{role}:8000"], "labels": {"role": role}} for role in VLLM_ROLES
+    ]
+    targets += [
+        {"targets": [f"vllm-voter-{model_id}:8000"], "labels": {"role": "voter", "voter": model_id}}
+        for model_id in VLLM_VOTERS[profile]
+    ]
+    return targets
+
+
 #: Metric names that come from other exporters (vLLM, DCGM, node, Prometheus itself).
 EXTERNAL_METRICS: Final[frozenset[str]] = frozenset(
     {
@@ -52,8 +74,9 @@ EXTERNAL_METRICS: Final[frozenset[str]] = frozenset(
 )
 
 
-def prometheus_config() -> dict[str, Any]:
-    """`prometheus.yml`: the platform's services, the vLLM instances, DCGM, node, itself."""
+def prometheus_config(profile: str = "quickstart") -> dict[str, Any]:
+    """`prometheus.yml`: the platform's services, the vLLM instances (roles and the profile's
+    voters), DCGM, node, itself. The prod override mounts the prod rendering."""
     return {
         "global": {"scrape_interval": "15s", "evaluation_interval": "15s"},
         "rule_files": ["/etc/prometheus/rules.yml"],
@@ -70,10 +93,7 @@ def prometheus_config() -> dict[str, Any]:
             {
                 "job_name": "vllm",
                 "metrics_path": "/metrics",
-                "static_configs": [
-                    {"targets": [f"vllm-{role}:8000"], "labels": {"role": role}}
-                    for role in VLLM_ROLES
-                ],
+                "static_configs": vllm_targets(profile),
             },
             {"job_name": "dcgm", "static_configs": [{"targets": ["dcgm-exporter:9400"]}]},
             {"job_name": "node", "static_configs": [{"targets": ["node-exporter:9100"]}]},

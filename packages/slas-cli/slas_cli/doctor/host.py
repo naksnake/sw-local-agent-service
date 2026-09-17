@@ -8,10 +8,12 @@ changes the host.
 
 from __future__ import annotations
 
+import http.client
 import os
 import platform
 import shutil
 import socket
+import stat
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -49,6 +51,23 @@ class Host(Protocol):
     def list_dir(self, path: str) -> list[str]: ...
     def port_in_use(self, port: int) -> bool | None: ...
     def env(self, name: str) -> str | None: ...
+    def is_socket(self, path: str) -> bool: ...
+    def http_get_unix(self, socket_path: str, url_path: str) -> str | None: ...
+
+
+class _UnixSocketConnection(http.client.HTTPConnection):
+    """An HTTP/1.1 client over a unix socket: how the Docker Engine API and Podman's compat
+    API are reached without a daemon CLI (ADR-0015). Standard library only."""
+
+    def __init__(self, socket_path: str, timeout_s: float) -> None:
+        super().__init__("localhost", timeout=timeout_s)
+        self._socket_path = socket_path
+
+    def connect(self) -> None:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        sock.connect(self._socket_path)
+        self.sock = sock
 
 
 class RealHost:
@@ -140,3 +159,23 @@ class RealHost:
 
     def env(self, name: str) -> str | None:
         return os.environ.get(name)
+
+    def is_socket(self, path: str) -> bool:
+        try:
+            return stat.S_ISSOCK(os.stat(path).st_mode)
+        except OSError:
+            return False
+
+    def http_get_unix(self, socket_path: str, url_path: str) -> str | None:
+        """GET `url_path` over the unix socket; the body on a 2xx, None on anything else
+        (no socket, no permission, no answer, another status)."""
+        connection = _UnixSocketConnection(socket_path, timeout_s=5.0)
+        try:
+            connection.request("GET", url_path, headers={"Host": "localhost"})
+            response = connection.getresponse()
+            body = response.read().decode("utf-8", errors="replace")
+        except (OSError, http.client.HTTPException):
+            return None
+        finally:
+            connection.close()
+        return body if 200 <= response.status < 300 else None

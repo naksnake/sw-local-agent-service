@@ -9,9 +9,11 @@ rendered from one template so nine images cannot drift apart.
 
 Every base is pinned by digest; the human-readable tag sits next to it for the reader and is
 what `docker manifest inspect` was asked for. Python dependencies come from `uv.lock`
-(`uv sync --frozen`), so a build resolves nothing. Until a service's own entrypoint lands,
-its CMD is `python -m slas_observability.serve <name>`, which answers `/health` and
-`/metrics` on 8000 — what the compose healthcheck probes and Prometheus scrapes.
+(`uv sync --frozen`), so a build resolves nothing. Each service's CMD is its console script's
+`serve` (docs/api-contract-round-2.md §1, ADR-0015), which builds the `slas_http` app and
+serves `/health` and `/metrics` on 8000 — what the compose healthcheck probes and Prometheus
+scrapes. A service whose entrypoint has not landed (local-search-api) keeps the placeholder
+`python -m slas_observability.serve <name>`, which answers the same two routes.
 """
 
 from __future__ import annotations
@@ -84,39 +86,46 @@ PYTHON_SERVICES: Final[tuple[PythonService, ...]] = (
         "agent-core-orchestrator",
         "slas-orchestrator",
         "the orchestrator running the Agent Kernel (CLAUDE.md §5.1)",
+        command=("slas-orchestrator", "serve"),
     ),
     PythonService(
         "llm-gateway",
         "slas-llm-gateway",
         "the LLM gateway with the Consensus Router (CLAUDE.md §5.3)",
+        command=("slas-gateway", "serve"),
     ),
     PythonService(
         "model-manager",
         "slas-model-manager",
-        "the model manager: registry, fit, blue/green swaps (CLAUDE.md §7)",
+        "the model manager: registry, fit, blue/green swaps, the vllm-* containers (CLAUDE.md §7)",
+        command=("slas-model-manager", "serve"),
     ),
     PythonService(
         "sandbox-manager",
         "slas-sandbox-manager",
         "the sandbox manager for Zone A (CLAUDE.md §4.1)",
+        command=("slas-sandbox-manager", "serve"),
     ),
     PythonService(
         "git-broker",
         "slas-git-broker",
         "the Git broker, the only holder of Git credentials (CLAUDE.md §5.7, INV-14)",
         apt=("git", "openssh-client", "ca-certificates"),
+        command=("slas-git-broker", "serve"),
     ),
     PythonService(
         "validation-executor",
         "slas-validation-executor",
         "the validation executor, Zone B (CLAUDE.md §10.2)",
         apt=("openssh-client", "ipmitool"),
+        command=("slas-validation-executor", "serve"),
     ),
     PythonService(
         "factory-executor",
         "slas-factory-executor",
-        "the factory executor, Zone B' (CLAUDE.md §10.3)",
-        apt=("openssh-client",),
+        "the factory executor, Zone B' (CLAUDE.md §10.3); openssl drives the station CA",
+        apt=("openssh-client", "openssl"),
+        command=("slas-factory-executor", "serve"),
     ),
     PythonService(
         "local-search-api",

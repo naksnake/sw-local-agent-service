@@ -3,6 +3,8 @@
 # is what install.sh reads. Tags are immutable upstream releases. `digest` and `image_id`
 # are filled by scripts/lock-images.sh on a connected build host and signed with cosign;
 # while any image the chosen profile starts is null, install.sh refuses to start it.
+# `started_by: model-manager` marks the vLLM image: pulled, saved and locked like the
+# others, never a compose service — the model manager starts it per role and voter.
 version: 1
 default_registry: registry.internal
 images:
@@ -14,6 +16,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [quickstart, prod]
+    started_by: compose
   - name: redis
     reference: "library/redis:7.4.2"
     upstream: "docker.io/library/redis:7.4.2"
@@ -22,6 +25,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [quickstart, prod]
+    started_by: compose
   - name: minio
     reference: "minio/minio:RELEASE.2025-04-22T22-12-26Z"
     upstream: "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
@@ -30,6 +34,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [quickstart, prod]
+    started_by: compose
   - name: mc
     reference: "minio/mc:RELEASE.2025-04-16T18-13-26Z"
     upstream: "quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z"
@@ -38,6 +43,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [prod]
+    started_by: compose
   - name: qdrant
     reference: "qdrant/qdrant:v1.13.4"
     upstream: "docker.io/qdrant/qdrant:v1.13.4"
@@ -46,6 +52,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [quickstart, prod]
+    started_by: compose
   - name: prometheus
     reference: "prom/prometheus:v3.2.1"
     upstream: "quay.io/prometheus/prometheus:v3.2.1"
@@ -54,6 +61,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [quickstart, prod]
+    started_by: compose
   - name: alertmanager
     reference: "prom/alertmanager:v0.28.1"
     upstream: "quay.io/prometheus/alertmanager:v0.28.1"
@@ -62,6 +70,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [quickstart, prod]
+    started_by: compose
   - name: grafana
     reference: "grafana/grafana:11.5.2"
     upstream: "docker.io/grafana/grafana:11.5.2"
@@ -70,6 +79,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [quickstart, prod]
+    started_by: compose
   - name: dcgm-exporter
     reference: "nvidia/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
     upstream: "nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04"
@@ -78,6 +88,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [quickstart, prod]
+    started_by: compose
   - name: node-exporter
     reference: "prom/node-exporter:v1.9.0"
     upstream: "quay.io/prometheus/node-exporter:v1.9.0"
@@ -86,6 +97,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [quickstart, prod]
+    started_by: compose
   - name: postgres-exporter
     reference: "prometheuscommunity/postgres-exporter:v0.17.1"
     upstream: "quay.io/prometheuscommunity/postgres-exporter:v0.17.1"
@@ -94,6 +106,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [quickstart, prod]
+    started_by: compose
   - name: vault
     reference: "hashicorp/vault:1.18.5"
     upstream: "docker.io/hashicorp/vault:1.18.5"
@@ -102,6 +115,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [prod]
+    started_by: compose
   - name: keycloak
     reference: "keycloak/keycloak:26.1.4"
     upstream: "quay.io/keycloak/keycloak:26.1.4"
@@ -110,6 +124,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [prod]
+    started_by: compose
   - name: loki
     reference: "grafana/loki:3.4.2"
     upstream: "docker.io/grafana/loki:3.4.2"
@@ -118,6 +133,7 @@ images:
     image_id: null
     signed_by: null
     profiles: [prod]
+    started_by: compose
   - name: tempo
     reference: "grafana/tempo:2.7.1"
     upstream: "docker.io/grafana/tempo:2.7.1"
@@ -126,6 +142,16 @@ images:
     image_id: null
     signed_by: null
     profiles: [prod]
+    started_by: compose
+  - name: vllm
+    reference: "vllm/vllm-openai:v0.29.0-x86_64-cu129"
+    upstream: "docker.io/vllm/vllm-openai:v0.29.0-x86_64-cu129"
+    first_party: false
+    digest: "sha256:3e10e8189823e0f7ae4620c271bcdaaf64127ec7d0edc351591a508498b7684a"
+    image_id: null
+    signed_by: null
+    profiles: [quickstart, prod]
+    started_by: model-manager
   - name: edge
     reference: "slas/edge:${SLAS_VERSION}"
     upstream: "built offline from images/ and the vendored caches"
@@ -134,6 +160,7 @@ images:
     image_id: null
     signed_by: "slas-release"
     profiles: [quickstart, prod]
+    started_by: compose
   - name: webui
     reference: "slas/webui:${SLAS_VERSION}"
     upstream: "built offline from images/ and the vendored caches"
@@ -142,6 +169,7 @@ images:
     image_id: null
     signed_by: "slas-release"
     profiles: [quickstart, prod]
+    started_by: compose
   - name: api
     reference: "slas/api:${SLAS_VERSION}"
     upstream: "built offline from images/ and the vendored caches"
@@ -150,6 +178,7 @@ images:
     image_id: null
     signed_by: "slas-release"
     profiles: [quickstart, prod]
+    started_by: compose
   - name: agent-core-orchestrator
     reference: "slas/agent-core-orchestrator:${SLAS_VERSION}"
     upstream: "built offline from images/ and the vendored caches"
@@ -158,6 +187,7 @@ images:
     image_id: null
     signed_by: "slas-release"
     profiles: [quickstart, prod]
+    started_by: compose
   - name: llm-gateway
     reference: "slas/llm-gateway:${SLAS_VERSION}"
     upstream: "built offline from images/ and the vendored caches"
@@ -166,6 +196,7 @@ images:
     image_id: null
     signed_by: "slas-release"
     profiles: [quickstart, prod]
+    started_by: compose
   - name: model-manager
     reference: "slas/model-manager:${SLAS_VERSION}"
     upstream: "built offline from images/ and the vendored caches"
@@ -174,6 +205,7 @@ images:
     image_id: null
     signed_by: "slas-release"
     profiles: [quickstart, prod]
+    started_by: compose
   - name: sandbox-manager
     reference: "slas/sandbox-manager:${SLAS_VERSION}"
     upstream: "built offline from images/ and the vendored caches"
@@ -182,6 +214,7 @@ images:
     image_id: null
     signed_by: "slas-release"
     profiles: [quickstart, prod]
+    started_by: compose
   - name: screen-worker
     reference: "slas/screen-worker:${SLAS_VERSION}"
     upstream: "built offline from images/ and the vendored caches"
@@ -190,6 +223,7 @@ images:
     image_id: null
     signed_by: "slas-release"
     profiles: [quickstart, prod]
+    started_by: compose
   - name: git-broker
     reference: "slas/git-broker:${SLAS_VERSION}"
     upstream: "built offline from images/ and the vendored caches"
@@ -198,6 +232,7 @@ images:
     image_id: null
     signed_by: "slas-release"
     profiles: [quickstart, prod]
+    started_by: compose
   - name: validation-executor
     reference: "slas/validation-executor:${SLAS_VERSION}"
     upstream: "built offline from images/ and the vendored caches"
@@ -206,6 +241,7 @@ images:
     image_id: null
     signed_by: "slas-release"
     profiles: [quickstart, prod]
+    started_by: compose
   - name: factory-executor
     reference: "slas/factory-executor:${SLAS_VERSION}"
     upstream: "built offline from images/ and the vendored caches"
@@ -214,6 +250,7 @@ images:
     image_id: null
     signed_by: "slas-release"
     profiles: [quickstart, prod]
+    started_by: compose
   - name: local-search-api
     reference: "slas/local-search-api:${SLAS_VERSION}"
     upstream: "built offline from images/ and the vendored caches"
@@ -222,6 +259,7 @@ images:
     image_id: null
     signed_by: "slas-release"
     profiles: [quickstart, prod]
+    started_by: compose
   - name: postgres-pgbackrest
     reference: "slas/postgres-pgbackrest:${SLAS_VERSION}"
     upstream: "built offline from images/ and the vendored caches"
@@ -230,3 +268,4 @@ images:
     image_id: null
     signed_by: "slas-release"
     profiles: [prod]
+    started_by: compose

@@ -7,7 +7,8 @@ the Python, run `uv run python -m slas_observability.render`, and the test
 
 | Path | Mounted at | What it is |
 |---|---|---|
-| `prometheus/prometheus.yml` | prometheus `/etc/prometheus/prometheus.yml` | Scrape jobs: every platform service on `:8000/metrics`, the vLLM instances, DCGM, node and postgres exporters; the rule file; Alertmanager. |
+| `prometheus/prometheus.yml` | prometheus `/etc/prometheus/prometheus.yml` | Scrape jobs: every platform service on `:8000/metrics`, the vLLM instances (`vllm-<role>` and the quickstart registry's `vllm-voter-<model id>`, which the model manager starts on the inference network), DCGM, node and postgres exporters; the rule file; Alertmanager. |
+| `prometheus/prometheus.prod.yml` | prometheus, mounted by `compose/prod.override.yml` | The same file with the prod registry's voters (`config/models.prod.yaml` adds a third family). A test keeps both voter lists equal to the registries'. |
 | `prometheus/rules.yml` | prometheus `/etc/prometheus/rules.yml` | Recording rules and 19 alerts, each with `summary`, `likely_cause` and `what_to_do`. `SlasCircuitBreakerOpen` and `SlasConsensusDisagreement` are the two the phase is done-when. |
 | `alertmanager/alertmanager.yml` | alertmanager `/etc/alertmanager/alertmanager.yml` | One receiver, `slas-local`: a webhook to the api on the backend network, which writes the local alert channel. Nothing leaves the host (INV-1). |
 | `grafana/provisioning/datasources/prometheus.yml` | grafana `/etc/grafana/provisioning/datasources/` | The Prometheus datasource, uid `slas-prometheus`, not editable. |

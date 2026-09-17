@@ -8,7 +8,10 @@
 #
 #   --build (ADR-0014): on a connected quickstart host, pull the third-party images by their
 #   pinned tags and build the first-party images from this checkout instead of loading a
-#   bundle; the filled image lock is written under the data root, never committed.
+#   bundle; the filled image lock is written under the data root, never committed. Round 2
+#   (ADR-0015) adds the sandbox images the sandbox manager lists, the toolchain manifest
+#   they satisfy, the vLLM image the model manager starts, and the runtime-socket choice:
+#   Podman's socket by default, Docker's when only that one exists.
 #
 # Read-only steps come first; nothing on the host changes until every one of them passed.
 # Idempotent: running it twice is safe. `--dry-run` performs the read-only steps for real
@@ -29,6 +32,12 @@ MODELS_ONLY=0
 FETCH_MODELS_FIRST=0
 FETCH_PLANNED_ONLY=0
 MODEL_SOURCES="${SLAS_MODEL_SOURCES:-$SCRIPT_DIR/config/model-sources.txt}"
+# The container-runtime socket compose mounts into model-manager and sandbox-manager only
+# (INV-4, ADR-0015). Podman's path is the default; when it is absent and Docker's exists, .env
+# gets SLAS_RUNTIME_SOCKET=<docker socket>. SLAS_RUNTIME_SOCKET set in the environment wins;
+# SLAS_PODMAN_SOCKET / SLAS_DOCKER_SOCKET name the paths to look at (rootless Docker, tests).
+PODMAN_SOCKET="${SLAS_PODMAN_SOCKET:-/run/podman/podman.sock}"
+DOCKER_SOCKET="${SLAS_DOCKER_SOCKET:-/var/run/docker.sock}"
 VERSION="$(grep -m1 '^version' "$SCRIPT_DIR/pyproject.toml" | sed 's/.*"\(.*\)"/\1/')"
 JSON=0
 DRY_RUN=0
@@ -51,12 +60,16 @@ step passed.
   --registry HOST      Pull from a registry inside the perimeter (Harbor); every image is
                        verified with cosign before it is pulled (prod).
   --build              Build from this source checkout on a connected host (quickstart only,
-                       ADR-0014): pull the third-party images by their pinned tags, build the
-                       first-party images from images/<name>/Dockerfile, write the filled image
-                       lock to <data root>/images.lock.json, then start the stack from those
-                       images. Registry label: \$SLAS_REGISTRY or "local". Needs Docker with
-                       Compose, uv (or an existing .venv), and a route to the registries.
-                       \`./install.sh --build --fetch-models\` is the one-command connected install.
+                       ADR-0014): pull the third-party images by their pinned tags (the vLLM
+                       image the model manager starts among them), build the first-party images
+                       from images/<name>/Dockerfile and the sandbox images the sandbox manager
+                       lists, write the filled image lock to <data root>/images.lock.json (the
+                       sandbox images to sandbox-images.lock.json beside it) and the toolchain
+                       manifest to <data root>/Toolchains/manifest.json, then start the stack
+                       from those images. Registry label: \$SLAS_REGISTRY or "local". Needs
+                       Docker with Compose, uv (or an existing .venv), and a route to the
+                       registries. \`./install.sh --build --fetch-models\` is the one-command
+                       connected install.
   --models DIR         Model weights fetched with scripts/fetch_models.py on a connected host.
                        Their checksums are verified, they are placed under <data root>/Models,
                        and Models/models.yaml is written from config/models.<profile>.yaml
@@ -538,19 +551,59 @@ if [[ "$SOURCE" == "local" ]]; then
     echo "The lock written by the build does not pin every image the $PROFILE profile starts; the stack was not started."
     exit 1
   fi
+
+  # The Coding Agent's sandbox images (ADR-0015, docs/api-contract-round-2.md §4): the sandbox
+  # manager lists them (`python -m slas_sandbox_manager.images list`), each is built from the
+  # repository root, their IDs go to sandbox-images.lock.json beside the image lock, and the
+  # toolchain manifest they satisfy is written for the sandbox manager to resolve versions
+  # against. They are not compose services and not in compose/images.lock.*.
+  echo
+  echo "Building the Coding Agent's sandbox images and writing the toolchain manifest to $DATA_ROOT/Toolchains/manifest.json."
+  sandbox_args=(build-sandbox-images --python "$PYTHON" --registry "$REGISTRY" --repo "$SCRIPT_DIR" \
+    --out "$DATA_ROOT/sandbox-images.lock.json" --manifest "$DATA_ROOT/Toolchains/manifest.json")
+  [[ $DRY_RUN -eq 1 ]] && sandbox_args+=(--dry-run)
+  if ! "$PYTHON" -m slas_deploy.installer "${sandbox_args[@]}"; then
+    echo
+    echo "Building the sandbox images did not finish; the messages above say which one and why."
+    echo "Likely cause: a sandbox Dockerfile could not fetch its pinned toolchain, or this checkout's sandbox manager does not list its images yet."
+    echo "What to do: fix what the message names, then run ./install.sh --build again; the platform images already built are kept and the stack was not started."
+    exit 1
+  fi
 fi
 
+# ---------------------------------------------------------------------------- 3b the runtime socket, .env, secrets, data directories
+# Which socket model-manager and sandbox-manager get (ADR-0015): what SLAS_RUNTIME_SOCKET says
+# (environment, then the existing .env), else Podman's when it exists, else Docker's.
+configured_socket="${SLAS_RUNTIME_SOCKET:-}"
+if [[ -z "$configured_socket" && -f "$ENV_FILE" ]]; then
+  configured_socket="$(sed -n 's/^SLAS_RUNTIME_SOCKET=//p' "$ENV_FILE" | tail -n 1 | tr -d '"')"
+fi
+socket_choice="$("$PYTHON" -m slas_deploy.installer runtime-socket --configured "$configured_socket" \
+  --podman "$PODMAN_SOCKET" --docker "$DOCKER_SOCKET" --json)"
+RUNTIME_SOCKET="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["path"])' "$socket_choice")"
 echo
+"$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["sentence"])' "$socket_choice"
+
 if [[ $DRY_RUN -eq 1 ]]; then
-  echo "Would write $ENV_FILE ($PROFILE keys, registry $REGISTRY, version $VERSION; keys you set are kept)."
+  if [[ -n "$RUNTIME_SOCKET" ]]; then
+    echo "Would write $ENV_FILE ($PROFILE keys, registry $REGISTRY, version $VERSION, SLAS_RUNTIME_SOCKET=$RUNTIME_SOCKET; keys you set are kept)."
+  else
+    echo "Would write $ENV_FILE ($PROFILE keys, registry $REGISTRY, version $VERSION; keys you set are kept)."
+  fi
   echo "Would create the missing secret files under $DATA_ROOT/secrets (0600) and $DATA_ROOT/tls for the edge's certificates."
+  "$PYTHON" -m slas_deploy.installer data-dirs --root "$DATA_ROOT" --dry-run
 else
-  mkdir -p "$DATA_ROOT" "$DATA_ROOT/tls"   # tls: the edge's CA and certificates, owned by the user running the stack
+  mkdir -p "$DATA_ROOT"
   "$PYTHON" -m slas_deploy.installer write-env --example "$SCRIPT_DIR/config/.env.example" \
     --target "$ENV_FILE" --profile "$PROFILE" --data-root "$DATA_ROOT" --version "$VERSION" \
     --registry "$REGISTRY" --uid "$(id -u)" --gid "$(id -g)" --tls-names "$TLS_NAMES" \
-    --public-host "$PUBLIC_HOST"
+    --public-host "$PUBLIC_HOST" --runtime-socket "$RUNTIME_SOCKET"
   "$PYTHON" -m slas_deploy.installer secrets --dir "$DATA_ROOT/secrets" --profile "$PROFILE"
+  # Every directory a service bind-mounts, created as the user the stack runs as (SLAS_UID):
+  # tls (the edge's CA), Coding, Toolchains, .git-broker, Tickets, Skills, SOP, Validation,
+  # Factory/{Templates,mes/inbox,ca}, Models, Knowledge, Backups/stations, qdrant. A missing
+  # bind-mount source would otherwise be created root-owned by the engine.
+  "$PYTHON" -m slas_deploy.installer data-dirs --root "$DATA_ROOT"
 fi
 
 if [[ "$SOURCE" == "bundle" ]]; then
@@ -560,7 +613,7 @@ if [[ "$SOURCE" == "bundle" ]]; then
   done
 fi
 
-# ---------------------------------------------------------------------------- 3b model weights
+# ---------------------------------------------------------------------------- 3c model weights
 place_models
 
 if [[ $DRY_RUN -eq 1 ]]; then

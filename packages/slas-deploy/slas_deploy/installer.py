@@ -10,6 +10,12 @@ sentence per thing it did.
     check-manifest  compare a bundle's manifest with the lock
     compose-files   the -f arguments for the profile and the overlays .env asks for
     build-images    --build (ADR-0014): pull, build, tag; write the filled lock to the data root
+    build-sandbox-images
+                    --build: build the sandbox images the sandbox manager lists, write their
+                    lock beside the image lock and the toolchain manifest (contract §4, §9)
+    runtime-socket  which container-runtime socket .env should name (ADR-0015): the configured
+                    one, else Podman's when it exists, else Docker's
+    data-dirs       create the data-root directories the services bind-mount, as this user
     unhealthy       read `docker compose ps --format json`; print the services not healthy yet
 """
 
@@ -18,13 +24,21 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, TextIO
 
+from slas_deploy import sandbox_images
 from slas_deploy.build import BuildError, LocalRunner, Runner, build_images, describe, plan
-from slas_deploy.compose import PROD_SECRETS, QUICKSTART_SECRETS
+from slas_deploy.compose import (
+    DATA_DIRECTORIES,
+    PROD_SECRETS,
+    QUICKSTART_SECRETS,
+    RUNTIME_SOCKET_HOLDERS,
+)
 from slas_deploy.images import (
     BundleManifest,
     ImageLock,
@@ -72,6 +86,73 @@ PROD_KEYS: Final[dict[str, str]] = {
 #: Secret files whose content is derived, not random.
 DERIVED_SECRETS: Final[frozenset[str]] = frozenset({"redis.conf"})
 
+#: Where the two engines put their socket on a stock host. Rootless Podman's lives under
+#: $XDG_RUNTIME_DIR; the compose default and the doctor look at the rootful path.
+PODMAN_SOCKET: Final = "/run/podman/podman.sock"
+DOCKER_SOCKET: Final = "/var/run/docker.sock"
+
+
+@dataclass(frozen=True)
+class RuntimeSocketChoice:
+    """What .env should say for SLAS_RUNTIME_SOCKET, and the sentence that explains it."""
+
+    path: str  # "" keeps the compose default (Podman's path)
+    sentence: str
+
+    @property
+    def key_value(self) -> str:
+        return f"SLAS_RUNTIME_SOCKET={self.path}"
+
+
+def _is_socket(path: str) -> bool:
+    try:
+        return stat.S_ISSOCK(os.stat(path).st_mode)
+    except OSError:
+        return False
+
+
+def choose_runtime_socket(
+    configured: str, *, podman: str = PODMAN_SOCKET, docker: str = DOCKER_SOCKET
+) -> RuntimeSocketChoice:
+    """ADR-0015: the default stays Podman's socket; when it is absent and Docker's exists,
+    .env points SLAS_RUNTIME_SOCKET at Docker's. A value a person set is kept as it is."""
+    holders = " and ".join(sorted(RUNTIME_SOCKET_HOLDERS))
+    if configured.strip():
+        return RuntimeSocketChoice(
+            configured.strip(),
+            f"SLAS_RUNTIME_SOCKET is set to {configured.strip()}; {holders} see that socket "
+            "and nothing else does (INV-4).",
+        )
+    if _is_socket(podman):
+        return RuntimeSocketChoice(
+            "",
+            f"Podman's socket {podman} serves the container runtime; {holders} see it and "
+            "nothing else does (INV-4).",
+        )
+    if _is_socket(docker):
+        return RuntimeSocketChoice(
+            docker,
+            f"No Podman socket at {podman}, so SLAS_RUNTIME_SOCKET={docker} in .env points "
+            f"{holders} at Docker's socket; nothing else sees it (INV-4).",
+        )
+    return RuntimeSocketChoice(
+        "",
+        f"Neither {podman} nor {docker} exists yet; .env keeps the Podman default and "
+        f"{holders} stay unhealthy until a runtime socket is there.",
+    )
+
+
+def create_data_dirs(root: Path, directories: Sequence[str] = DATA_DIRECTORIES) -> list[str]:
+    """Create every data-root directory the services bind-mount, as the calling user, so the
+    engine never creates one root-owned when it mounts a missing path."""
+    created: list[str] = []
+    for relative in directories:
+        path = root / relative
+        if not path.is_dir():
+            path.mkdir(parents=True, exist_ok=True)
+            created.append(relative)
+    return created
+
 
 def write_env(
     *,
@@ -85,6 +166,7 @@ def write_env(
     gid: int,
     tls_names: str,
     public_host: str,
+    runtime_socket: str | None = None,
 ) -> list[str]:
     """Fill the keys the profile needs, never touching a key a person already set."""
     defaults = EnvFile.parse(example.read_text(encoding="utf-8"))
@@ -114,6 +196,8 @@ def write_env(
         "SLAS_TLS_NAMES": tls_names,
         "SLAS_PUBLIC_HOST": public_host,
     }
+    if runtime_socket:
+        settable["SLAS_RUNTIME_SOCKET"] = runtime_socket
     if profile == "prod":
         settable.update(PROD_KEYS)
     for key, value in settable.items():
@@ -265,6 +349,29 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
     env_cmd.add_argument("--gid", type=int, required=True)
     env_cmd.add_argument("--tls-names", required=True)
     env_cmd.add_argument("--public-host", required=True)
+    env_cmd.add_argument(
+        "--runtime-socket",
+        default="",
+        help="host path of the container-runtime socket to record (empty keeps the default)",
+    )
+
+    sock = commands.add_parser("runtime-socket")
+    sock.add_argument("--configured", default="", help="SLAS_RUNTIME_SOCKET as set today")
+    sock.add_argument("--podman", default=PODMAN_SOCKET)
+    sock.add_argument("--docker", default=DOCKER_SOCKET)
+    sock.add_argument("--json", action="store_true")
+
+    dirs = commands.add_parser("data-dirs")
+    dirs.add_argument("--root", required=True)
+    dirs.add_argument("--dry-run", action="store_true")
+
+    sandbox = commands.add_parser("build-sandbox-images")
+    sandbox.add_argument("--python", required=True, help="the interpreter with the packages")
+    sandbox.add_argument("--registry", required=True)
+    sandbox.add_argument("--repo", required=True)
+    sandbox.add_argument("--out", required=True, help="where the sandbox image lock is written")
+    sandbox.add_argument("--manifest", required=True, help="the toolchain manifest to write")
+    sandbox.add_argument("--dry-run", action="store_true")
 
     sec = commands.add_parser("secrets")
     sec.add_argument("--dir", required=True)
@@ -308,6 +415,40 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
             dry_run=args.dry_run,
             out=out,
         )
+    if args.command == "build-sandbox-images":
+        return sandbox_images.run(
+            python=args.python,
+            registry=args.registry,
+            repo=Path(args.repo),
+            lock_out=Path(args.out),
+            manifest_out=Path(args.manifest),
+            dry_run=args.dry_run,
+            runner=LocalRunner(),
+            out=out,
+        )
+    if args.command == "runtime-socket":
+        choice = choose_runtime_socket(args.configured, podman=args.podman, docker=args.docker)
+        if args.json:
+            out.write(json.dumps({"path": choice.path, "sentence": choice.sentence}) + "\n")
+        else:
+            out.write(choice.path + "\n" + choice.sentence + "\n")
+        return EXIT_OK
+    if args.command == "data-dirs":
+        root = Path(args.root)
+        listed = ", ".join(DATA_DIRECTORIES)
+        if args.dry_run:
+            out.write(f"Would create the missing data directories under {root}: {listed}.\n")
+            return EXIT_OK
+        created = create_data_dirs(root)
+        if created:
+            out.write(
+                f"Created {len(created)} data "
+                f"{'directory' if len(created) == 1 else 'directories'} under {root} as "
+                f"uid {os.getuid()}: {', '.join(created)}.\n"
+            )
+        else:
+            out.write(f"Every data directory under {root} exists.\n")
+        return EXIT_OK
     if args.command == "unhealthy":
         out.write(" ".join(unhealthy_services(sys.stdin.read())) + "\n")
         return EXIT_OK
@@ -323,6 +464,7 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
             gid=args.gid,
             tls_names=args.tls_names,
             public_host=args.public_host,
+            runtime_socket=args.runtime_socket or None,
         )
         out.write(
             f"{args.target}: {'set ' + ', '.join(changed) if changed else 'nothing to change'}.\n"
