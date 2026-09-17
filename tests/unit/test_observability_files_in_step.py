@@ -18,6 +18,8 @@ from slas_observability.render import main as render_main
 from slas_observability.rules import (
     EXTERNAL_METRICS,
     SERVICES,
+    VLLM_ROLES,
+    VLLM_VOTERS,
     known_metric_names,
     prometheus_config,
     rule_groups,
@@ -35,7 +37,7 @@ def known_metrics() -> set[str]:
 
 def test_every_provisioned_file_is_in_step_with_the_code() -> None:
     files = rendered_files()
-    assert len(files) == 11
+    assert len(files) == 12
     for relative, content in files.items():
         path = OBS / relative
         assert path.is_file(), (
@@ -48,9 +50,9 @@ def test_every_provisioned_file_is_in_step_with_the_code() -> None:
 
 def test_render_writes_the_same_files_anywhere(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
     written = write_all(tmp_path)
-    assert len(written) == 11
+    assert len(written) == 12
     assert render_main([str(tmp_path / "again")]) == 0
-    assert "11 files written" in capsys.readouterr().out
+    assert "12 files written" in capsys.readouterr().out
     assert (tmp_path / "again" / "prometheus" / "rules.yml").read_text() == (
         tmp_path / "prometheus" / "rules.yml"
     ).read_text()
@@ -147,6 +149,42 @@ def test_the_rules_carry_the_two_required_alerts_in_three_parts() -> None:
         "slas-validation",
         "slas-factory",
     ]
+
+
+def test_prometheus_scrapes_every_vllm_instance_the_model_manager_starts() -> None:
+    """Roles and voters (`vllm-<role>`, `vllm-voter-<model id>`), per profile, in step with
+    the shipped registries (contract round 2 §3; CLAUDE.md §15 decision 14)."""
+    for profile in ("quickstart", "prod"):
+        # config/models.<profile>.yaml is itself kept in step with
+        # slas_model_manager.registry.PROFILE_REGISTRIES by its own test; its `roles:` and
+        # `voters:` blocks are flat, so plain line parsing reads them.
+        text = (REPO_ROOT / "config" / f"models.{profile}.yaml").read_text(encoding="utf-8")
+        roles_block = text.split("\nroles:\n", 1)[1].split("\nvoters:\n", 1)[0]
+        voters_block = text.split("\nvoters:\n", 1)[1]
+        roles = [line.strip().split(":")[0] for line in roles_block.splitlines() if line.strip()]
+        voters = [line.strip()[2:] for line in voters_block.splitlines() if line.startswith("  - ")]
+        assert VLLM_VOTERS[profile] == tuple(voters), (
+            f"slas_observability.rules.VLLM_VOTERS[{profile!r}] drifted from "
+            f"config/models.{profile}.yaml"
+        )
+        assert set(roles) == set(VLLM_ROLES)
+        jobs = {job["job_name"]: job for job in prometheus_config(profile)["scrape_configs"]}
+        targets = [t for sc in jobs["vllm"]["static_configs"] for t in sc["targets"]]
+        # The instance names the model manager gives them (`vllm-<role>`, `vllm-voter-<id>`).
+        assert targets == [f"vllm-{role}:8000" for role in VLLM_ROLES] + [
+            f"vllm-voter-{voter}:8000" for voter in voters
+        ]
+        voter_labels = [
+            sc["labels"] for sc in jobs["vllm"]["static_configs"] if sc["labels"]["role"] == "voter"
+        ]
+        assert [labels["voter"] for labels in voter_labels] == voters
+    prod_text = (OBS / "prometheus" / "prometheus.prod.yml").read_text()
+    quickstart_text = (OBS / "prometheus" / "prometheus.yml").read_text()
+    assert "vllm-voter-minimax-m2.7:8000" in prod_text
+    assert "vllm-voter-minimax-m2.7:8000" not in quickstart_text, (
+        "a quickstart host must not scrape (and alert on) the prod-only third voter"
+    )
+    assert "vllm-voter-qwen3.8-27b-fp8:8000" in quickstart_text
 
 
 def test_prometheus_scrapes_every_service_and_the_files_are_plain_yaml() -> None:

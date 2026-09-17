@@ -1,4 +1,4 @@
-# model-manager image: the model manager: registry, fit, blue/green swaps (CLAUDE.md §7).
+# model-manager image: the model manager: registry, fit, blue/green swaps, the vllm-* containers (CLAUDE.md §7).
 # Rendered from slas_deploy.dockerfiles; a unit test keeps this file in step. Build from the
 # repository root:  docker build -f images/model-manager/Dockerfile -t <registry>/slas/model-manager:<version> .
 # Bases pinned by digest (INV-8): python:3.12.14-slim-bookworm; the static uv binary from ghcr.io/astral-sh/uv:0.8.17.
@@ -32,4 +32,4 @@ ENV PATH="/opt/slas/.venv/bin:${PATH}" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERE
 USER 10001:10001
 WORKDIR /opt/slas
 EXPOSE 8000
-CMD ["python", "-m", "slas_observability.serve", "model-manager"]
+CMD ["slas-model-manager", "serve"]

@@ -1,4 +1,4 @@
-# factory-executor image: the factory executor, Zone B' (CLAUDE.md §10.3).
+# factory-executor image: the factory executor, Zone B' (CLAUDE.md §10.3); openssl drives the station CA.
 # Rendered from slas_deploy.dockerfiles; a unit test keeps this file in step. Build from the
 # repository root:  docker build -f images/factory-executor/Dockerfile -t <registry>/slas/factory-executor:<version> .
 # Bases pinned by digest (INV-8): python:3.12.14-slim-bookworm; the static uv binary from ghcr.io/astral-sh/uv:0.8.17.
@@ -23,7 +23,7 @@ FROM docker.io/library/python@sha256:782412e85d0f0984994c290652577d4018aff08145c
 # TODO(SLAS-IMAGES): pin apt package versions from a snapshot mirror in the bundle build
 # (INV-8); the offline bundle path builds from a vendored apt cache.
 RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-client \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-client openssl \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /opt/slas/.venv /opt/slas/.venv
 COPY images/slas-health/slas-health /usr/local/bin/slas-health
@@ -37,4 +37,4 @@ ENV PATH="/opt/slas/.venv/bin:${PATH}" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERE
 USER 10001:10001
 WORKDIR /opt/slas
 EXPOSE 8000
-CMD ["python", "-m", "slas_observability.serve", "factory-executor"]
+CMD ["slas-factory-executor", "serve"]

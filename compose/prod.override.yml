@@ -330,7 +330,8 @@ services:
       VAULT_KV_MOUNT: slas
     volumes:
       - "${SLAS_DATA_ROOT}/Coding:/data/Coding"
-      - "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:ro"
+      - "${SLAS_DATA_ROOT}/.git-broker:/data/.git-broker"
+      - "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:rw"
       - "${SLAS_DATA_ROOT}/tls/vault/ca.crt:/vault-ca/ca.crt:ro"
     secrets:
       - vault_approle_role_id
@@ -338,6 +339,11 @@ services:
     depends_on:
       vault:
         condition: service_healthy
+  prometheus:
+    volumes:
+      - "../observability/prometheus/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro"
+      - "../observability/prometheus/rules.yml:/etc/prometheus/rules.yml:ro"
+      - prometheus_data:/prometheus
   validation-executor:
     environment:
       CREDENTIAL_SOURCE: vault

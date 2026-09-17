@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from slas_deploy import compose, keycloak, vault
+from slas_deploy import compose, images, keycloak, vault
 from slas_deploy.images import DEFAULT_IMAGES, LockError, check_lock, default_lock
 from slas_deploy.render import main as render_main
 from slas_deploy.render import rendered_files, write_all
@@ -178,6 +178,190 @@ def test_the_image_lock_pins_tags_but_refuses_to_start_unpinned_images() -> None
     assert [i["name"] for i in on_disk["images"]] == [i.name for i in DEFAULT_IMAGES]
     prod_only = {i.name for i in lock.images if i.profiles == ["prod"]}
     assert prod_only == {"mc", "vault", "keycloak", "loki", "tempo", "postgres-pgbackrest"}
+    assert all(i["started_by"] in ("compose", "model-manager") for i in on_disk["images"])
+    assert "started_by: model-manager" in (REPO_ROOT / "compose" / "images.lock.yaml").read_text()
+
+
+def test_the_vllm_image_is_locked_and_pulled_but_never_a_compose_service() -> None:
+    """Contract round 2 §9: the vLLM image is in the lock for both profiles, pulled by the
+    digest the lock records, handed to model-manager as SLAS_VLLM_IMAGE, and no compose file
+    starts it — the model manager does, one container per role and voter."""
+    lock = default_lock()
+    vllm = next(image for image in lock.images if image.name == "vllm")
+    assert vllm.reference == "vllm/vllm-openai:v0.29.0-x86_64-cu129"
+    assert vllm.upstream == "docker.io/vllm/vllm-openai:v0.29.0-x86_64-cu129"
+    assert vllm.digest == "sha256:3e10e8189823e0f7ae4620c271bcdaaf64127ec7d0edc351591a508498b7684a"
+    assert vllm.pull_reference == f"docker.io/vllm/vllm-openai@{vllm.digest}"
+    assert vllm.profiles == ["quickstart", "prod"] and not vllm.first_party
+    assert vllm.started_by == "model-manager" and not vllm.pinned, "pinned needs the image ID too"
+    assert images.started_by_model_manager(lock.images) == [vllm]
+    assert vllm not in images.started_by_compose(lock.images)
+    postgres = next(image for image in lock.images if image.name == "postgres")
+    assert postgres.pull_reference == postgres.upstream, "no digest known: pulled by its tag"
+    compose_refs = {
+        service["image"]
+        for doc in (compose.base_compose(), compose.prod_override())
+        for service in doc["services"].values()
+        if "image" in service
+    }
+    assert vllm.compose_ref() not in compose_refs
+    assert {image.compose_ref() for image in images.started_by_compose(lock.images)} >= compose_refs
+    model_manager = compose.base_compose()["services"]["model-manager"]["environment"]
+    assert (
+        model_manager["SLAS_VLLM_IMAGE"]
+        == vllm.compose_ref()
+        == "${SLAS_REGISTRY}/vllm/vllm-openai:v0.29.0-x86_64-cu129"
+    )
+    # The lock the bundle and --build produce carries it like the others.
+    assert "vllm" in [
+        i["name"]
+        for i in json.loads((REPO_ROOT / "compose" / "images.lock.json").read_text())["images"]
+    ]
+
+
+def test_round_2_wiring_of_the_compose_services() -> None:
+    """docs/api-contract-round-2.md §1, §3, §4, §6, §7, §8, §9 on the rendered stack."""
+    doc = compose.base_compose()
+    services = doc["services"]
+    for service, variables in compose.URL_READERS.items():
+        environment = services[service]["environment"]
+        for variable in variables:
+            assert environment[variable] == compose.SERVICE_URLS[variable], (service, variable)
+        others = set(compose.SERVICE_URLS) - set(variables)
+        assert not others & set(environment), f"{service} reads only the URLs the contract lists"
+    for variable, url in compose.SERVICE_URLS.items():
+        target = url.removeprefix("http://").split(":")[0]
+        assert target in services and url.endswith(":8000"), variable
+        assert "slas-backend" in compose.networks_of(doc, target), (
+            f"{target} must be reachable on the backend network"
+        )
+    for service in (
+        "api",
+        "agent-core-orchestrator",
+        "llm-gateway",
+        "model-manager",
+        "sandbox-manager",
+        "git-broker",
+        "validation-executor",
+        "factory-executor",
+    ):
+        assert services[service]["environment"]["SLAS_BIND"] == "0.0.0.0:8000", service
+        assert services[service]["healthcheck"]["test"] == [
+            "CMD",
+            "slas-health",
+            "http://127.0.0.1:8000/health",
+        ], service
+
+    # model-manager (§3): the inference network by its real name, the host Models directory,
+    # the vLLM image, the GPU budget and the reconcile interval; the runtime socket path inside.
+    assert doc["networks"]["slas-inference"] == {"internal": True, "name": "slas_slas-inference"}
+    assert (
+        compose.INFERENCE_NETWORK_NAME == f"{doc['name']}_slas-inference" == "slas_slas-inference"
+    )
+    assert (REPO_ROOT / "install.sh").read_text().count("--project-name slas") == 1, (
+        "compose names the network <project>_slas-inference"
+    )
+    mm = services["model-manager"]["environment"]
+    assert mm["SLAS_INFERENCE_NETWORK"] == "slas_slas-inference"
+    assert mm["SLAS_HOST_MODELS_DIR"] == "${SLAS_DATA_ROOT}/Models"
+    assert mm["SLAS_GPU_VRAM_GIB"] == "${SLAS_GPU_VRAM_GIB:-180}"
+    assert mm["SLAS_RECONCILE_INTERVAL_S"] == "30" and mm["SLAS_VLLM_SHM"] == "16g"
+    assert (
+        mm["SLAS_RUNTIME_SOCKET"]
+        == compose.RUNTIME_SOCKET_IN_CONTAINER
+        == "/run/podman/podman.sock"
+    )
+    assert (
+        mm["SLAS_DATA_ROOT"] == "/data"
+        and "${SLAS_DATA_ROOT}/Models:/data/Models" in services["model-manager"]["volumes"]
+    )
+    assert "slas-inference" in compose.networks_of(doc, "model-manager"), "it probes vllm-* itself"
+    assert "SLAS_GPU_VRAM_GIB=180" in (REPO_ROOT / "config" / ".env.example").read_text()
+
+    # sandbox-manager (§4).
+    sm = services["sandbox-manager"]["environment"]
+    assert sm["SLAS_HOST_DATA_ROOT"] == "${SLAS_DATA_ROOT}" and sm["SLAS_DATA_ROOT"] == "/data"
+    assert sm["SLAS_TOOLCHAIN_MANIFEST"] == "/data/Toolchains/manifest.json"
+    assert sm["SLAS_SANDBOX_REGISTRY"] == "${SLAS_REGISTRY}"
+    assert (
+        sm["SLAS_RUNTIME_SOCKET"] == "/run/podman/podman.sock" and sm["DEFAULT_RUNTIME"] == "runsc"
+    )
+    assert services["sandbox-manager"]["volumes"] == [
+        f"{compose.RUNTIME_SOCKET}:{compose.RUNTIME_SOCKET_IN_CONTAINER}",
+        "${SLAS_DATA_ROOT}/Coding:/data/Coding",
+        "${SLAS_DATA_ROOT}/Toolchains:/data/Toolchains:ro",
+    ]
+    assert "sandbox-manager" in services["agent-core-orchestrator"]["depends_on"]
+
+    # git-broker (§7): its store under .git-broker, Coding, git-hosts.yaml writable.
+    gb = services["git-broker"]
+    assert gb["environment"]["SLAS_DATA_ROOT"] == "/data"
+    assert "${SLAS_DATA_ROOT}/.git-broker:/data/.git-broker" in gb["volumes"]
+    assert "${SLAS_DATA_ROOT}/Coding:/data/Coding" in gb["volumes"]
+    assert "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:rw" in gb["volumes"]
+    prod_gb = compose.prod_override()["services"]["git-broker"]["volumes"]
+    assert (
+        "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:rw" in prod_gb
+        and "${SLAS_DATA_ROOT}/.git-broker:/data/.git-broker" in prod_gb
+    )
+
+    # The executors (§6).
+    ve = services["validation-executor"]
+    assert ve["environment"]["SLAS_TARGETS_REGISTRY"] == "/data/Validation/targets.json"
+    assert {
+        "${SLAS_DATA_ROOT}/Validation:/data/Validation",
+        "${SLAS_DATA_ROOT}/Tickets:/data/Tickets",
+    } <= set(ve["volumes"])
+    fe = services["factory-executor"]
+    assert fe["environment"]["SLAS_FACTORY_TEMPLATES"] == "/etc/slas/templates"
+    assert (
+        fe["environment"]["ENROLMENT_LISTEN"] == "0.0.0.0:8444"
+        and fe["environment"]["STATION_RUNNER_PORT"] == "8443"
+    )
+    assert fe["environment"]["MES_INBOX"] == "/data/Factory/mes/inbox"
+    assert fe["environment"]["RUNNER_MTLS_CA"] == "/data/Factory/ca/ca.pem"
+    assert {
+        "${SLAS_DATA_ROOT}/Factory:/data/Factory",
+        "${SLAS_DATA_ROOT}/Tickets:/data/Tickets",
+        "../templates/factory:/etc/slas/templates:ro",
+    } <= set(fe["volumes"])
+    assert "ports" not in fe, (
+        "enrolment listens on the factory network; the macvlan overlay gives it an address, no host port"
+    )
+    assert (REPO_ROOT / "templates" / "factory").is_dir()
+
+    # The orchestrator mounts the whole data root (§5); the api reads the §8 URLs.
+    assert "${SLAS_DATA_ROOT}:/data" in services["agent-core-orchestrator"]["volumes"]
+    assert "${SLAS_DATA_ROOT}:/data" in services["api"]["volumes"]
+
+    # Every bind-mount source under the data root is a directory install.sh creates first.
+    sources = set()
+    for service in services.values():
+        for volume in service.get("volumes", []):
+            source = volume.split(":", 1)[0]
+            if source.startswith("${SLAS_DATA_ROOT}/"):
+                sources.add(source.removeprefix("${SLAS_DATA_ROOT}/"))
+    created = set(compose.DATA_DIRECTORIES)
+    for source in sources:
+        covered = (
+            source in created
+            or any(d.startswith(f"{source}/") for d in created)  # a parent of a created one
+            or any(source.startswith(f"{d}/") for d in created)  # a file inside a created one
+        )
+        assert covered, (
+            f"install.sh must create {source} under the data root before compose mounts it"
+        )
+    for directory in ("Tickets", "Skills/library", "SOP", "Factory/mes/inbox", "Factory/ca"):
+        assert directory in created
+
+    # Prometheus scrapes the voters; prod mounts the prod rendering with its third voter.
+    prometheus_yml = (REPO_ROOT / "observability" / "prometheus" / "prometheus.yml").read_text()
+    assert "vllm-voter-deepseek-v4-flash:8000" in prometheus_yml
+    prod = compose.prod_override()["services"]["prometheus"]["volumes"]
+    assert (
+        "../observability/prometheus/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro" in prod
+    )
+    assert (REPO_ROOT / "observability" / "prometheus" / "prometheus.prod.yml").is_file()
 
 
 def test_vault_policies_are_least_privilege_and_the_realm_maps_the_platform_roles() -> None:

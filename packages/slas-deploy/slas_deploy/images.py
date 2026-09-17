@@ -33,6 +33,9 @@ _LATEST: Final = re.compile(r"(:latest$|^[^:@]+$)")
 
 Profile = Literal["quickstart", "prod"]
 ALL_PROFILES: Final[tuple[Profile, ...]] = ("quickstart", "prod")
+#: Who starts a locked image: compose (a service in the compose files) or the model manager
+#: (the vLLM image, one container per role and voter; CLAUDE.md §7, contract round 2 §3).
+StartedBy = Literal["compose", "model-manager"]
 
 
 class LockedImage(SlasModel):
@@ -43,7 +46,8 @@ class LockedImage(SlasModel):
     #: Upstream source the build host pulls from, for the record.
     upstream: str = Field(min_length=3)
     first_party: bool = False
-    #: Upstream manifest digest; None until the lock is filled on a build host.
+    #: Upstream manifest digest; None until the lock is filled on a build host. An image whose
+    #: digest is known up front is pulled by that digest, never by its tag alone (INV-8).
     digest: str | None = None
     #: The image ID (config digest) `docker inspect` reports after load or pull.
     image_id: str | None = None
@@ -51,6 +55,18 @@ class LockedImage(SlasModel):
     signed_by: str | None = None
     #: Profiles that start the image.
     profiles: list[Profile] = Field(default_factory=lambda: list(ALL_PROFILES))
+    #: `compose` for a service in the compose files; `model-manager` for an image the model
+    #: manager starts over the runtime socket and compose never references as a service.
+    started_by: StartedBy = "compose"
+
+    @property
+    def pull_reference(self) -> str:
+        """What a connected host pulls: `<upstream repository>@<digest>` when the lock knows
+        the digest, the pinned upstream tag otherwise."""
+        if self.digest and not self.first_party:
+            repository = self.upstream.split("@", 1)[0].rsplit(":", 1)[0]
+            return f"{repository}@{self.digest}"
+        return self.upstream
 
     @property
     def pinned(self) -> bool:
@@ -71,16 +87,36 @@ def third_party(name: str) -> str:
     return next(image for image in DEFAULT_IMAGES if image.name == name).compose_ref()
 
 
+def started_by_compose(images: Iterable[LockedImage]) -> list[LockedImage]:
+    """The images a compose file may reference as a service's `image:`."""
+    return [image for image in images if image.started_by == "compose"]
+
+
+def started_by_model_manager(images: Iterable[LockedImage]) -> list[LockedImage]:
+    """The images the model manager starts (the vLLM image); never a compose service."""
+    return [image for image in images if image.started_by == "model-manager"]
+
+
 def first_party(name: str) -> str:
     return f"{REGISTRY}/slas/{name}:{VERSION}"
 
 
-def _third(name: str, reference: str, upstream: str, *, prod_only: bool = False) -> LockedImage:
+def _third(
+    name: str,
+    reference: str,
+    upstream: str,
+    *,
+    prod_only: bool = False,
+    digest: str | None = None,
+    started_by: StartedBy = "compose",
+) -> LockedImage:
     return LockedImage(
         name=name,
         reference=reference,
         upstream=upstream,
+        digest=digest,
         profiles=["prod"] if prod_only else ["quickstart", "prod"],
+        started_by=started_by,
     )
 
 
@@ -132,6 +168,16 @@ DEFAULT_IMAGES: Final[tuple[LockedImage, ...]] = (
     ),
     _third("loki", "grafana/loki:3.4.2", "docker.io/grafana/loki:3.4.2", prod_only=True),
     _third("tempo", "grafana/tempo:2.7.1", "docker.io/grafana/tempo:2.7.1", prod_only=True),
+    # Not a compose service: the model manager starts one container from it per role and per
+    # voter on the inference network (CLAUDE.md §7, §12; ADR-0015). Compose passes its
+    # reference to model-manager as SLAS_VLLM_IMAGE; install.sh --build pulls it by this digest.
+    _third(
+        "vllm",
+        "vllm/vllm-openai:v0.29.0-x86_64-cu129",
+        "docker.io/vllm/vllm-openai:v0.29.0-x86_64-cu129",
+        digest="sha256:3e10e8189823e0f7ae4620c271bcdaaf64127ec7d0edc351591a508498b7684a",
+        started_by="model-manager",
+    ),
     _first("edge"),
     _first("webui"),
     _first("api"),
@@ -182,7 +228,9 @@ LOCK_HEADER: Final = (
     "slas_deploy.images.DEFAULT_IMAGES; a unit test keeps file and code in step; the JSON twin\n"
     "is what install.sh reads. Tags are immutable upstream releases. `digest` and `image_id`\n"
     "are filled by scripts/lock-images.sh on a connected build host and signed with cosign;\n"
-    "while any image the chosen profile starts is null, install.sh refuses to start it."
+    "while any image the chosen profile starts is null, install.sh refuses to start it.\n"
+    "`started_by: model-manager` marks the vLLM image: pulled, saved and locked like the\n"
+    "others, never a compose service — the model manager starts it per role and voter."
 )
 
 
@@ -198,6 +246,7 @@ def render_lock_yaml(lock: ImageLock, *, header: str = LOCK_HEADER) -> str:
         lines.append(f"    image_id: {json.dumps(image.image_id)}")
         lines.append(f"    signed_by: {json.dumps(image.signed_by)}")
         lines.append(f"    profiles: [{', '.join(image.profiles)}]")
+        lines.append(f"    started_by: {image.started_by}")
     return "\n".join(lines) + "\n"
 
 

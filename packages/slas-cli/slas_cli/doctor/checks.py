@@ -11,6 +11,7 @@ Thresholds are assumptions until the model bundle size and the GPU budget are fi
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -28,6 +29,14 @@ GIB = 1024**3
 MIB = 1024**2
 
 _VERSION_AFTER_WORD = re.compile(r"version\s+v?([0-9][\w.\-]*)")
+
+#: The runtime socket compose mounts into model-manager and sandbox-manager (CLAUDE.md §12,
+#: ADR-0015): rootless Podman's path by default; a Docker host names Docker's in .env.
+DEFAULT_RUNTIME_SOCKET = "/run/podman/podman.sock"
+DOCKER_SOCKET = "/var/run/docker.sock"
+#: Where `nvidia-ctk cdi generate` writes the spec Podman attaches GPUs through.
+CDI_SPECS = ("/etc/cdi/nvidia.yaml", "/var/run/cdi/nvidia.yaml")
+RUNTIME_SOCKET_HOLDERS = "model-manager and sandbox-manager"
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +281,235 @@ def check_container_runtime(host: Host, settings: DoctorSettings) -> CheckResult
         check_id,
         title,
         f"Docker {docker_shown} with Compose {compose_version} is ready.",
+    )
+
+
+# --- the runtime socket and what is registered behind it (ADR-0015) ------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeEngine:
+    """What answers `GET /version` on the runtime socket."""
+
+    socket_path: str
+    name: str  # "Docker Engine" or "Podman"
+    version: str | None
+
+    def sentence(self) -> str:
+        shown = f"{self.name} {self.version}" if self.version else self.name
+        return f"{shown} serves the container-runtime socket {self.socket_path}"
+
+
+def _env_file_value(host: Host, settings: DoctorSettings, key: str) -> str | None:
+    """`KEY=value` from `<data root>/.env`, if the file and the key exist."""
+    text = host.read_text(f"{settings.data_root.rstrip('/')}/.env")
+    if text is None:
+        return None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith(f"{key}="):
+            return line[len(key) + 1 :].strip().strip("\"'")
+    return None
+
+
+def runtime_socket_candidates(host: Host, settings: DoctorSettings) -> list[str]:
+    """The configured socket alone when one is named (SLAS_RUNTIME_SOCKET in the environment
+    or in .env); else Podman's path, then Docker's — the order install.sh chooses in."""
+    configured = (host.env("SLAS_RUNTIME_SOCKET") or "").strip() or (
+        _env_file_value(host, settings, "SLAS_RUNTIME_SOCKET") or ""
+    ).strip()
+    if configured:
+        return [configured]
+    return [DEFAULT_RUNTIME_SOCKET, DOCKER_SOCKET]
+
+
+def _engine_at(host: Host, socket_path: str) -> RuntimeEngine | None:
+    body = host.http_get_unix(socket_path, "/version")
+    if body is None:
+        return None
+    try:
+        document = json.loads(body)
+    except ValueError:
+        return None
+    if not isinstance(document, dict):
+        return None
+    components = document.get("Components") or []
+    names = " ".join(
+        str(component.get("Name", "")) for component in components if isinstance(component, dict)
+    )
+    platform_name = str((document.get("Platform") or {}).get("Name", ""))
+    version = str(document.get("Version") or "") or None
+    if "podman" in names.lower() or "podman" in platform_name.lower():
+        return RuntimeEngine(socket_path, "Podman", version)
+    return RuntimeEngine(socket_path, "Docker Engine", version)
+
+
+def find_runtime_engine(host: Host, settings: DoctorSettings) -> RuntimeEngine | None:
+    for candidate in runtime_socket_candidates(host, settings):
+        if host.is_socket(candidate):
+            engine = _engine_at(host, candidate)
+            if engine is not None:
+                return engine
+    return None
+
+
+def registered_runtimes(host: Host, engine: RuntimeEngine) -> set[str] | None:
+    """The OCI runtimes the engine knows (`GET /info` → `Runtimes`), or None when it does not
+    say (Podman's compat API lists them only on some versions)."""
+    body = host.http_get_unix(engine.socket_path, "/info")
+    if body is None:
+        return None
+    try:
+        document = json.loads(body)
+    except ValueError:
+        return None
+    runtimes = document.get("Runtimes") if isinstance(document, dict) else None
+    if not isinstance(runtimes, dict):
+        return None
+    return {str(name) for name in runtimes}
+
+
+def check_runtime_socket(host: Host, settings: DoctorSettings) -> CheckResult:
+    check_id, title = "runtime_socket", "Runtime socket"
+    candidates = runtime_socket_candidates(host, settings)
+    engine = find_runtime_engine(host, settings)
+    if engine is not None:
+        note = (
+            ""
+            if engine.socket_path == DEFAULT_RUNTIME_SOCKET or len(candidates) == 1
+            else f" (no Podman socket at {DEFAULT_RUNTIME_SOCKET}, so .env will name it)"
+        )
+        return _ok(
+            check_id,
+            title,
+            f"{engine.sentence()}{note}; only {RUNTIME_SOCKET_HOLDERS} will see it.",
+        )
+    present = [candidate for candidate in candidates if host.is_socket(candidate)]
+    if present:
+        return _problem(
+            check_id,
+            title,
+            "fail",
+            f"The container-runtime socket {present[0]} exists but did not answer.",
+            "The engine behind it is stopped, or your user is not allowed to read the socket.",
+            "Start the engine (sudo systemctl enable --now docker, or systemctl --user "
+            "enable --now podman.socket), check the socket's group with ls -l, log in again "
+            "and run ./install.sh again.",
+        )
+    listed = " or ".join(candidates)
+    return _problem(
+        check_id,
+        title,
+        "fail",
+        f"No container-runtime socket was found at {listed}.",
+        "Rootless Podman's socket is not enabled and Docker is not installed, so "
+        f"{RUNTIME_SOCKET_HOLDERS} would have nothing to start containers with.",
+        "Enable Podman's socket (systemctl --user enable --now podman.socket) or install "
+        "Docker Engine; the installer then points SLAS_RUNTIME_SOCKET at whichever answers. "
+        "To use another path, set SLAS_RUNTIME_SOCKET before running ./install.sh.",
+    )
+
+
+def check_gvisor_runtime(host: Host, settings: DoctorSettings) -> CheckResult:
+    check_id, title = "gvisor_runtime", "gVisor runtime"
+    engine = find_runtime_engine(host, settings)
+    if engine is None:
+        return _skip(
+            check_id, title, "Skipped because no container runtime answered on its socket."
+        )
+    runtimes = registered_runtimes(host, engine)
+    if runtimes is not None and "runsc" in runtimes:
+        return _ok(
+            check_id,
+            title,
+            f"gVisor is registered with {engine.name} as the runsc runtime; sandboxes will use it.",
+        )
+    if runtimes is None and host.which("runsc") is not None:
+        # Assumption: Podman's compat API did not list its runtimes; runsc on PATH is used
+        # when containers.conf names it, which the sandbox manager reports at start.
+        return _ok(
+            check_id,
+            title,
+            f"{engine.name} does not list its runtimes, but runsc is installed; sandboxes use "
+            "it when containers.conf names it.",
+        )
+    status: Literal["warn", "fail"] = "fail" if settings.profile == "prod" else "warn"
+    return _problem(
+        check_id,
+        title,
+        status,
+        f"runsc is not registered with {engine.name} as a container runtime; sandboxes will "
+        "use hardened runc.",
+        "gVisor is not installed, or it was installed without registering it with the "
+        "engine (`runsc install` writes the daemon configuration).",
+        "For stronger isolation install gVisor and register it (sudo runsc install && sudo "
+        "systemctl restart docker), then run ./install.sh again. The prod profile requires it; "
+        "quickstart goes on with hardened runc.",
+    )
+
+
+def check_nvidia_runtime(host: Host, settings: DoctorSettings) -> CheckResult:
+    check_id, title = "nvidia_runtime", "NVIDIA runtime"
+    if host.which("nvidia-smi") is None:
+        return _skip(check_id, title, "Skipped because no GPU driver was found.")
+    engine = find_runtime_engine(host, settings)
+    if engine is None:
+        return _skip(
+            check_id, title, "Skipped because no container runtime answered on its socket."
+        )
+    toolkit = host.run(["nvidia-ctk", "--version"]) if host.which("nvidia-ctk") else None
+    toolkit_version = _version_from(toolkit.stdout) if toolkit is not None and toolkit.ok else None
+    toolkit_shown = (
+        f"nvidia-container-toolkit {toolkit_version}" if toolkit_version else "the toolkit"
+    )
+    runtimes = registered_runtimes(host, engine)
+    if runtimes is not None and "nvidia" in runtimes:
+        return _ok(
+            check_id,
+            title,
+            f"The NVIDIA runtime is registered with {engine.name} ({toolkit_shown}); the "
+            "model instances get their GPUs.",
+        )
+    if engine.name == "Podman":
+        spec = next((path for path in CDI_SPECS if host.path_exists(path)), None)
+        if spec is not None:
+            return _ok(
+                check_id,
+                title,
+                f"The NVIDIA CDI specification {spec} is present; Podman attaches GPUs to the "
+                "model instances through it.",
+            )
+        return _problem(
+            check_id,
+            title,
+            "fail",
+            "No NVIDIA CDI specification was found for Podman.",
+            "Podman attaches GPUs through a CDI spec that nvidia-ctk generates, and none is at "
+            f"{' or '.join(CDI_SPECS)}.",
+            "Install nvidia-container-toolkit, run sudo nvidia-ctk cdi generate "
+            "--output=/etc/cdi/nvidia.yaml, then run ./install.sh again.",
+        )
+    if toolkit is not None:
+        return _problem(
+            check_id,
+            title,
+            "fail",
+            f"The NVIDIA runtime is not registered with {engine.name}, although "
+            f"{toolkit_shown} is installed.",
+            "`nvidia-ctk runtime configure` was not run for this engine, or the engine was not "
+            "restarted since.",
+            "Run sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart "
+            "docker, then run ./install.sh again.",
+        )
+    return _problem(
+        check_id,
+        title,
+        "fail",
+        f"Neither the NVIDIA runtime nor the NVIDIA Container Toolkit was found for {engine.name}.",
+        "Without them the model instances start without a GPU and no model can load.",
+        "Install nvidia-container-toolkit (Debian/Ubuntu: sudo apt install "
+        "nvidia-container-toolkit), run sudo nvidia-ctk runtime configure --runtime=docker, "
+        "restart Docker, then run ./install.sh again.",
     )
 
 
@@ -577,8 +815,10 @@ ALL_CHECKS: tuple[Check, ...] = (
     check_cpu,
     check_memory,
     check_container_runtime,
+    check_runtime_socket,
     check_sandbox_runtime,
     check_sandbox_isolation,
+    check_gvisor_runtime,
     check_kata_tier,
     check_signature_tooling,
     check_user_namespaces,
@@ -586,6 +826,7 @@ ALL_CHECKS: tuple[Check, ...] = (
     check_cgroups_v2,
     check_gpu,
     check_gpu_container_toolkit,
+    check_nvidia_runtime,
     check_data_root,
     check_disk_space,
     check_web_port,

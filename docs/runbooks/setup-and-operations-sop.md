@@ -1,6 +1,9 @@
 # SOP — Setting up and running SW Local Agent Service
 
-Version 1.1 · 2026-09-16 · Chinese twin: `setup-and-operations-sop.zh-Hant.md` (INV-13).
+Version 1.2 · 2026-09-17 · Chinese twin: `setup-and-operations-sop.zh-Hant.md` (INV-13).
+1.2 adds §7, what runs after a round-2 install (ADR-0015): every service on HTTP, the vLLM
+instances the model manager starts, the runtime-socket choice, the sandbox images, and the
+first coding task.
 Written against branch `claude/vigilant-gauss-tsqua0`. Every "works today" line is covered by a
 test or was run while writing; every "waits" line names what it waits on.
 
@@ -28,14 +31,14 @@ Two states apply to every step:
 | Kernel, skills, HAL, executors, gateway, model manager, Git broker, observability | Today, against fakes | — |
 | Model weights fetched on a connected host and verified offline | Today | — |
 | `docker compose up` of the platform stack from a source checkout on a connected quickstart host (`./install.sh --build`, ADR-0014) | Today | the signed bundle for prod still waits on a release host |
-| vLLM instances started by the model manager | Waits | the Podman driver's dependency approval |
-| Sign-in, people, Postgres tickets | Waits | the `apps/api` stack (ADR-0005) |
+| Sign-in, people, settings, Postgres tickets (`apps/api`, ADR-0005) | Today | — |
+| Every service on its own HTTP surface; the agents startable from the wizards (ADR-0015, round 2) | Today, as each service's slice lands | `docs/api-contract-round-2.md` is the contract; §7 says what to expect |
+| vLLM instances started by the model manager over the runtime socket (Docker or Podman) | Today, with round 2 | the pinned `vllm/vllm-openai` image is pulled by `./install.sh --build` |
 
-The two waiting rows are dependency approvals nobody has answered. Until they are, a connected
-quickstart host runs the stack from source (`./install.sh --build`, ADR-0014) with sign-in,
-Home, People, Settings and Models behind the edge and every other service answering health
-only; an air-gapped host is a development and station-runner host. §10 says how to use it
-that way.
+A connected quickstart host runs the whole stack from source (`./install.sh --build
+--fetch-models`, ADR-0014 and ADR-0015); §7 walks through what is up afterwards. An air-gapped
+host is a development and station-runner host until the signed bundle exists; §11 says how to
+use it that way.
 
 ## 3 · Roles
 
@@ -49,9 +52,11 @@ that way.
 
 ## 4 · Prerequisites
 
-Platform host: 8 GPUs at about 288 GB, NVLink up; Docker; rootless Podman with `uidmap`; gVisor
-(`runsc`); the NVIDIA container toolkit; cgroups v2; at least 200 GiB at `/AI/Agent` and a
-separate volume of at least 1.5 TB for `Models/`; port 443 open, nothing else.
+Platform host: 8 GPUs at about 288 GB, NVLink up; Docker (or rootless Podman with `uidmap`
+and its socket enabled) — the preflight says which engine serves the runtime socket, whether
+gVisor (`runsc`) is registered with it and whether the NVIDIA runtime answers; the NVIDIA
+container toolkit; cgroups v2; at least 200 GiB at `/AI/Agent` and a separate volume of at
+least 1.5 TB for `Models/`; port 443 open, nothing else.
 
 Files to carry in: the release bundle `slas-bundle-<version>.tgz`, `config/cosign.pub`, the
 `models/` directory from §5. Nothing downloads on the platform host (INV-1).
@@ -93,7 +98,68 @@ GPU layout for the B300 (eight GPUs, about 288 GB each):
 `quant: fp4` waits on an ADR; until then the DeepSeek entries validate as `fp8`. The model
 manager starts one instance per role and one per voter (CLAUDE.md §15, decision 14).
 
-## 7 · Procedure C — Daily operation
+## 7 · Round 2 — what runs after `./install.sh --build --fetch-models`
+
+The connected quickstart install (ADR-0014, ADR-0015; `docs/api-contract-round-2.md`). What
+`./install.sh --build` does, in order, after the preflight and the read-only checks:
+
+| # | Step | You see |
+|---|---|---|
+| R1 | pulls every third-party image by its pinned tag — the vLLM image `vllm/vllm-openai:v0.29.0-x86_64-cu129` by the digest the lock records — and retags them `local/…`; builds every first-party image from `images/<name>/Dockerfile` | one "Pulled …" or "Built …" sentence per image; the filled lock at `/AI/Agent/images.lock.json` |
+| R2 | asks the sandbox manager for its image list (`python -m slas_sandbox_manager.images list`), builds each `images/sandbox-<language>/Dockerfile` from the repository root, records their IDs in `/AI/Agent/sandbox-images.lock.json` and writes `/AI/Agent/Toolchains/manifest.json`, the languages and versions those images carry | "Built local/slas/sandbox-python:… ", "Wrote the toolchain manifest to …" |
+| R3 | chooses the runtime socket: Podman's `/run/podman/podman.sock` when it exists, else Docker's `/var/run/docker.sock`, written to `.env` as `SLAS_RUNTIME_SOCKET` | "No Podman socket at …, so SLAS_RUNTIME_SOCKET=/var/run/docker.sock in .env points model-manager and sandbox-manager at Docker's socket; nothing else sees it (INV-4)." |
+| R4 | writes `.env` and the secret files; creates the data directories the services bind-mount, as your user: `Coding`, `Toolchains`, `.git-broker`, `Tickets`, `Skills/library`, `SOP`, `Validation`, `Factory/{Templates,mes/inbox,ca}`, `Models`, `Knowledge`, `Backups/stations`, `qdrant`, `tls` | "Created N data directories under /AI/Agent as uid …" |
+| R5 | places the weights, `docker compose up -d --pull never`, waits for health, prints the sign-in URL | "SW Local Agent Service is up." |
+
+**The services.** Every service is one container serving HTTP on port 8000 inside the stack:
+`api` (the only one behind the edge), `agent-core-orchestrator` (the kernel and the three
+agents), `llm-gateway`, `model-manager`, `sandbox-manager`, `git-broker`,
+`validation-executor`, `factory-executor`; `screen-worker` and `local-search-api` answer
+health only until their rounds. They find each other through the `SLAS_*_URL` variables
+compose sets (`http://<service>:8000`), on the internal `slas-backend` network. `slas status`
+and `docker compose -p slas ps` list them; `docker compose -p slas logs <service>` reads one.
+
+**Where the vLLM instances appear.** They are not compose services. The model manager reads
+`/AI/Agent/Models/models.yaml`, and for every role and every voter creates a container from
+`SLAS_VLLM_IMAGE` over the runtime socket: `vllm-coder`, `vllm-planner`, `vllm-triage`,
+`vllm-embed`, `vllm-rerank`, and `vllm-voter-<model id>` for each voter, all on the
+`slas_slas-inference` network (internal, no egress), with `/AI/Agent/Models` mounted
+read-only and the GPUs the placement assigns (`SLAS_GPU_VRAM_GIB`, 180 GiB per GPU by
+default). `docker ps --filter label=slas.kind=vllm` lists them; the Models page and
+`GET /v1/status` on the model manager say the state of each in a sentence; an instance that
+does not fit is reported, never started. Prometheus scrapes them by those names.
+
+**The Docker socket.** The default stays rootless Podman's socket. On a host that has Docker
+and no Podman socket the installer writes `SLAS_RUNTIME_SOCKET=/var/run/docker.sock` and says
+so; only `model-manager` and `sandbox-manager` mount it, never a service that runs
+model-authored or skill-authored steps (INV-4). Set `SLAS_RUNTIME_SOCKET` yourself before the
+install to name another path (rootless Docker, a rootless Podman socket under
+`/run/user/<uid>/podman/`); a value already in `.env` is kept. The preflight says which engine
+answers on it: "Docker Engine 29.0.1 serves the container-runtime socket /var/run/docker.sock
+…" or "Podman 4.9.3 serves …".
+
+**Sandbox images.** One image per language (`local/slas/sandbox-<language>:<version>`), built
+in R2 from a pinned upstream toolchain image or package, with `git` and `slas-check`, no
+credential helper and no network (INV-14). The sandbox manager starts them by tag over the
+runtime socket, with gVisor (`runsc`) when the engine registers it and hardened `runc`
+otherwise — the preflight and the sandbox manager's health say which. `slas toolchain list`
+shows the manifest R2 wrote.
+
+**The first coding task.**
+
+| # | Do | What happens |
+|---|---|---|
+| C1 | Sign in; Home → New coding task; drop or paste a `plan.md`; give the task a name | the languages are detected from the plan (`/api/v1/coding/languages/detect`) |
+| C2 | Setup: keep or change the languages; leave every version empty | the sentence names the newest bundled version per language, from the manifest of R2 |
+| C3 | Review the proposed steps; **Start task** | ticket `T-coding-n`; the sandbox manager prepares `/AI/Agent/Coding/<you>/Projects/<slug>` (`git init` with your identity) and opens a sandbox on the resolved image |
+| C4 | Watch the checklist and the feed | the first feed line names the toolchain; each step runs `slas-check …` inside the sandbox; the agent commits on its own branch |
+| C5 | Read the result | the walkthrough in English and Chinese, the ZIP under `Artifacts/`, and the Git panel: commit, history, "Push to <remote>" through the broker once a remote is saved under Settings → Git remotes |
+
+If the task stops with "no instance serves the role coder yet", the model manager has not
+finished starting `vllm-coder`: the Models page shows it as starting, with the fit sentence
+when it will never fit.
+
+## 8 · Procedure C — Daily operation
 
 **Home** shows what needs you (three-part notices), what is running, and recent results. The
 health sentence at the top counts running jobs and items that need a person.
@@ -112,7 +178,7 @@ health sentence at the top counts running jobs and items that need a person.
 Rules that never bend: a destructive step needs a per-run approval (INV-7); a unanimous vote is
 input to a person, never the approval (INV-11); the model never controls hardware (INV-3).
 
-## 8 · Procedure D — Models
+## 9 · Procedure D — Models
 
 | Task | Do | Done when |
 |---|---|---|
@@ -126,7 +192,7 @@ Quantisation: FP8 or FP4 on Blackwell, AWQ 4-bit on Ada and Ampere, one BF16 cop
 eval regression (CLAUDE.md §7). Voters should come from three model families; prod ships DeepSeek,
 Qwen and MiniMax, quickstart two families (CLAUDE.md §15, decision 12).
 
-## 9 · Procedure E — Backups, restore, upgrade
+## 10 · Procedure E — Backups, restore, upgrade
 
 | Task | Do | Done when |
 |---|---|---|
@@ -138,7 +204,7 @@ Qwen and MiniMax, quickstart two families (CLAUDE.md §15, decision 12).
 Nightly backups and Qdrant snapshots are automatic in quickstart; prod adds pgBackRest PITR
 under object lock (`docs/runbooks/prod-profile.md`).
 
-## 10 · Development mode, today
+## 11 · Development mode, today
 
 ```bash
 git clone <repository> && cd sw-local-agent-service
@@ -150,7 +216,7 @@ uv run python -m slas_cli doctor               # the preflight against this host
 The dev server binds loopback only; reach it through an SSH tunnel. Station enrolment (B8)
 works today against the executor's enrolment server.
 
-## 11 · Troubleshooting
+## 12 · Troubleshooting
 
 | Symptom | Likely cause | What to do |
 |---|---|---|
@@ -163,11 +229,19 @@ works today against the executor's enrolment server.
 | "… is not turned on for the Factory Agent." | the skill's switch is off here (ADR-0013) | Skills → turn it on for Factory; the next job uses it |
 | "… is waiting for your approval." | a destructive step in the plan | Home notice → Open run → Approve, or remove the step |
 | Station shows "not enrolled yet" | the code was not entered, or it expired after 15 minutes | Issue a new code; enter it on the runner |
+| Preflight ✗ Runtime socket: "No container-runtime socket was found at …" | neither Podman's socket nor Docker's exists | `systemctl --user enable --now podman.socket`, or install Docker; set `SLAS_RUNTIME_SOCKET` for another path |
+| Preflight ! gVisor runtime: "runsc is not registered …" | gVisor not installed or not registered with the engine | `sudo runsc install && sudo systemctl restart docker`; quickstart goes on with hardened runc |
+| Preflight ✗ NVIDIA runtime | the toolkit is installed but not configured for the engine | `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` |
+| "The sandbox image list could not be read …" | this checkout's sandbox manager does not ship `images list` | update the checkout; `uv sync --frozen`; `./install.sh --build` again |
+| `model-manager` or `sandbox-manager` unhealthy: "runtime: down" | the socket in `SLAS_RUNTIME_SOCKET` is not the one the engine serves, or the engine stopped | check `.env`, `ls -l` the socket, restart the engine, `docker compose -p slas up -d` |
+| Coding task: "no instance serves the role coder yet" | `vllm-coder` is still starting, or does not fit | Models page: wait for "healthy", or pick a smaller build for the role |
 
-## 12 · References
+## 13 · References
 
-`CLAUDE.md` (invariants, §3 deployment, §7 models, §9 UI) · `docs/runbooks/deploy-hgx-b300.md`
-(host detail and GPU layout) · `docs/runbooks/prod-profile.md` · `docs/runbooks/restore-drill.md`
-· `docs/runbooks/station-runner.md` · `docs/adr/0013-skill-enablement-record.md` ·
-`config/model-sources.txt` · `config/models.quickstart.yaml` · `config/models.prod.yaml` ·
-`scripts/fetch_models.py`.
+`CLAUDE.md` (invariants, §3 deployment, §7 models, §9 UI) · `docs/api-contract-round-2.md`
+(the round-2 service contract) · `docs/adr/0014-build-from-source-on-a-connected-host.md` ·
+`docs/adr/0015-service-http-surfaces-and-runtime-socket-driver.md` ·
+`docs/runbooks/deploy-hgx-b300.md` (host detail and GPU layout) · `docs/runbooks/prod-profile.md`
+· `docs/runbooks/restore-drill.md` · `docs/runbooks/station-runner.md` ·
+`docs/adr/0013-skill-enablement-record.md` · `config/model-sources.txt` ·
+`config/models.quickstart.yaml` · `config/models.prod.yaml` · `scripts/fetch_models.py`.

@@ -17,12 +17,15 @@ weights in a directory fetched on a connected host (§2).
 | Model weights: fetched on a connected host from the pinned `config/model-sources.txt`, verified and placed under `Models/` with `models.yaml` by `./install.sh --models DIR --models-only` | runs | `scripts/fetch_models.py`, `config/models.<profile>.yaml`, §2 |
 | `docker compose up` of the platform stack from this checkout on a **connected** quickstart host: `./install.sh --build` builds every first-party image (`images/<name>/Dockerfile`, bases by digest), pulls the third-party ones by their pinned tags, writes the filled lock to `/AI/Agent/images.lock.json` and starts the stack | runs (ADR-0014) | §3; the signed offline bundle for prod still waits on a release host and the vendored caches |
 | Behind the edge once the stack is up: sign-in, Home, Admin → People, Admin → Settings, Models (the `api` and `webui` images build `apps/api` and `apps/webui`) | runs with the api and WebUI rounds | `docs/api-contract.md`; the api image needs `apps/api` in the uv workspace as `slas-api` |
-| The other services (orchestrator, gateway, model manager, sandbox manager, git broker, executors, search) inside the stack | health only | each container answers `/health` and `/metrics` with `python -m slas_observability.serve <name>` until its own entrypoint lands; Prometheus and Grafana scrape them today |
-| vLLM instances started by the model manager | **blocked** | the Podman driver behind `ContainerRuntime` waits on its dependency approval; the registry, fit and swap logic are done |
+| The other services (orchestrator, gateway, model manager, sandbox manager, git broker, executors) inside the stack, each on its own HTTP surface, the agents startable from the wizards | round 2 (ADR-0015), as each service's slice lands | `docs/api-contract-round-2.md`; each container's CMD is `<script> serve`; `local-search-api` and `screen-worker` stay health-only until their rounds |
+| vLLM instances started by the model manager over the runtime socket (`vllm-<role>`, `vllm-voter-<model id>` on `slas_slas-inference`) | round 2 | the Engine API driver (`packages/slas-container`) replaces the Podman CLI; the pinned `vllm/vllm-openai:v0.29.0-x86_64-cu129` image is pulled by `--build` and handed to the model manager as `SLAS_VLLM_IMAGE` |
+| Coding Agent sandbox images built on the connected path, the toolchain manifest they satisfy | round 2 | `--build` asks the sandbox manager for its image list and builds each from the repository root |
 
 So: today the box can be prepared, checked, brought up from source with `--build`, and
 signed in to; the agents' services come alive round by round inside the running stack. The
-air-gapped bundle install stays the release path (§3).
+air-gapped bundle install stays the release path (§3). The operator SOP's §7
+(`setup-and-operations-sop.md`) lists what is up after a round-2 install and the first coding
+task.
 
 ## The procedure, in order
 
@@ -141,17 +144,30 @@ git clone <this repository> && cd sw-local-agent-service
 ./install.sh --build --fetch-models             # weights → build and pull images → .env → up → sign-in URL
 ```
 
-What happens, in order: the preflight; the quickstart weights are fetched into `./models`
-(skip `--fetch-models` if they are already under `/AI/Agent/Models`); the locked Python
-environment is created with `uv` when `.venv` is missing; every third-party image is pulled
-by its pinned tag and retagged `local/<reference>`; every first-party image is built from
-`images/<name>/Dockerfile` with the repository root as context (bases by digest, Python
-dependencies from `uv.lock`, JavaScript from `pnpm-lock.yaml`); the filled lock is written
-to `/AI/Agent/images.lock.json` and checked; `.env`, the secret files and `/AI/Agent/tls`
-are written; the weights are placed; `docker compose up -d --pull never` starts the stack;
-the installer waits up to five minutes for every service to be healthy and, if one is not,
-prints its last 20 log lines in three parts. At the end it asks the api whether the
-administrator's one-time password is still pending and prints it only then.
+What happens, in order: the preflight (it says which engine serves the runtime socket —
+"Docker Engine 29.0.1 serves the container-runtime socket /var/run/docker.sock (no Podman
+socket at /run/podman/podman.sock, so .env will name it) …" — whether gVisor is registered
+with it and whether the NVIDIA runtime answers); the quickstart weights are fetched into
+`./models` (skip `--fetch-models` if they are already under `/AI/Agent/Models`); the locked
+Python environment is created with `uv` when `.venv` is missing; every third-party image is
+pulled by its pinned tag — the vLLM image by the digest the lock records — and retagged
+`local/<reference>`; every first-party image is built from `images/<name>/Dockerfile` with
+the repository root as context (bases by digest, Python dependencies from `uv.lock`,
+JavaScript from `pnpm-lock.yaml`); the filled lock is written to `/AI/Agent/images.lock.json`
+and checked; the sandbox images the sandbox manager lists are built the same way, their IDs
+recorded in `/AI/Agent/sandbox-images.lock.json` and the toolchain manifest written to
+`/AI/Agent/Toolchains/manifest.json`; on this Docker-only box `.env` gets
+`SLAS_RUNTIME_SOCKET=/var/run/docker.sock`; `.env`, the secret files and the data
+directories the services bind-mount (`Coding`, `Toolchains`, `.git-broker`, `Tickets`,
+`Skills/library`, `SOP`, `Validation`, `Factory/…`, `Models`, `Knowledge`,
+`Backups/stations`, `qdrant`, `tls`) are written as root, the user the stack runs as; the
+weights are placed; `docker compose up -d --pull never` starts the stack; the installer waits
+up to five minutes for every service to be healthy and, if one is not, prints its last 20
+log lines in three parts. At the end it asks the api whether the administrator's one-time
+password is still pending and prints it only then. The model manager then starts the
+`vllm-*` containers from `/AI/Agent/Models/models.yaml` on the `slas_slas-inference` network;
+`docker ps --filter label=slas.kind=vllm` lists them and the Models page says the state of
+each.
 
 The first build downloads base images and packages and takes a while; a second run is
 mostly cached. `SLAS_REGISTRY` names the local tag label (default `local`),
@@ -160,11 +176,12 @@ export the edge's root from `/AI/Agent/tls/caddy/pki/authorities/local/root.crt`
 it, or set `SLAS_TLS_MODE=provided` in `.env` with `server.crt`/`server.key` under
 `/AI/Agent/tls/` and run `docker compose up -d` again.
 
-Honest scope: this is an INV-1 exception for the preparation window only (ADR-0014). What
-answers behind the edge today is sign-in, Home, Admin → People, Admin → Settings and Models;
-every other service answers `/health` and `/metrics` and nothing else until its round. The
-build is not reproducible bit for bit (Debian and Alpine packages are not yet pinned), which
-is why the filled lock stays on the host and is never committed.
+Honest scope: this is an INV-1 exception for the preparation window only (ADR-0014). Behind
+the edge answer sign-in, Home, Admin → People, Admin → Settings, Models and, as each round-2
+slice lands, the Coding, Validation and Factory wizards (`docs/api-contract-round-2.md`);
+`screen-worker` and `local-search-api` answer `/health` and `/metrics` and nothing else until
+their rounds. The build is not reproducible bit for bit (Debian and Alpine packages are not
+yet pinned), which is why the filled locks stay on the host and are never committed.
 
 ### 3b · From the signed bundle (prod, the release path)
 

@@ -37,4 +37,4 @@ ENV PATH="/opt/slas/.venv/bin:${PATH}" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERE
 USER 10001:10001
 WORKDIR /opt/slas
 EXPOSE 8000
-CMD ["python", "-m", "slas_observability.serve", "validation-executor"]
+CMD ["slas-validation-executor", "serve"]

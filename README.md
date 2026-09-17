@@ -27,10 +27,16 @@ git clone <this repository> && cd sw-local-agent-service
 ```
 
 The images are built from this checkout with every base pinned by digest and every
-dependency from the lock files; the filled image lock lands under `/AI/Agent`. What runs
-today: sign-in, Home, Admin → People, Admin → Settings, Models; the other services answer
-`/health` and `/metrics` only until their rounds land. `--dry-run` first prints what would
-be built, pulled and written.
+dependency from the lock files; the filled image lock lands under `/AI/Agent`. Round 2
+(ADR-0015, `docs/api-contract-round-2.md`) puts the agents on the wire: every service serves
+HTTP on 8000 and finds the others through `SLAS_*_URL`; the model manager starts the vLLM
+instances (`vllm-<role>`, `vllm-voter-<model id>`) from the pinned `vllm/vllm-openai` image
+over the runtime socket — Podman's by default, Docker's when only that one exists, which
+the installer writes into `.env` and says; the sandbox images are built from
+`images/sandbox-*/Dockerfile` and their toolchain manifest written. `--dry-run` first prints
+what would be built, pulled and written; the preflight says which engine serves the socket,
+whether gVisor is registered and whether the NVIDIA runtime answers. The operator SOP's §7
+walks through what is up afterwards and the first coding task.
 
 The air-gapped path (target state, Phase 1), from a signed bundle built on a release host:
 

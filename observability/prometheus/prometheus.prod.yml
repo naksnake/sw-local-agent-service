@@ -83,6 +83,11 @@ scrape_configs:
         labels:
           role: voter
           voter: qwen3.8-27b-fp8
+      - targets:
+          - vllm-voter-minimax-m2.7:8000
+        labels:
+          role: voter
+          voter: minimax-m2.7
   - job_name: dcgm
     static_configs:
       - targets:

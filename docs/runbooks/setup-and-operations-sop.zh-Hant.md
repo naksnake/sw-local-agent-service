@@ -1,6 +1,8 @@
 # SOP — SW Local Agent Service 安裝與營運
 
-版本 1.1 · 2026-09-16 · 英文原文：`setup-and-operations-sop.md`（INV-13）。
+版本 1.2 · 2026-09-17 · 英文原文：`setup-and-operations-sop.md`（INV-13）。
+1.2 新增第 7 節：第二輪安裝（ADR-0015）之後有哪些服務在執行——每個服務各自的 HTTP 介面、由模型管理器
+啟動的 vLLM 實例、容器執行環境 socket 的選擇、沙箱映像，以及第一個程式撰寫任務。
 依分支 `claude/vigilant-gauss-tsqua0` 撰寫。每一條「今日可用」都有測試涵蓋或已實際執行；每一條
 「待決」都寫明所等待的項目。
 
@@ -27,10 +29,11 @@
 | 核心、技能、HAL、執行器、閘道、模型管理、Git 代理、可觀測性 | 今日可用（以假件測試） | — |
 | 在連網主機下載模型權重並離線驗證 | 今日可用 | — |
 | 在連網的 quickstart 主機上，從原始碼檢出以 `docker compose up` 啟動平台服務（`./install.sh --build`，ADR-0014） | 今日可用 | prod 用的簽署安裝包仍待發行主機 |
-| 由模型管理器啟動 vLLM 實例 | 待決 | Podman 驅動程式的相依套件核准 |
-| 登入、人員、Postgres 工單 | 待決 | `apps/api` 技術堆疊（ADR-0005） |
+| 登入、人員、設定、Postgres 工單（`apps/api`，ADR-0005） | 今日可用 | — |
+| 每個服務各自的 HTTP 介面；代理可從精靈啟動（ADR-0015，第二輪） | 今日可用，隨各服務的切片陸續到位 | 契約為 `docs/api-contract-round-2.md`；第 7 節說明可預期的狀態 |
+| 由模型管理器透過容器執行環境 socket（Docker 或 Podman）啟動 vLLM 實例 | 今日可用（第二輪） | 釘選的 `vllm/vllm-openai` 映像由 `./install.sh --build` 拉取 |
 
-兩列「待決」皆為尚未回覆的相依套件核准。在此之前，連網的 quickstart 主機可從原始碼啟動平台服務（`./install.sh --build`，ADR-0014），邊緣後方有登入、首頁、人員、設定與模型頁，其餘服務只回應健康檢查；離線主機則是開發與測試站代理程式主機。第 10 節說明如何如此使用。
+連網的 quickstart 主機可從原始碼啟動整套平台（`./install.sh --build --fetch-models`，ADR-0014 與 ADR-0015）；第 7 節逐一說明安裝後有哪些服務在執行。在簽署安裝包出現之前，離線主機是開發與測試站代理程式主機；第 11 節說明如何如此使用。
 
 ## 3 · 角色
 
@@ -44,9 +47,10 @@
 
 ## 4 · 先決條件
 
-平台主機：8 顆約 288 GB 的 GPU，NVLink 正常；Docker；rootless Podman 與 `uidmap`；gVisor
-（`runsc`）；NVIDIA container toolkit；cgroups v2；`/AI/Agent` 至少 200 GiB，另備至少 1.5 TB 的
-獨立磁碟區供 `Models/` 使用；僅開放 443 埠。
+平台主機：8 顆約 288 GB 的 GPU，NVLink 正常；Docker（或已啟用 socket 的 rootless Podman 與
+`uidmap`）——預檢會說明是哪個引擎提供容器執行環境 socket、gVisor（`runsc`）是否已向該引擎註冊、
+NVIDIA runtime 是否有回應；NVIDIA container toolkit；cgroups v2；`/AI/Agent` 至少 200 GiB，另備至少
+1.5 TB 的獨立磁碟區供 `Models/` 使用；僅開放 443 埠。
 
 需攜入的檔案：發行安裝包 `slas-bundle-<version>.tgz`、`config/cosign.pub`、第 5 節產生的
 `models/` 目錄。平台主機不從網路下載任何東西（INV-1）。
@@ -87,7 +91,60 @@ B300 的 GPU 配置（8 顆 GPU，每顆約 288 GB）：
 
 `quant: fp4` 等待 ADR；在此之前 DeepSeek 條目以 `fp8` 通過驗證。模型管理器為每個角色與每個投票模型各啟動一個實例（CLAUDE.md §15，決議 14）。
 
-## 7 · 程序 C — 日常營運
+## 7 · 第二輪 — `./install.sh --build --fetch-models` 之後有哪些服務在執行
+
+連網的 quickstart 安裝（ADR-0014、ADR-0015；`docs/api-contract-round-2.md`）。預檢與唯讀檢查之後，
+`./install.sh --build` 依序執行：
+
+| # | 步驟 | 你會看到 |
+|---|---|---|
+| R1 | 依釘選的標籤拉取每個第三方映像——vLLM 映像 `vllm/vllm-openai:v0.29.0-x86_64-cu129` 依鎖定檔記錄的摘要拉取——並重新標記為 `local/…`；從 `images/<name>/Dockerfile` 建置每個第一方映像 | 每個映像一句「Pulled …」或「Built …」；填妥的鎖定檔位於 `/AI/Agent/images.lock.json` |
+| R2 | 向沙箱管理器索取映像清單（`python -m slas_sandbox_manager.images list`），以儲存庫根目錄為上下文建置每個 `images/sandbox-<language>/Dockerfile`，將映像 ID 記錄於 `/AI/Agent/sandbox-images.lock.json`，並寫入 `/AI/Agent/Toolchains/manifest.json`（這些映像所含的語言與版本） | 「Built local/slas/sandbox-python:…」、「Wrote the toolchain manifest to …」 |
+| R3 | 選擇容器執行環境 socket：`/run/podman/podman.sock` 存在時用 Podman 的，否則用 Docker 的 `/var/run/docker.sock`，寫入 `.env` 的 `SLAS_RUNTIME_SOCKET` | 「No Podman socket at …, so SLAS_RUNTIME_SOCKET=/var/run/docker.sock in .env points model-manager and sandbox-manager at Docker's socket; nothing else sees it (INV-4).」 |
+| R4 | 寫入 `.env` 與密鑰檔；以你的使用者身分建立各服務綁定掛載的資料目錄：`Coding`、`Toolchains`、`.git-broker`、`Tickets`、`Skills/library`、`SOP`、`Validation`、`Factory/{Templates,mes/inbox,ca}`、`Models`、`Knowledge`、`Backups/stations`、`qdrant`、`tls` | 「Created N data directories under /AI/Agent as uid …」 |
+| R5 | 放置權重、`docker compose up -d --pull never`、等待健康檢查、印出登入網址 | 「SW Local Agent Service is up.」 |
+
+**服務。** 每個服務都是一個容器，在平台內部以 8000 埠提供 HTTP：`api`（唯一位於邊緣後方者）、
+`agent-core-orchestrator`（核心與三個代理）、`llm-gateway`、`model-manager`、`sandbox-manager`、
+`git-broker`、`validation-executor`、`factory-executor`；`screen-worker` 與 `local-search-api` 在其輪次
+到來前只回應健康檢查。服務之間透過 compose 設定的 `SLAS_*_URL` 變數（`http://<service>:8000`）在內部的
+`slas-backend` 網路上互相尋找。`slas status` 與 `docker compose -p slas ps` 列出所有服務；
+`docker compose -p slas logs <service>` 讀取其中一個的日誌。
+
+**vLLM 實例出現的位置。** 它們不是 compose 服務。模型管理器讀取 `/AI/Agent/Models/models.yaml`，為每個
+角色與每個投票模型透過容器執行環境 socket 以 `SLAS_VLLM_IMAGE` 建立一個容器：`vllm-coder`、`vllm-planner`、
+`vllm-triage`、`vllm-embed`、`vllm-rerank`，以及每個投票模型一個 `vllm-voter-<model id>`，全部位於
+`slas_slas-inference` 網路（內部網路，無對外連線），以唯讀方式掛載 `/AI/Agent/Models`，並配置放置演算法
+指定的 GPU（`SLAS_GPU_VRAM_GIB`，預設每顆 GPU 180 GiB）。`docker ps --filter label=slas.kind=vllm`
+列出它們；Models 頁面與模型管理器的 `GET /v1/status` 以一句話說明每個實例的狀態；容納不下的實例會被
+回報，絕不啟動。Prometheus 以這些名稱抓取指標。
+
+**Docker socket。** 預設仍為 rootless Podman 的 socket。在有 Docker 而沒有 Podman socket 的主機上，
+安裝程式會寫入 `SLAS_RUNTIME_SOCKET=/var/run/docker.sock` 並說明；只有 `model-manager` 與 `sandbox-manager`
+掛載它，執行模型撰寫或技能撰寫步驟的服務絕不掛載（INV-4）。若要使用其他路徑（rootless Docker、
+`/run/user/<uid>/podman/` 下的 rootless Podman socket），請在安裝前自行設定 `SLAS_RUNTIME_SOCKET`；
+`.env` 中既有的值會被保留。預檢會說明是哪個引擎在該 socket 上回應：「Docker Engine 29.0.1 serves the
+container-runtime socket /var/run/docker.sock …」或「Podman 4.9.3 serves …」。
+
+**沙箱映像。** 每種語言一個映像（`local/slas/sandbox-<language>:<version>`），於 R2 由釘選的上游工具鏈
+映像或套件建置，內含 `git` 與 `slas-check`，沒有憑證輔助程式也沒有網路（INV-14）。沙箱管理器透過容器
+執行環境 socket 依標籤啟動它們；引擎已註冊 gVisor（`runsc`）時使用 gVisor，否則使用強化的 `runc`——
+預檢與沙箱管理器的健康檢查都會說明是哪一種。`slas toolchain list` 顯示 R2 寫入的清單。
+
+**第一個程式撰寫任務。**
+
+| # | 動作 | 結果 |
+|---|---|---|
+| C1 | 登入；Home → New coding task；放入或貼上 `plan.md`；為任務命名 | 從計畫偵測語言（`/api/v1/coding/languages/detect`） |
+| C2 | Setup：保留或修改語言；版本全部留空 | 句子會依 R2 的清單說明每種語言最新的隨附版本 |
+| C3 | 檢視建議的步驟；**Start task** | 工單 `T-coding-n`；沙箱管理器準備 `/AI/Agent/Coding/<you>/Projects/<slug>`（以你的身分 `git init`），並以解析出的映像開啟沙箱 |
+| C4 | 觀看檢查清單與動態 | 第一行動態寫出工具鏈；每個步驟在沙箱內執行 `slas-check …`；代理在自己的分支提交 |
+| C5 | 閱讀結果 | 英文與中文的程式碼導覽、`Artifacts/` 下的 ZIP，以及 Git 面板：提交、歷史，並在 Settings → Git remotes 儲存遠端後可透過代理「Push to <remote>」 |
+
+若任務停在「no instance serves the role coder yet」，表示模型管理器尚未啟動完成 `vllm-coder`：Models
+頁面會顯示它正在啟動；若永遠容納不下，則顯示容納句子。
+
+## 8 · 程序 C — 日常營運
 
 **Home** 顯示需要你處理的事項（三段式提示）、正在執行的工作與最近結果。頂端的健康狀態句子統計執行中
 的工作與需要人員處理的項目。
@@ -106,7 +163,7 @@ B300 的 GPU 配置（8 顆 GPU，每顆約 288 GB）：
 絕不放寬的規則：具破壞性的步驟每次執行都需要核准（INV-7）；一致的投票只是給人的輸入，不是核准本身
 （INV-11）；模型永不控制硬體（INV-3）。
 
-## 8 · 程序 D — 模型
+## 9 · 程序 D — 模型
 
 | 任務 | 動作 | 完成判準 |
 |---|---|---|
@@ -120,7 +177,7 @@ B300 的 GPU 配置（8 顆 GPU，每顆約 288 GB）：
 （CLAUDE.md §7）。投票模型應來自三個模型家族；prod 隨附 DeepSeek、Qwen 與 MiniMax，quickstart 為兩個家族
 （CLAUDE.md §15，決議 12）。
 
-## 9 · 程序 E — 備份、還原、升級
+## 10 · 程序 E — 備份、還原、升級
 
 | 任務 | 動作 | 完成判準 |
 |---|---|---|
@@ -132,7 +189,7 @@ B300 的 GPU 配置（8 顆 GPU，每顆約 288 GB）：
 quickstart 每夜自動備份並拍攝 Qdrant 快照；prod 另加 pgBackRest PITR 與物件鎖定
 （`docs/runbooks/prod-profile.md`）。
 
-## 10 · 今日的開發模式
+## 11 · 今日的開發模式
 
 ```bash
 git clone <repository> && cd sw-local-agent-service
@@ -143,7 +200,7 @@ uv run python -m slas_cli doctor               # 對本主機執行預檢
 
 開發伺服器僅綁定 loopback；請透過 SSH 通道存取。測試站註冊（B8）今日即可對執行器的註冊伺服器運作。
 
-## 11 · 疑難排解
+## 12 · 疑難排解
 
 | 徵狀 | 可能原因 | 處置 |
 |---|---|---|
@@ -156,11 +213,19 @@ uv run python -m slas_cli doctor               # 對本主機執行預檢
 | 「… is not turned on for the Factory Agent.」 | 該技能在本安裝的開關為關（ADR-0013） | Skills → 為 Factory 開啟；下一個作業即可使用 |
 | 「… is waiting for your approval.」 | 計畫中有具破壞性的步驟 | Home 提示 → Open run → Approve，或移除該步驟 |
 | 測試站顯示「not enrolled yet」 | 代碼未輸入，或已於 15 分鐘後過期 | 重新核發代碼；在代理程式輸入 |
+| 預檢 ✗ Runtime socket：「No container-runtime socket was found at …」 | Podman 的 socket 與 Docker 的 socket 都不存在 | `systemctl --user enable --now podman.socket`，或安裝 Docker；其他路徑請設定 `SLAS_RUNTIME_SOCKET` |
+| 預檢 ! gVisor runtime：「runsc is not registered …」 | 未安裝 gVisor，或未向引擎註冊 | `sudo runsc install && sudo systemctl restart docker`；quickstart 以強化的 runc 繼續 |
+| 預檢 ✗ NVIDIA runtime | toolkit 已安裝但未為該引擎設定 | `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` |
+| 「The sandbox image list could not be read …」 | 本檢出的沙箱管理器尚未提供 `images list` | 更新檢出；`uv sync --frozen`；再執行 `./install.sh --build` |
+| `model-manager` 或 `sandbox-manager` 不健康：「runtime: down」 | `SLAS_RUNTIME_SOCKET` 指向的 socket 不是引擎提供的，或引擎已停止 | 檢查 `.env`、`ls -l` 該 socket、重啟引擎、`docker compose -p slas up -d` |
+| 程式撰寫任務：「no instance serves the role coder yet」 | `vllm-coder` 仍在啟動，或容納不下 | Models 頁面：等待「healthy」，或為該角色選擇較小的版本 |
 
-## 12 · 參考
+## 13 · 參考
 
-`CLAUDE.md`（不變式、§3 部署、§7 模型、§9 UI）· `docs/runbooks/deploy-hgx-b300.md`
-（主機細節與 GPU 配置）· `docs/runbooks/prod-profile.md` · `docs/runbooks/restore-drill.md`
-· `docs/runbooks/station-runner.md` · `docs/adr/0013-skill-enablement-record.md` ·
-`config/model-sources.txt` · `config/models.quickstart.yaml` · `config/models.prod.yaml` ·
-`scripts/fetch_models.py`。
+`CLAUDE.md`（不變式、§3 部署、§7 模型、§9 UI）· `docs/api-contract-round-2.md`（第二輪服務契約）·
+`docs/adr/0014-build-from-source-on-a-connected-host.md` ·
+`docs/adr/0015-service-http-surfaces-and-runtime-socket-driver.md` ·
+`docs/runbooks/deploy-hgx-b300.md`（主機細節與 GPU 配置）· `docs/runbooks/prod-profile.md` ·
+`docs/runbooks/restore-drill.md` · `docs/runbooks/station-runner.md` ·
+`docs/adr/0013-skill-enablement-record.md` · `config/model-sources.txt` ·
+`config/models.quickstart.yaml` · `config/models.prod.yaml` · `scripts/fetch_models.py`。
