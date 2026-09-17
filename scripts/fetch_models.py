@@ -310,36 +310,60 @@ class Hub:
         )
 
     def download(self, url: str, target: Path, *, expected_size: int, log: TextIO) -> None:
-        """Resume into `<target>.part`, then rename. Nothing about the token is ever printed."""
+        """Resume into `<target>.part`, then rename. Nothing about the token is ever printed.
+
+        A link that drops mid-file is picked up where it stopped, inside this run, with a
+        Range request and the same growing pause as a failed connection; the attempt counter
+        resets whenever bytes arrive, so a slow flaky link finishes as long as it makes
+        progress, and only a link that stalls `retries` times in a row without progress ends
+        the run.
+        """
         part = part_of(target)
         part.parent.mkdir(parents=True, exist_ok=True)
         have = part.stat().st_size if part.exists() else 0
         if expected_size and have > expected_size:
             part.unlink()
             have = 0
-        headers = {"Range": f"bytes={have}-"} if have else {}
-        try:
-            with self._open(self._request(url, headers=headers), log=log) as response:
-                status = getattr(response, "status", 200)
-                mode = "ab" if have and status == 206 else "wb"
-                if mode == "wb":
-                    have = 0
-                with part.open(mode) as handle:
-                    while True:
-                        chunk = response.read(CHUNK)
-                        if not chunk:
-                            break
-                        handle.write(chunk)
-                        have += len(chunk)
-        except urllib.error.HTTPError as exc:
-            raise self._http_error(url, exc) from exc
-        except OSError as exc:  # the connection dropped or timed out mid-file
-            raise FetchError(
-                f"The download of {target.name} stopped after {have} bytes.",
-                f"The connection dropped: {getattr(exc, 'reason', None) or exc}.",
-                "Run the same command again; it resumes where it stopped. If this site uses a "
-                "proxy, export HTTPS_PROXY=http://<proxy>:<port> first.",
-            ) from exc
+        stalls = 0
+        while True:
+            before = have
+            headers = {"Range": f"bytes={have}-"} if have else {}
+            reason: object | None = None
+            try:
+                with self._open(self._request(url, headers=headers), log=log) as response:
+                    status = getattr(response, "status", 200)
+                    mode = "ab" if have and status == 206 else "wb"
+                    if mode == "wb":
+                        have = 0
+                    with part.open(mode) as handle:
+                        while True:
+                            chunk = response.read(CHUNK)
+                            if not chunk:
+                                break
+                            handle.write(chunk)
+                            have += len(chunk)
+            except urllib.error.HTTPError as exc:
+                raise self._http_error(url, exc) from exc
+            except OSError as exc:  # the connection dropped or timed out mid-file
+                reason = getattr(exc, "reason", None) or exc
+            if reason is None:
+                if not expected_size or have >= expected_size:
+                    break
+                reason = "the connection closed early"  # a short body, no exception
+            stalls = 0 if have > before else stalls + 1
+            if stalls > self.retries:
+                raise FetchError(
+                    f"The download of {target.name} stopped after {have} bytes.",
+                    f"The connection dropped {self.retries + 1} times in a row without "
+                    f"progress: {reason}.",
+                    "Run the same command again; it resumes where it stopped. If this site "
+                    "uses a proxy, export HTTPS_PROXY=http://<proxy>:<port> first.",
+                )
+            pause = self.retry_pause_s * 2 ** max(stalls - 1, 0)
+            log.write(
+                f"  {target.name} stalled at {human(have)} ({reason}); resuming in {pause:g} s\n"
+            )
+            (self.sleep or time.sleep)(pause)
         if expected_size and have != expected_size:
             raise FetchError(
                 f"{target.name} is {have} bytes, but the hub says {expected_size}.",

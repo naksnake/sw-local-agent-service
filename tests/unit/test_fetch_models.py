@@ -51,6 +51,7 @@ class FakeHub:
     def __init__(self) -> None:
         self.requests: list[tuple[str, str | None]] = []
         self.cut_after: int | None = None  # serve at most this many bytes once, then behave
+        self.stall_ranges = False  # answer every Range request with headers and no body
         self.gated = False
         self.corrupt = False
         self.files: dict[str, bytes] = {
@@ -117,6 +118,13 @@ class FakeHub:
                     range_header = self.headers.get("Range")
                     if range_header:
                         start = int(range_header.removeprefix("bytes=").rstrip("-"))
+                        if outer.stall_ranges:  # the link drops before a single byte arrives
+                            self.send_response(206)
+                            self.send_header("Content-Length", str(len(data) - start))
+                            self.end_headers()
+                            self.wfile.flush()
+                            self.connection.close()
+                            return
                         self._send(
                             206,
                             data[start:],
@@ -227,18 +235,45 @@ def test_dry_run_lists_sizes_checks_the_disk_and_downloads_nothing(
     assert not (tmp_path / "small").exists(), "the disk check runs before any download"
 
 
-def test_a_cut_download_resumes_and_the_disk_check_counts_the_partial_file(
+def test_a_cut_download_resumes_inside_the_run(
     hub: FakeHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    pauses: list[float] = []
+    monkeypatch.setattr(fm.time, "sleep", pauses.append)
     dest = tmp_path / "models"
     hub.cut_after = 300_000
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))
+    assert code == 0, out
+    assert (
+        "model.safetensors stalled at 293.0 KiB (the connection closed early); resuming in 2 s"
+        in out
+    )
+    assert pauses == [2.0]
+    assert (dest / "tiny" / "model.safetensors").read_bytes() == WEIGHTS
+    ranges = [r for path, r in hub.requests if path.endswith("/model.safetensors") and r]
+    assert ranges == ["bytes=300000-"], "picked up where it stopped, in the same run"
+    assert not (dest / "tiny" / "model.safetensors.part").exists()
+
+
+def test_a_link_that_stalls_without_progress_gives_up_and_the_disk_check_counts_the_part(
+    hub: FakeHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pauses: list[float] = []
+    monkeypatch.setattr(fm.time, "sleep", pauses.append)
+    dest = tmp_path / "models"
+    hub.cut_after = 300_000
+    hub.stall_ranges = True
+    code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))
     assert code == 1
-    assert "model.safetensors is 300000 bytes, but the hub says 1048576." in out
+    assert "The download of model.safetensors stopped after 300000 bytes." in out
+    assert "dropped 5 times in a row without progress: the connection closed early." in out
     assert "it resumes where it stopped" in out
+    assert pauses == [2.0, 2.0, 4.0, 8.0, 16.0], "one pause per stall, growing without progress"
     assert (dest / "tiny" / "model.safetensors.part").stat().st_size == 300_000
 
     # Room only for the remainder: the plan subtracts the .part and the rerun goes ahead.
+    hub.stall_ranges = False
+    hub.requests.clear()
     remainder = 1_048_576 - 300_000 + len(CONFIG) + len(README)
     real_disk_usage = fm.shutil.disk_usage
     monkeypatch.setattr(fm.shutil, "disk_usage", lambda _path: SimpleNamespace(free=remainder + 10))
