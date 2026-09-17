@@ -264,8 +264,16 @@ class SandboxManager:
                 )
             ) from None
 
+    def sessions(self, *, user: str | None = None, slug: str | None = None) -> list[Session]:
+        """Every open session, optionally narrowed to one person and one project."""
+        return [
+            s
+            for s in self._sessions.values()
+            if (user is None or s.user == user) and (slug is None or s.slug == slug)
+        ]
+
     def sessions_for(self, user: str) -> list[Session]:
-        return [s for s in self._sessions.values() if s.user == user]
+        return self.sessions(user=user)
 
     def exec(
         self,
