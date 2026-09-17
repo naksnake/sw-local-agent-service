@@ -24,6 +24,7 @@ On a connected Ubuntu host with Docker and Compose (ADR-0014; quickstart profile
 ```bash
 git clone <this repository> && cd sw-local-agent-service
 ./install.sh --build --fetch-models   # preflight → weights → build and pull images → .env → up → sign-in URL
+# Starts the Coding Agent (ADR-0017). Add --agents coding,validation,factory for the other two.
 ```
 
 The images are built from this checkout with every base pinned by digest and every

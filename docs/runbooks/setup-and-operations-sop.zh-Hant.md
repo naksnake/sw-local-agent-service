@@ -1,6 +1,6 @@
 # SOP — SW Local Agent Service 安裝與營運
 
-版本 1.2 · 2026-09-17 · 英文原文：`setup-and-operations-sop.md`（INV-13）。
+版本 1.3 · 2026-09-17 · 英文原文：`setup-and-operations-sop.md`（INV-13）。
 1.2 新增第 7 節：第二輪安裝（ADR-0015）之後有哪些服務在執行——每個服務各自的 HTTP 介面、由模型管理器
 啟動的 vLLM 實例、容器執行環境 socket 的選擇、沙箱映像，以及第一個程式撰寫任務。
 依分支 `claude/vigilant-gauss-tsqua0` 撰寫。每一條「今日可用」都有測試涵蓋或已實際執行；每一條
@@ -103,6 +103,12 @@ B300 的 GPU 配置（8 顆 GPU，每顆約 288 GB）：
 | R3 | 選擇容器執行環境 socket：`/run/podman/podman.sock` 存在時用 Podman 的，否則用 Docker 的 `/var/run/docker.sock`，寫入 `.env` 的 `SLAS_RUNTIME_SOCKET` | 「No Podman socket at …, so SLAS_RUNTIME_SOCKET=/var/run/docker.sock in .env points model-manager and sandbox-manager at Docker's socket; nothing else sees it (INV-4).」 |
 | R4 | 寫入 `.env` 與密鑰檔；以你的使用者身分建立各服務綁定掛載的資料目錄：`Coding`、`Toolchains`、`.git-broker`、`Tickets`、`Skills/library`、`SOP`、`Validation`、`Factory/{Templates,mes/inbox,ca}`、`Models`、`Knowledge`、`Backups/stations`、`qdrant`、`tls` | 「Created N data directories under /AI/Agent as uid …」 |
 | R5 | 放置權重、`docker compose up -d --pull never`、等待健康檢查、印出登入網址 | 「SW Local Agent Service is up.」 |
+
+**啟動哪些代理程式（ADR-0017）。** 預設只啟動 **Coding Agent**：`.env` 中 `SLAS_AGENTS=coding`，不建立
+`validation-executor` 與 `factory-executor` 容器，WebUI 顯示 Coding、Runs、Models、Skills 與 Admin。
+Validation 與 Factory 已建置並測試但保持關閉；`./install.sh --build --agents coding,validation,factory`
+（或 `SLAS_AGENTS`）會建置它們的執行器映像、啟動其 compose profile 並加入其頁面。以不同的清單再執行一次
+即可更改選擇；安裝的其他部分不變。
 
 **服務。** 每個服務都是一個容器，在平台內部以 8000 埠提供 HTTP：`api`（唯一位於邊緣後方者）、
 `agent-core-orchestrator`（核心與三個代理）、`llm-gateway`、`model-manager`、`sandbox-manager`、

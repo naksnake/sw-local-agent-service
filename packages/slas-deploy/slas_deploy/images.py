@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Final, Literal
 
 from pydantic import Field
@@ -194,20 +194,82 @@ DEFAULT_IMAGES: Final[tuple[LockedImage, ...]] = (
 )
 
 
+#: The agents an installation starts (ADR-0017). `coding` is always on; the other two bring
+#: their executor container and compose profile only when named in SLAS_AGENTS.
+AGENTS: Final[tuple[str, ...]] = ("coding", "validation", "factory")
+DEFAULT_AGENTS: Final[tuple[str, ...]] = ("coding",)
+#: The first-party images only one optional agent starts.
+AGENT_IMAGES: Final[dict[str, frozenset[str]]] = {
+    "validation": frozenset({"validation-executor"}),
+    "factory": frozenset({"factory-executor"}),
+}
+
+
+class AgentsError(ValueError):
+    def __init__(self, message: ThreePartMessage) -> None:
+        super().__init__(message.what_happened)
+        self.message = message
+
+
+def parse_agents(text: str | None) -> tuple[str, ...]:
+    """`SLAS_AGENTS` / `--agents`: a comma list of agents; empty means the default (coding)."""
+    if text is None or not text.strip():
+        return DEFAULT_AGENTS
+    chosen: list[str] = []
+    for part in text.split(","):
+        name = part.strip().lower()
+        if not name:
+            continue
+        if name not in AGENTS:
+            raise AgentsError(
+                ThreePartMessage(
+                    f'The agent "{name}" is not known.',
+                    "SLAS_AGENTS or --agents names the agents to start.",
+                    f"Use a comma list of {', '.join(AGENTS)}; the default is coding.",
+                )
+            )
+        if name not in chosen:
+            chosen.append(name)
+    if "coding" not in chosen:
+        chosen.insert(0, "coding")
+    return tuple(name for name in AGENTS if name in chosen)
+
+
+def images_off_for(agents: Sequence[str]) -> frozenset[str]:
+    """First-party image names an installation without these agents does not start."""
+    off: set[str] = set()
+    for agent, names in AGENT_IMAGES.items():
+        if agent not in agents:
+            off |= names
+    return frozenset(off)
+
+
+def compose_profiles(agents: Sequence[str]) -> list[str]:
+    """The compose profiles (`COMPOSE_PROFILES`) the chosen agents need."""
+    return [agent for agent in AGENTS if agent in agents and agent in AGENT_IMAGES]
+
+
 class ImageLock(SlasModel):
     version: int = 1
     default_registry: str = DEFAULT_REGISTRY
     images: list[LockedImage]
 
-    def for_profile(self, profile: Profile) -> list[LockedImage]:
-        return [image for image in self.images if profile in image.profiles]
+    def for_profile(
+        self, profile: Profile, agents: Sequence[str] | None = None
+    ) -> list[LockedImage]:
+        """The images the profile starts; with `agents`, minus the executors of agents that
+        are off (ADR-0017)."""
+        off = images_off_for(agents) if agents is not None else frozenset()
+        return [
+            image for image in self.images if profile in image.profiles and image.name not in off
+        ]
 
-    def unpinned(self, profile: Profile) -> list[LockedImage]:
-        return [image for image in self.for_profile(profile) if not image.pinned]
+    def unpinned(self, profile: Profile, agents: Sequence[str] | None = None) -> list[LockedImage]:
+        return [image for image in self.for_profile(profile, agents) if not image.pinned]
 
-    def sentence(self, profile: Profile) -> str:
-        wanted = self.for_profile(profile)
-        missing = self.unpinned(profile)
+    def sentence(self, profile: Profile, agents: Sequence[str] | None = None) -> str:
+        wanted = self.for_profile(profile, agents)
+        missing = self.unpinned(profile, agents)
         if not missing:
             return f"All {len(wanted)} images the {profile} profile starts are pinned by digest."
         names = ", ".join(image.name for image in missing[:6]) + (
@@ -276,10 +338,12 @@ class LockError(ValueError):
         self.message = message
 
 
-def check_lock(lock: ImageLock, profile: Profile) -> list[LockedImage]:
+def check_lock(
+    lock: ImageLock, profile: Profile, agents: Sequence[str] | None = None
+) -> list[LockedImage]:
     """The images the profile starts, or a three-part error when one is not pinned or is
     referenced by a mutable tag."""
-    wanted = lock.for_profile(profile)
+    wanted = lock.for_profile(profile, agents)
     for image in wanted:
         if _LATEST.search(image.reference):
             raise LockError(
@@ -289,11 +353,11 @@ def check_lock(lock: ImageLock, profile: Profile) -> list[LockedImage]:
                     "Pin it to an immutable tag in slas_deploy.images and render the lock again.",
                 )
             )
-    missing = lock.unpinned(profile)
+    missing = lock.unpinned(profile, agents)
     if missing:
         raise LockError(
             ThreePartMessage(
-                lock.sentence(profile),
+                lock.sentence(profile, agents),
                 "The lock has no digest or image ID for them yet; nothing has verified what "
                 "those tags point at.",
                 "On a connected build host run scripts/lock-images.sh, commit the lock and the "

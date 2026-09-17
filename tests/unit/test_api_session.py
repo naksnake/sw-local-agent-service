@@ -55,6 +55,7 @@ def test_public_installation_needs_no_sign_in(harness: Harness) -> None:
     assert response.json() == {
         "installation_name": "SW Local Agent Service",
         "auth_modes": ["builtin"],
+        "agents": ["coding"],
         "version": "1.2.3",
         "session_lifetime_hours": 8,
     }

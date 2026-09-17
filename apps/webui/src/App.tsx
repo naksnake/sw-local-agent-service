@@ -103,18 +103,22 @@ function Routed(props: AppProps) {
   const anonymous = session !== null && session.state.status === "anonymous";
   const mustChange = person?.must_change_password === true;
   const can = (capability: string) => session === null || session.hasCapability(capability);
+  // Which agents this installation starts (ADR-0017): the api says; until it has answered,
+  // or without a SessionApi (tests), every agent counts as on.
+  const agents = session?.installation?.agents;
+  const agentOn = (agent: "coding" | "validation" | "factory") => agents === undefined || agents.includes(agent);
 
   const tabs: AdminTab[] = [];
   if (peopleApi !== undefined && can("admin:people")) tabs.push("people");
   if (settingsApi !== undefined && can("admin:settings")) tabs.push("settings");
   if (gitApi !== undefined && can("git:hosts_manage")) tabs.push("git-hosts");
-  if (stationsApi !== undefined && can("factory:stations_manage")) tabs.push("stations");
+  if (stationsApi !== undefined && agentOn("factory") && can("factory:stations_manage")) tabs.push("stations");
 
   const available: Record<string, boolean> = {
     "/": true,
-    "/coding": codingApi !== undefined,
-    "/validation": validationApi !== undefined,
-    "/factory": factoryApi !== undefined,
+    "/coding": codingApi !== undefined && agentOn("coding"),
+    "/validation": validationApi !== undefined && agentOn("validation"),
+    "/factory": factoryApi !== undefined && agentOn("factory"),
     "/runs": true,
     "/models": true,
     "/skills": true,

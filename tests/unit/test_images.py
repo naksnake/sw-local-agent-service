@@ -167,3 +167,33 @@ def test_base_digests_are_documented_and_the_context_is_kept_small() -> None:
         '-f "$repo/images/$name/Dockerfile"' in build_bundle
         and '"$repo" >/dev/null' in build_bundle
     )
+
+
+def test_agents_choose_which_executor_images_start() -> None:
+    """ADR-0017: coding is always on; validation and factory bring their executor images."""
+    from slas_deploy.images import (
+        AgentsError,
+        compose_profiles,
+        default_lock,
+        images_off_for,
+        parse_agents,
+    )
+
+    assert parse_agents(None) == ("coding",) and parse_agents("  ") == ("coding",)
+    assert parse_agents("validation") == ("coding", "validation")
+    assert parse_agents("factory, coding,factory") == ("coding", "factory")
+    assert parse_agents("coding,validation,factory") == ("coding", "validation", "factory")
+    with pytest.raises(AgentsError) as raised:
+        parse_agents("coding,screen")
+    assert raised.value.message.what_happened == 'The agent "screen" is not known.'
+    assert images_off_for(("coding",)) == {"validation-executor", "factory-executor"}
+    assert images_off_for(("coding", "validation")) == {"factory-executor"}
+    assert compose_profiles(("coding",)) == []
+    assert compose_profiles(("coding", "factory")) == ["factory"]
+    assert compose_profiles(("coding", "validation", "factory")) == ["validation", "factory"]
+
+    lock = default_lock()
+    everything = {image.name for image in lock.for_profile("quickstart")}
+    coding_only = {image.name for image in lock.for_profile("quickstart", ("coding",))}
+    assert everything - coding_only == {"validation-executor", "factory-executor"}
+    assert "agent-core-orchestrator" in coding_only and "sandbox-manager" in coding_only

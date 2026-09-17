@@ -162,7 +162,7 @@ def run_install(
 def quickstart_images() -> tuple[list[str], list[str]]:
     """First-party names and third-party pull references the quickstart profile needs."""
     lock = default_lock()
-    wanted = lock.for_profile("quickstart")
+    wanted = lock.for_profile("quickstart", ("coding",))  # the default agents (ADR-0017)
     return (
         [i.name for i in wanted if i.first_party],
         [i.pull_reference for i in wanted if not i.first_party],
@@ -194,6 +194,9 @@ def test_build_dry_run_describes_every_pull_and_build_and_touches_nothing(tmp_pa
     assert "Would build local/slas/postgres-pgbackrest" not in out, (
         "prod-only images are not built for quickstart"
     )
+    assert "Would build local/slas/validation-executor" not in out, "off by default (ADR-0017)"
+    assert "Would build local/slas/factory-executor" not in out
+    assert "Compose profiles:" not in out
     assert "hashicorp/vault" not in out
     assert (
         f"Would write the filled image lock to {data_root}/images.lock.json ({len(first_party)} built, {len(third_party)} pulled); it is never committed."
@@ -205,6 +208,7 @@ def test_build_dry_run_describes_every_pull_and_build_and_touches_nothing(tmp_pa
     docker_sock = fake_docker_socket(tmp_path)
     order = [
         "Verifying what will be installed (quickstart profile).",
+        "Agents: coding. The validation and factory executors stay off; enable them with --agents coding,validation,factory.",
         "Images are built from this checkout and pulled by their pinned tags after the read-only checks (ADR-0014)",
         "Building the first-party images from",
         "the running platform still has no egress (ADR-0014)",
@@ -231,6 +235,31 @@ def test_build_dry_run_describes_every_pull_and_build_and_touches_nothing(tmp_pa
     assert "Would run: docker load" not in out
     assert not data_root.exists(), "a dry run writes nothing"
     assert calls == ["docker compose version"], calls
+
+
+def test_agents_flag_adds_the_executors_and_their_compose_profiles(tmp_path: Path) -> None:
+    """ADR-0017: `--agents coding,validation,factory` builds both executor images and starts
+    their compose profiles; an unknown agent stops before anything is verified."""
+    result, _calls, _data_root = run_install(
+        tmp_path, "--dry-run", "--agents", "coding,validation,factory"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = result.stdout
+    assert "Agents: coding, validation, factory. Every executor starts." in out
+    assert f"Would build local/slas/validation-executor:{VERSION}" in out
+    assert f"Would build local/slas/factory-executor:{VERSION}" in out
+    assert "Compose profiles: validation,factory (the executors of the agents you chose)." in out
+
+    only_factory, _, _ = run_install(tmp_path, "--dry-run", "--agents", "factory")
+    assert only_factory.returncode == 0, only_factory.stdout + only_factory.stderr
+    assert "Agents: coding, factory." in only_factory.stdout
+    assert "Would build local/slas/validation-executor" not in only_factory.stdout
+    assert "Compose profiles: factory (" in only_factory.stdout
+
+    unknown, calls, _ = run_install(tmp_path, "--dry-run", "--agents", "coding,screen")
+    assert unknown.returncode == 2
+    assert 'The agent "screen" is not known.' in unknown.stderr
+    assert calls == [], "the refusal comes before docker is asked anything"
 
 
 def test_dry_run_without_the_sandbox_image_list_says_so_and_goes_on(tmp_path: Path) -> None:
@@ -292,8 +321,14 @@ def test_build_pulls_tags_builds_writes_a_pinned_lock_and_starts_the_stack(tmp_p
         in out
     )
     lock = parse_lock_json(lock_path.read_text())
-    assert lock.unpinned("quickstart") == []
+    assert lock.unpinned("quickstart", ("coding",)) == [], "every image the install starts"
+    assert {i.name for i in lock.unpinned("quickstart")} == {
+        "validation-executor",
+        "factory-executor",
+    }, "the executors of the agents that are off were not built (ADR-0017)"
     assert {i.name for i in lock.unpinned("prod")} == {
+        "validation-executor",
+        "factory-executor",
         "mc",
         "vault",
         "keycloak",
@@ -301,7 +336,7 @@ def test_build_pulls_tags_builds_writes_a_pinned_lock_and_starts_the_stack(tmp_p
         "tempo",
         "postgres-pgbackrest",
     }
-    for image in lock.for_profile("quickstart"):
+    for image in lock.for_profile("quickstart", ("coding",)):
         assert image.image_id and image.image_id.startswith("sha256:")
         assert (image.digest is None) is image.first_party
     vllm = next(i for i in lock.images if i.name == "vllm")

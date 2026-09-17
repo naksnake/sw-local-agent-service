@@ -21,6 +21,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROFILE="${SLAS_PROFILE:-quickstart}"
+AGENTS="${SLAS_AGENTS:-}"   # empty = coding (ADR-0017); read from .env below when it exists
 DATA_ROOT="${SLAS_DATA_ROOT:-/AI/Agent}"
 BUNDLE_DIR="${SLAS_BUNDLE_DIR:-$SCRIPT_DIR/bundle}"
 REGISTRY="${SLAS_REGISTRY:-}"
@@ -54,6 +55,9 @@ images, model weights, services, and the sign-in URL. Nothing changes until ever
 step passed.
 
   --profile PROFILE    quickstart (default) or prod. Also read from \$SLAS_PROFILE.
+  --agents LIST        Which agents to start: coding (default), or coding,validation,factory.
+                       Validation and Factory bring their executor containers and their pages
+                       (ADR-0017). Also read from \$SLAS_AGENTS and the existing .env.
   --data-root PATH     Where the platform keeps its data. Default: \$SLAS_DATA_ROOT or /AI/Agent.
   --bundle DIR         Install from an offline bundle (its manifest is verified with cosign in prod).
                        Default: ./bundle when it exists.
@@ -93,6 +97,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --profile)        PROFILE="${2:-}"; shift 2 ;;
     --profile=*)      PROFILE="${1#*=}"; shift ;;
+    --agents)         AGENTS="${2:-}"; shift 2 ;;
+    --agents=*)       AGENTS="${1#*=}"; shift ;;
     --data-root)      DATA_ROOT="${2:-}"; shift 2 ;;
     --data-root=*)    DATA_ROOT="${1#*=}"; shift ;;
     --bundle)         BUNDLE_DIR="${2:-}"; shift 2 ;;
@@ -248,10 +254,28 @@ if [[ $FETCH_MODELS_FIRST -eq 1 ]]; then
   fi
 fi
 
+# ---------------------------------------------------------------------------- 1c which agents start (ADR-0017)
+# --agents, else SLAS_AGENTS, else what the existing .env says, else coding alone. The choice
+# decides which executor images are built, which compose profiles start, and which pages the
+# WebUI shows; nothing else about the install changes.
+if [[ -z "$AGENTS" && -f "$DATA_ROOT/.env" ]]; then
+  AGENTS="$(sed -n 's/^SLAS_AGENTS=//p' "$DATA_ROOT/.env" | tail -n 1 | tr -d '"')"
+fi
+if ! agents_choice="$("$PYTHON" -m slas_deploy.installer agents --agents "$AGENTS")"; then
+  echo "$agents_choice" >&2
+  exit 2
+fi
+AGENTS="$("$PYTHON" -c 'import json,sys; print(",".join(json.loads(sys.argv[1])["agents"]))' "$agents_choice")"
+COMPOSE_PROFILES="$("$PYTHON" -c 'import json,sys; print(",".join(json.loads(sys.argv[1])["profiles"]))' "$agents_choice")"
+AGENTS_SENTENCE="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["sentence"])' "$agents_choice")"
+export SLAS_AGENTS="$AGENTS"
+if [[ -n "$COMPOSE_PROFILES" ]]; then export COMPOSE_PROFILES; else unset COMPOSE_PROFILES; fi
+
 # ---------------------------------------------------------------------------- 2 verify (read-only)
 if [[ $MODELS_ONLY -eq 0 ]]; then   # --models-only needs neither a bundle nor a registry
 echo
 echo "Verifying what will be installed ($PROFILE profile)."
+echo "$AGENTS_SENTENCE"
 SOURCE=""
 if [[ $BUILD -eq 1 ]]; then
   SOURCE="local"
@@ -308,7 +332,7 @@ elif [[ "$SOURCE" == "bundle" ]]; then
     nothing_changed "The bundle does not match the image lock." 1
   fi
 else
-  if ! "$PYTHON" -m slas_deploy.installer check-lock --lock "$LOCK_FILE" --profile "$PROFILE"; then
+  if ! "$PYTHON" -m slas_deploy.installer check-lock --lock "$LOCK_FILE" --profile "$PROFILE" --agents "$AGENTS"; then
     nothing_changed "The image lock does not pin every image the $PROFILE profile starts." 1
   fi
   if [[ "$PROFILE" == "prod" ]]; then
@@ -532,7 +556,7 @@ if [[ "$SOURCE" == "local" ]]; then
   echo "Building the first-party images from $SCRIPT_DIR and pulling the third-party images for the $PROFILE profile (registry label $REGISTRY, version $VERSION)."
   echo "This host reaches the image registries, PyPI and the npm registry for the build; the running platform still has no egress (ADR-0014)."
   build_args=(build-images --lock "$SCRIPT_DIR/compose/images.lock.json" --profile "$PROFILE" \
-    --registry "$REGISTRY" --version "$VERSION" --repo "$SCRIPT_DIR" --out "$LOCK_FILE")
+    --registry "$REGISTRY" --version "$VERSION" --repo "$SCRIPT_DIR" --out "$LOCK_FILE" --agents "$AGENTS")
   if [[ $DRY_RUN -eq 1 ]]; then
     build_args+=(--dry-run)
   else
@@ -547,7 +571,7 @@ if [[ "$SOURCE" == "local" ]]; then
   fi
   if [[ $DRY_RUN -eq 1 ]]; then
     echo "Would check that lock: every image the $PROFILE profile starts must have an image ID."
-  elif ! "$PYTHON" -m slas_deploy.installer check-lock --lock "$LOCK_FILE" --profile "$PROFILE"; then
+  elif ! "$PYTHON" -m slas_deploy.installer check-lock --lock "$LOCK_FILE" --profile "$PROFILE" --agents "$AGENTS"; then
     echo "The lock written by the build does not pin every image the $PROFILE profile starts; the stack was not started."
     exit 1
   fi
@@ -597,7 +621,7 @@ else
   "$PYTHON" -m slas_deploy.installer write-env --example "$SCRIPT_DIR/config/.env.example" \
     --target "$ENV_FILE" --profile "$PROFILE" --data-root "$DATA_ROOT" --version "$VERSION" \
     --registry "$REGISTRY" --uid "$(id -u)" --gid "$(id -g)" --tls-names "$TLS_NAMES" \
-    --public-host "$PUBLIC_HOST" --runtime-socket "$RUNTIME_SOCKET"
+    --public-host "$PUBLIC_HOST" --runtime-socket "$RUNTIME_SOCKET" --agents "$AGENTS"
   "$PYTHON" -m slas_deploy.installer secrets --dir "$DATA_ROOT/secrets" --profile "$PROFILE"
   # Every directory a service bind-mounts, created as the user the stack runs as (SLAS_UID):
   # tls (the edge's CA), Coding, Toolchains, .git-broker, Tickets, Skills, SOP, Validation,
@@ -629,6 +653,9 @@ if [[ $DRY_RUN -eq 0 ]]; then COMPOSE+=(--env-file "$ENV_FILE"); fi
 
 if [[ "$SOURCE" == "registry" ]]; then
   run_or_print "${COMPOSE[@]}" pull --quiet
+fi
+if [[ -n "${COMPOSE_PROFILES:-}" ]]; then
+  echo "Compose profiles: $COMPOSE_PROFILES (the executors of the agents you chose)."
 fi
 run_or_print "${COMPOSE[@]}" up -d --pull never --remove-orphans
 

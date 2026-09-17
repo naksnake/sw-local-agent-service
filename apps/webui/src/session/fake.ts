@@ -6,7 +6,7 @@
 import { ApiError, signalUnauthorized } from "../api/http";
 import { VERSION } from "../branding";
 import { signIn as signInCopy, type ThreePart } from "../copy/en";
-import type { Installation, Person, SessionApi } from "./api";
+import type { AgentName, Installation, Person, SessionApi } from "./api";
 
 export interface FakeAccount extends Person {
   password: string;
@@ -93,6 +93,8 @@ export function unreachable(): never {
 export class FakeWorld {
   accounts: FakeAccount[] = [];
   installationName = "Lab 3";
+  /** The agents the fake installation starts (ADR-0017); the dev build shows every page. */
+  agents: AgentName[] = ["coding", "validation", "factory"];
   sessionLifetimeHours = 8;
   private counter = 0;
 
@@ -204,6 +206,7 @@ export class FakeSessionApi implements SessionApi {
     return {
       installation_name: this.world.installationName,
       auth_modes: ["builtin"],
+      agents: [...this.world.agents],
       version: VERSION,
       session_lifetime_hours: this.world.sessionLifetimeHours,
     };

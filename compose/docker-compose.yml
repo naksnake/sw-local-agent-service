@@ -144,6 +144,7 @@ services:
       SLAS_BIND: 0.0.0.0:8000
       SLAS_SOP_CHINESE: "${SLAS_SOP_CHINESE}"
       SLAS_AUTH_MODES: builtin
+      SLAS_AGENTS: "${SLAS_AGENTS:-coding}"
       POSTGRES_DB: "${POSTGRES_DB}"
       POSTGRES_USER: "${POSTGRES_USER}"
       SLAS_ROLES_FILE: /etc/slas/rbac-roles.yaml
@@ -563,6 +564,8 @@ services:
       - "${SLAS_DATA_ROOT}/Tickets:/data/Tickets"
       - "../config/guardrails.yaml:/etc/slas/guardrails.yaml:ro"
       - "../config/bmc-quirks.yaml:/etc/slas/bmc-quirks.yaml:ro"
+    profiles:
+      - validation
   factory-executor:
     image: "${SLAS_REGISTRY}/slas/factory-executor:${SLAS_VERSION}"
     restart: unless-stopped
@@ -611,6 +614,8 @@ services:
       - "${SLAS_DATA_ROOT}/Tickets:/data/Tickets"
       - "../config/factory.yaml:/etc/slas/factory.yaml:ro"
       - "../templates/factory:/etc/slas/templates:ro"
+    profiles:
+      - factory
   postgres:
     image: "${SLAS_REGISTRY}/library/postgres:16.6"
     restart: unless-stopped

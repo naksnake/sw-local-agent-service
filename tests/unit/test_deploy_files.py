@@ -80,6 +80,13 @@ def test_the_base_stack_follows_the_zone_model_and_adr_0003() -> None:
     assert services["git-broker"]["environment"]["CRED_STORE"] == "postgres+aesgcm"
     assert services["validation-executor"]["environment"]["LLM_IN_CONTROL_LOOP"] == "false"
     assert services["api"]["environment"]["SLAS_AUTH_MODES"] == "builtin"
+    # ADR-0017: the api tells the WebUI which agents this install starts; the executors of the
+    # optional agents sit behind compose profiles and start only when SLAS_AGENTS names them.
+    assert services["api"]["environment"]["SLAS_AGENTS"] == "${SLAS_AGENTS:-coding}"
+    assert services["validation-executor"]["profiles"] == ["validation"]
+    assert services["factory-executor"]["profiles"] == ["factory"]
+    assert "profiles" not in services["agent-core-orchestrator"]
+    assert "profiles" not in services["sandbox-manager"]
     assert set(services) >= {
         "edge", "webui", "api", "agent-core-orchestrator", "screen-worker", "llm-gateway",
         "model-manager", "vector-db", "local-search-api", "sandbox-manager", "git-broker",

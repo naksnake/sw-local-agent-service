@@ -4,7 +4,7 @@
 > this file first and treats it as authoritative. Where this file conflicts with a
 > request, surface the conflict; never resolve it silently.
 >
-> **Version 3.4 · 2026-09-17** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
+> **Version 3.5 · 2026-09-17** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
 > (phases, done criteria) and `docs/PROMPTS.md` (copy-paste session prompts).
 > 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14). 3.2 records open decisions
 > 12–14 (model weights and voters) raised by the shipped model registries. 3.3 accepts the
@@ -17,6 +17,8 @@
 > starts the vLLM instances and the sandbox manager the sandboxes on Docker or Podman alike;
 > `install.sh --build` also builds the sandbox images, pulls the pinned vLLM image and names
 > the socket that exists; ADR-0016 pins `cryptography` for the git broker's AES-GCM credential sealer.
+> 3.5 records ADR-0017: the Coding Agent is the delivery focus; `SLAS_AGENTS` (default `coding`)
+> names the agents an installation starts, and the others stay built, tested and off (§1.4).
 
 ---
 
@@ -95,6 +97,17 @@ extended by importing user-written skills.
 ### 1.3 Not building
 A cloud service · a chatbot · anything that flashes firmware, files tickets, marks a unit
 PASS or merges code without a human · a replacement for engineering judgement.
+
+### 1.4 Delivery focus: the Coding Agent (ADR-0017)
+The owner's decision of 2026-09-17: **the Coding Agent comes first.** An installation starts
+the agents named in `SLAS_AGENTS` (`./install.sh --agents …`); the default is `coding`. With
+that default the Validation and Factory executors are not built or started, their compose
+profiles stay off, and the WebUI shows Coding, Runs, Models, Skills and Admin without the
+Validation, Factory and Stations pages. Both agents stay in the repository, built on the same
+kernel and tested against fakes, and `--agents coding,validation,factory` turns them on when a
+lab or a production line is connected. Work after round 2 improves the Coding Agent first:
+the model loop on real weights, the Git panel and terminal, the walkthrough, the virtual
+desktop. Nothing in §1.1, §2 or §4 changes; this is scope, not architecture.
 
 ---
 

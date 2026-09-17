@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 
 import { FakePeopleApi, FakeSettingsApi } from "./admin/fake";
 import { PRODUCT_NAME } from "./branding";
-import { FakeStationsAdminApi } from "./factory/api";
+import { FakeCodingApi } from "./coding/api";
+import { FakeFactoryApi, FakeStationsAdminApi } from "./factory/api";
 import { FakeGitApi } from "./git/api";
 import { FakeHomeListsApi } from "./home/fake";
 import { FakeModelsApi } from "./models/fake";
 import { FakeWorld } from "./session/fake";
 import { renderApp, signedIn } from "./test-utils";
+import { FakeValidationApi } from "./validation/api";
 
 describe("App shell (docs/ui/home.md)", () => {
   it("has the rail with the brand and Home as the page heading", () => {
@@ -59,6 +61,41 @@ describe("App shell (docs/ui/home.md)", () => {
     renderApp({ modelsApi: new FakeModelsApi() }, "/models");
     expect(await screen.findByTestId("registry-sentence")).toBeTruthy();
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Models");
+  });
+});
+
+describe("Agents an installation starts (ADR-0017)", () => {
+  it("keeps Validation, Factory and Stations off the rail when the installation starts only coding", async () => {
+    const { world, sessionApi } = signedIn("admin@slas.local");
+    world.agents = ["coding"];
+    renderApp({
+      sessionApi,
+      codingApi: new FakeCodingApi(),
+      validationApi: new FakeValidationApi(),
+      factoryApi: new FakeFactoryApi(),
+      stationsApi: new FakeStationsAdminApi(),
+      peopleApi: new FakePeopleApi(world),
+    });
+    const rail = await screen.findByRole("navigation", { name: "Pages" });
+    expect(await within(rail).findByRole("button", { name: "Coding" })).toBeTruthy();
+    expect(within(rail).queryByRole("button", { name: "Validation" })).toBeNull();
+    expect(within(rail).queryByRole("button", { name: "Factory" })).toBeNull();
+    fireEvent.click(within(rail).getByRole("button", { name: "Admin" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "People" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Stations" })).toBeNull();
+  });
+
+  it("shows every agent page when the installation starts all three", async () => {
+    const { sessionApi } = signedIn("admin@slas.local");
+    renderApp({
+      sessionApi,
+      codingApi: new FakeCodingApi(),
+      validationApi: new FakeValidationApi(),
+      factoryApi: new FakeFactoryApi(),
+    });
+    const rail = await screen.findByRole("navigation", { name: "Pages" });
+    expect(await within(rail).findByRole("button", { name: "Validation" })).toBeTruthy();
+    expect(within(rail).getByRole("button", { name: "Factory" })).toBeTruthy();
   });
 });
 

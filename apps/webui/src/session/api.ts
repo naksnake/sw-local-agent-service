@@ -16,9 +16,13 @@ export interface Person {
   last_sign_in_at: string | null;
 }
 
+export type AgentName = "coding" | "validation" | "factory";
+
 export interface Installation {
   installation_name: string;
   auth_modes: string[];
+  /** The agents this installation starts (ADR-0017); absent means every one. */
+  agents?: AgentName[];
   version: string;
   session_lifetime_hours: number;
 }

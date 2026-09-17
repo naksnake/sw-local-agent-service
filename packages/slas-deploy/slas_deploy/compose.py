@@ -257,6 +257,8 @@ def base_compose() -> dict[str, Any]:
             "SLAS_BIND": SERVICE_BIND,
             "SLAS_SOP_CHINESE": "${SLAS_SOP_CHINESE}",
             "SLAS_AUTH_MODES": "builtin",
+            # Which agents this install starts; the WebUI shows only their pages (ADR-0017).
+            "SLAS_AGENTS": "${SLAS_AGENTS:-coding}",
             "POSTGRES_DB": "${POSTGRES_DB}",
             "POSTGRES_USER": "${POSTGRES_USER}",
             "SLAS_ROLES_FILE": "/etc/slas/rbac-roles.yaml",
@@ -423,6 +425,8 @@ def base_compose() -> dict[str, Any]:
             "../config/bmc-quirks.yaml:/etc/slas/bmc-quirks.yaml:ro",
         ],
         tmpfs=["/run/slas-keys:mode=700,size=16m"],
+        # Started only when SLAS_AGENTS names validation (ADR-0017): COMPOSE_PROFILES=validation.
+        extra={"profiles": ["validation"]},
     )
     # The shipped test-loop templates arrive read-only at /etc/slas/templates; the executor
     # copies them into Factory/Templates when that directory is empty (copy semantics, contract
@@ -452,6 +456,8 @@ def base_compose() -> dict[str, Any]:
             "../config/factory.yaml:/etc/slas/factory.yaml:ro",
             "../templates/factory:/etc/slas/templates:ro",
         ],
+        # Started only when SLAS_AGENTS names factory (ADR-0017): COMPOSE_PROFILES=factory.
+        extra={"profiles": ["factory"]},
     )
     services["postgres"] = _service(
         "postgres",

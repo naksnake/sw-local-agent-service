@@ -29,7 +29,7 @@ or the api answers 403 in three parts.
 
 | Route | Answer |
 |---|---|
-| `GET /api/v1/public/installation` | `{"installation_name": str, "auth_modes": ["builtin"], "version": str, "session_lifetime_hours": int}` — the sign-in page shows the name. |
+| `GET /api/v1/public/installation` | `{"installation_name": str, "auth_modes": ["builtin"], "agents": ["coding", …], "version": str, "session_lifetime_hours": int}` — the sign-in page shows the name; `agents` (ADR-0017) lists the agents this installation starts and the rail shows only their pages. |
 
 ## Session (ADR-0007)
 

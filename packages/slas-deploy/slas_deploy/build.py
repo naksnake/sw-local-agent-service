@@ -84,10 +84,16 @@ def compose_reference(image: LockedImage, *, registry: str, version: str) -> str
 
 
 def plan(
-    lock: ImageLock, profile: Profile, *, registry: str, version: str, repo: Path
+    lock: ImageLock,
+    profile: Profile,
+    *,
+    registry: str,
+    version: str,
+    repo: Path,
+    agents: Sequence[str] | None = None,
 ) -> list[Step]:
     steps: list[Step] = []
-    for image in lock.for_profile(profile):
+    for image in lock.for_profile(profile, agents):
         reference = compose_reference(image, registry=registry, version=version)
         if image.first_party:
             dockerfile = dockerfile_path(image.name)
@@ -172,10 +178,11 @@ def build_images(
     repo: Path,
     runner: Runner,
     out: TextIO,
+    agents: Sequence[str] | None = None,
 ) -> ImageLock:
     """Perform every step; return the lock with digests and image IDs filled in."""
     filled: list[LockedImage] = []
-    planned = plan(lock, profile, registry=registry, version=version, repo=repo)
+    planned = plan(lock, profile, registry=registry, version=version, repo=repo, agents=agents)
     steps = {step.image.name: step for step in planned}
     for image in lock.images:
         step = steps.get(image.name)

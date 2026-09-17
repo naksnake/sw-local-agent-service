@@ -178,6 +178,7 @@ def public_installation(svc: ServicesDep, db: DbDep) -> dict[str, Any]:
     return {
         "installation_name": runtime.installation_name,
         "auth_modes": svc.settings.auth_modes(),
+        "agents": svc.settings.agents(),
         "version": install_facts(svc.settings, svc.version).version,
         "session_lifetime_hours": runtime.session_lifetime_hours,
     }

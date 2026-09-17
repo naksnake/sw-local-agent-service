@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     slas_profile: str = "quickstart"
     slas_roles_file: Path = Path("/etc/slas/rbac-roles.yaml")
     slas_auth_modes: str = "builtin"
+    #: The agents this installation starts (ADR-0017); the WebUI shows only their pages.
+    slas_agents: str = "coding"
     slas_version: str = ""
     slas_https_port: str = ""
     slas_tls_mode: str = ""
@@ -68,6 +70,12 @@ class Settings(BaseSettings):
 
     def auth_modes(self) -> list[str]:
         return [mode.strip() for mode in self.slas_auth_modes.split(",") if mode.strip()]
+
+    def agents(self) -> list[str]:
+        """`coding` is always on; validation and factory only when SLAS_AGENTS names them."""
+        named = {part.strip().lower() for part in self.slas_agents.split(",") if part.strip()}
+        named.add("coding")
+        return [agent for agent in ("coding", "validation", "factory") if agent in named]
 
     def read_secret(self, name: str) -> str | None:
         """The content of one secret file, stripped, or None when the file is absent."""

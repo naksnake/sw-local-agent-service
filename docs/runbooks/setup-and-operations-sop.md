@@ -1,6 +1,6 @@
 # SOP — Setting up and running SW Local Agent Service
 
-Version 1.2 · 2026-09-17 · Chinese twin: `setup-and-operations-sop.zh-Hant.md` (INV-13).
+Version 1.3 · 2026-09-17 · Chinese twin: `setup-and-operations-sop.zh-Hant.md` (INV-13).
 1.2 adds §7, what runs after a round-2 install (ADR-0015): every service on HTTP, the vLLM
 instances the model manager starts, the runtime-socket choice, the sandbox images, and the
 first coding task.
@@ -110,6 +110,13 @@ The connected quickstart install (ADR-0014, ADR-0015; `docs/api-contract-round-2
 | R3 | chooses the runtime socket: Podman's `/run/podman/podman.sock` when it exists, else Docker's `/var/run/docker.sock`, written to `.env` as `SLAS_RUNTIME_SOCKET` | "No Podman socket at …, so SLAS_RUNTIME_SOCKET=/var/run/docker.sock in .env points model-manager and sandbox-manager at Docker's socket; nothing else sees it (INV-4)." |
 | R4 | writes `.env` and the secret files; creates the data directories the services bind-mount, as your user: `Coding`, `Toolchains`, `.git-broker`, `Tickets`, `Skills/library`, `SOP`, `Validation`, `Factory/{Templates,mes/inbox,ca}`, `Models`, `Knowledge`, `Backups/stations`, `qdrant`, `tls` | "Created N data directories under /AI/Agent as uid …" |
 | R5 | places the weights, `docker compose up -d --pull never`, waits for health, prints the sign-in URL | "SW Local Agent Service is up." |
+
+**Which agents start (ADR-0017).** By default the install starts the **Coding Agent** only:
+`SLAS_AGENTS=coding` in `.env`, no `validation-executor` or `factory-executor` container, and
+the WebUI shows Coding, Runs, Models, Skills and Admin. Validation and Factory are built and
+tested but off; `./install.sh --build --agents coding,validation,factory` (or `SLAS_AGENTS`)
+builds their executor images, starts their compose profiles and adds their pages. Run it
+again with a different list to change the choice; nothing else in the install moves.
 
 **The services.** Every service is one container serving HTTP on port 8000 inside the stack:
 `api` (the only one behind the edge), `agent-core-orchestrator` (the kernel and the three

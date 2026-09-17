@@ -40,12 +40,17 @@ from slas_deploy.compose import (
     RUNTIME_SOCKET_HOLDERS,
 )
 from slas_deploy.images import (
+    AGENTS,
+    DEFAULT_AGENTS,
+    AgentsError,
     BundleManifest,
     ImageLock,
     LockError,
     Profile,
     check_lock,
     check_manifest,
+    compose_profiles,
+    parse_agents,
     parse_lock_json,
     registry_for,
     render_lock_json,
@@ -167,6 +172,7 @@ def write_env(
     tls_names: str,
     public_host: str,
     runtime_socket: str | None = None,
+    agents: Sequence[str] = DEFAULT_AGENTS,
 ) -> list[str]:
     """Fill the keys the profile needs, never touching a key a person already set."""
     defaults = EnvFile.parse(example.read_text(encoding="utf-8"))
@@ -184,6 +190,8 @@ def write_env(
         "SLAS_VERSION": version,
         "SLAS_UID": str(uid),
         "SLAS_GID": str(gid),
+        # Which agents this install starts (ADR-0017); --agents decides, the file follows.
+        "SLAS_AGENTS": ",".join(agents),
     }
     for key, value in owned.items():
         if env.get(key) != value:
@@ -300,11 +308,12 @@ def run_build(
     dry_run: bool,
     out: TextIO,
     runner: Runner | None = None,
+    agents: Sequence[str] = DEFAULT_AGENTS,
 ) -> int:
     lock = _load_lock(lock_path)
     if dry_run:
         describe(
-            plan(lock, profile, registry=registry, version=version, repo=repo),
+            plan(lock, profile, registry=registry, version=version, repo=repo, agents=agents),
             out=out,
             lock_path=out_path,
         )
@@ -318,13 +327,14 @@ def run_build(
             repo=repo,
             runner=runner or LocalRunner(),
             out=out,
+            agents=agents,
         )
     except BuildError as exc:
         out.write(exc.message.render() + "\n")
         return EXIT_PROBLEMS
     out_path.parent.mkdir(parents=True, exist_ok=True)
     write_atomic(out_path, render_lock_json(filled), mode=0o644)
-    wanted = filled.for_profile(profile)
+    wanted = filled.for_profile(profile, agents)
     built = sum(1 for image in wanted if image.first_party)
     out.write(
         f"Wrote the filled image lock to {out_path}: {built} images built from this checkout, "
@@ -354,6 +364,7 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
         default="",
         help="host path of the container-runtime socket to record (empty keeps the default)",
     )
+    env_cmd.add_argument("--agents", default="", help="comma list of agents to start (ADR-0017)")
 
     sock = commands.add_parser("runtime-socket")
     sock.add_argument("--configured", default="", help="SLAS_RUNTIME_SOCKET as set today")
@@ -380,6 +391,10 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
     lock = commands.add_parser("check-lock")
     lock.add_argument("--lock", required=True)
     lock.add_argument("--profile", choices=("quickstart", "prod"), required=True)
+    lock.add_argument("--agents", default="", help="comma list of agents to start (ADR-0017)")
+
+    agents_cmd = commands.add_parser("agents", help="validate --agents; print profiles as JSON")
+    agents_cmd.add_argument("--agents", default="")
 
     man = commands.add_parser("check-manifest")
     man.add_argument("--lock", required=True)
@@ -400,10 +415,33 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
     build.add_argument("--repo", required=True, help="the checkout: the build context")
     build.add_argument("--out", required=True, help="where the filled lock is written")
     build.add_argument("--dry-run", action="store_true")
+    build.add_argument("--agents", default="", help="comma list of agents to start (ADR-0017)")
 
     commands.add_parser("unhealthy", help="stdin: docker compose ps --format json")
 
     args = parser.parse_args(list(argv) if argv is not None else None)
+    try:
+        agents = parse_agents(getattr(args, "agents", ""))
+    except AgentsError as exc:
+        out.write(exc.message.render() + "\n")
+        return EXIT_PROBLEMS
+    if args.command == "agents":
+        profiles = compose_profiles(agents)
+        off = [name for name in ("validation", "factory") if name not in agents]
+        sentence = "Agents: " + ", ".join(agents) + "."
+        if off:
+            plural = "s" if len(off) > 1 else ""
+            everything = ",".join(name for name in AGENTS if name in agents or name in off)
+            sentence += (
+                f" The {' and '.join(off)} executor{plural} stay off; enable them with "
+                f"--agents {everything}."
+            )
+        else:
+            sentence += " Every executor starts."
+        out.write(
+            json.dumps({"agents": list(agents), "profiles": profiles, "sentence": sentence}) + "\n"
+        )
+        return EXIT_OK
     if args.command == "build-images":
         return run_build(
             lock_path=Path(args.lock),
@@ -414,6 +452,7 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
             out_path=Path(args.out),
             dry_run=args.dry_run,
             out=out,
+            agents=agents,
         )
     if args.command == "build-sandbox-images":
         return sandbox_images.run(
@@ -465,6 +504,7 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
             tls_names=args.tls_names,
             public_host=args.public_host,
             runtime_socket=args.runtime_socket or None,
+            agents=agents,
         )
         out.write(
             f"{args.target}: {'set ' + ', '.join(changed) if changed else 'nothing to change'}.\n"
@@ -477,7 +517,7 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
         return EXIT_OK
     if args.command == "check-lock":
         try:
-            images = check_lock(_load_lock(Path(args.lock)), args.profile)
+            images = check_lock(_load_lock(Path(args.lock)), args.profile, agents)
         except LockError as exc:
             out.write(exc.message.render() + "\n")
             return EXIT_PROBLEMS
