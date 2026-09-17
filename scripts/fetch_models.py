@@ -212,13 +212,19 @@ class Hub:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
             raise self._http_error(url, exc) from exc
-        except urllib.error.URLError as exc:
-            raise FetchError(
-                f"Could not reach {self.endpoint}.",
-                f"No route, a proxy that refuses it, or a TLS problem: {exc.reason}.",
-                "Run this on a connected host, or point HF_ENDPOINT at a mirror inside the "
-                "perimeter.",
-            ) from exc
+        except OSError as exc:  # no route, a refused or reset connection, a TLS or read timeout
+            raise self._unreachable(exc) from exc
+
+    def _unreachable(self, exc: OSError) -> FetchError:
+        reason = getattr(exc, "reason", None) or exc
+        return FetchError(
+            f"Could not reach {self.endpoint}.",
+            f"No route, a blocked host, a proxy in the way, or a TLS problem: {reason}.",
+            "If this site reaches the internet through a proxy, export "
+            "HTTPS_PROXY=http://<proxy>:<port> (the script honours it) and run again. If the "
+            "hub is blocked here, run this on a connected host, or point HF_ENDPOINT at a "
+            "mirror inside the perimeter.",
+        )
 
     def _http_error(self, url: str, exc: urllib.error.HTTPError) -> FetchError:
         if exc.code in (401, 403):
@@ -300,11 +306,12 @@ class Hub:
                         have += len(chunk)
         except urllib.error.HTTPError as exc:
             raise self._http_error(url, exc) from exc
-        except urllib.error.URLError as exc:
+        except OSError as exc:  # the connection dropped or timed out mid-file
             raise FetchError(
                 f"The download of {target.name} stopped after {have} bytes.",
-                f"The connection dropped: {exc.reason}.",
-                "Run the same command again; it resumes where it stopped.",
+                f"The connection dropped: {getattr(exc, 'reason', None) or exc}.",
+                "Run the same command again; it resumes where it stopped. If this site uses a "
+                "proxy, export HTTPS_PROXY=http://<proxy>:<port> first.",
             ) from exc
         if expected_size and have != expected_size:
             raise FetchError(

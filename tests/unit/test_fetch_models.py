@@ -451,3 +451,24 @@ def test_human_sizes_round_to_the_next_unit() -> None:
     assert fm.human(1048552) == "1.0 MiB"
     assert fm.human(1023) == "1023 B"
     assert fm.human(100 * 2**30 + 40 * 2**20) == "100.0 GiB"
+
+
+def test_a_timeout_or_blocked_host_is_reported_in_three_parts(tmp_path: Path) -> None:
+    def hanging_opener(_request: object, timeout: int = 0) -> object:
+        raise TimeoutError("_ssl.c:983: The handshake operation timed out")
+
+    out = io.StringIO()
+    code = fm.main(
+        ["fetch", "--model", "tiny=demo/tiny", "--dest", str(tmp_path)],
+        stdout=out,
+        opener=hanging_opener,
+    )
+    text = out.getvalue()
+    assert code == 1
+    assert text.startswith("Could not reach https://huggingface.co.")
+    assert (
+        "Likely cause: No route, a blocked host, a proxy in the way, or a TLS problem: _ssl.c:983"
+        in text
+    )
+    assert "export HTTPS_PROXY=http://<proxy>:<port>" in text and "HF_ENDPOINT" in text
+    assert "Traceback" not in text
