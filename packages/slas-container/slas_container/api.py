@@ -179,6 +179,17 @@ class ContainerApi:
         self._engine = EngineInfo(engine=engine, api_version=version)
         return self._engine
 
+    def runtimes(self) -> list[str]:
+        """The OCI runtimes the engine knows (`runc`, `runsc`, `nvidia`…), from `GET /info`."""
+        response = self._call("GET", "/info", doing="describe the runtime")
+        payload = response.json()
+        known = payload.get("Runtimes") if isinstance(payload, dict) else None
+        if isinstance(known, dict):
+            return sorted(str(name) for name in known)
+        # Podman's compat /info lists its OCI runtime by name only.
+        default = payload.get("DefaultRuntime") if isinstance(payload, dict) else None
+        return [str(default)] if default else []
+
     @property
     def engine(self) -> Engine:
         info = self._engine if self._engine is not None else self.ping()

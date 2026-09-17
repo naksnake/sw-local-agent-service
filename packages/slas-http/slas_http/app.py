@@ -29,7 +29,10 @@ Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
 ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
 #: A health check: name → "ok" or a short word saying what is wrong ("down", "starting").
+#: A service may declare further words as healthy facts (`healthy_states`), e.g. the sandbox
+#: manager's `isolation: runc` or the gateway's `routes: empty`.
 Checks = Callable[[], dict[str, str]]
+DEFAULT_HEALTHY_STATES: Final = frozenset({"ok"})
 
 
 class TraceMiddleware:
@@ -77,10 +80,15 @@ class TraceMiddleware:
             tracing.unbind(token)
 
 
-def health_response(service: str, checks: dict[str, str]) -> Response:
-    if all(state == "ok" for state in checks.values()):
+def health_response(
+    service: str,
+    checks: dict[str, str],
+    *,
+    healthy_states: frozenset[str] = DEFAULT_HEALTHY_STATES,
+) -> Response:
+    failing = [name for name, state in checks.items() if state not in healthy_states]
+    if not failing:
         return JSONResponse({"service": service, "ok": True, "checks": checks})
-    failing = [name for name, state in checks.items() if state != "ok"]
     named = " and ".join(failing)
     raise ServiceError(
         503,
@@ -92,12 +100,19 @@ def health_response(service: str, checks: dict[str, str]) -> Response:
     )
 
 
-def ops_router(service: str, checks: Checks | None, registry: Registry) -> APIRouter:
+def ops_router(
+    service: str,
+    checks: Checks | None,
+    registry: Registry,
+    *,
+    healthy_states: frozenset[str] = DEFAULT_HEALTHY_STATES,
+) -> APIRouter:
     router = APIRouter()
 
     @router.get("/health")
     def health() -> Response:
-        return health_response(service, checks() if checks is not None else {})
+        facts = checks() if checks is not None else {}
+        return health_response(service, facts, healthy_states=healthy_states)
 
     @router.get("/metrics")
     def metrics() -> Response:
@@ -114,6 +129,7 @@ def create_service_app(
     log: EventLog | None = None,
     registry: Registry = REGISTRY,
     routers: tuple[APIRouter, ...] = (),
+    healthy_states: frozenset[str] = DEFAULT_HEALTHY_STATES,
 ) -> FastAPI:
     """A service app with health, metrics, the trace middleware and three-part errors."""
     event_log = log if log is not None else EventLog(service, StreamSink())
@@ -126,7 +142,7 @@ def create_service_app(
     )
     app.state.log = event_log
     app.state.service = service
-    app.include_router(ops_router(service, checks, registry))
+    app.include_router(ops_router(service, checks, registry, healthy_states=healthy_states))
     for router in routers:
         app.include_router(router)
     install_exception_handlers(app, service)

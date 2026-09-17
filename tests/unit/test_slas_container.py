@@ -40,6 +40,10 @@ class Engine:
         path = request.url.path
         body = json.loads(request.content) if request.content else None
         self.calls.append((request.method, path, body))
+        if path == "/info":
+            if self.podman:
+                return httpx.Response(200, json={"DefaultRuntime": "crun"})
+            return httpx.Response(200, json={"Runtimes": {"runc": {}, "runsc": {}, "nvidia": {}}})
         if path == "/_ping":
             headers = {"Api-Version": "1.47"}
             if self.podman:
@@ -183,6 +187,7 @@ def test_api_lifecycle_over_the_scripted_engine() -> None:
     info = api.ping()
     assert info.engine == "docker" and info.api_version == "1.47"
     assert info.sentence() == "The runtime socket is served by Docker (API 1.47)."
+    assert api.runtimes() == ["nvidia", "runc", "runsc"]
     assert api.inspect("vllm-coder") is None
     assert api.create(vllm_spec()) == "id-vllm-coder"
     created = next(c for c in engine.calls if c[1] == "/containers/create")
@@ -216,6 +221,7 @@ def test_api_refusals_are_three_parts() -> None:
     engine = Engine(podman=True)
     api = ContainerApi(transport=engine.transport())
     assert api.engine == "podman"
+    assert api.runtimes() == ["crun"]
     api.create(vllm_spec())
     with pytest.raises(ContainerError) as conflict:
         api.create(vllm_spec())
@@ -253,8 +259,9 @@ def test_api_refusals_are_three_parts() -> None:
 
 
 def test_fake_mirrors_the_surface() -> None:
-    fake = FakeContainerApi("podman", images=["img:1"])
+    fake = FakeContainerApi("podman", images=["img:1"], runtimes=["crun", "runsc"])
     assert fake.ping().engine == "podman" and fake.engine == "podman"
+    assert fake.runtimes() == ["crun", "runsc"]
     spec = CreateSpec(name="c1", image="img:1", labels={"slas.kind": "sandbox"}, network="net")
     fake.create(spec)
     assert fake.bodies["c1"]["HostConfig"]["NetworkMode"] == "net"

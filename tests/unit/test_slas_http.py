@@ -69,6 +69,19 @@ def test_health_metrics_and_no_docs_page() -> None:
     assert client.get("/openapi.json").status_code == 404
 
 
+def test_a_declared_healthy_state_is_not_a_failure() -> None:
+    sink = ListSink()
+    app = create_service_app(
+        "unit-service",
+        checks=lambda: {"runtime": "ok", "isolation": "runc"},
+        log=EventLog("unit-service", sink),
+        healthy_states=frozenset({"ok", "runc", "gvisor"}),
+    )
+    response = TestClient(app).get("/health")
+    assert response.status_code == 200
+    assert response.json()["checks"] == {"runtime": "ok", "isolation": "runc"}
+
+
 def test_a_failing_check_is_a_three_part_503_naming_it() -> None:
     client, _ = make_app(checks={"runtime": "down", "gateway": "ok"})
     response = client.get("/health")

@@ -14,8 +14,15 @@ ExecHandler = Callable[[str, Sequence[str]], ExecResult]
 
 
 class FakeContainerApi:
-    def __init__(self, engine: Engine = "docker", *, images: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        engine: Engine = "docker",
+        *,
+        images: Sequence[str] = (),
+        runtimes: Sequence[str] = ("runc", "runsc", "nvidia"),
+    ) -> None:
         self._engine_kind: Engine = engine
+        self._runtimes = list(runtimes)
         self.specs: dict[str, CreateSpec] = {}
         self.bodies: dict[str, dict[str, Any]] = {}
         self.states: dict[str, str] = {}
@@ -61,6 +68,10 @@ class FakeContainerApi:
     @property
     def engine(self) -> Engine:
         return self._engine_kind
+
+    def runtimes(self) -> builtin_list[str]:
+        self._require_up()
+        return sorted(self._runtimes)
 
     def _info(self, name: str) -> ContainerInfo:
         spec = self.specs[name]
