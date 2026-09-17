@@ -453,7 +453,12 @@ def test_human_sizes_round_to_the_next_unit() -> None:
     assert fm.human(100 * 2**30 + 40 * 2**20) == "100.0 GiB"
 
 
-def test_a_timeout_or_blocked_host_is_reported_in_three_parts(tmp_path: Path) -> None:
+def test_a_timeout_or_blocked_host_is_reported_in_three_parts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pauses: list[float] = []
+    monkeypatch.setattr(fm.time, "sleep", pauses.append)
+
     def hanging_opener(_request: object, timeout: int = 0) -> object:
         raise TimeoutError("_ssl.c:983: The handshake operation timed out")
 
@@ -465,10 +470,39 @@ def test_a_timeout_or_blocked_host_is_reported_in_three_parts(tmp_path: Path) ->
     )
     text = out.getvalue()
     assert code == 1
-    assert text.startswith("Could not reach https://huggingface.co.")
+    assert pauses == [2.0, 4.0, 8.0, 16.0], "four retries with a growing pause"
+    assert text.count("the hub did not answer") == 4
+    assert "Could not reach https://huggingface.co." in text
     assert (
         "Likely cause: No route, a blocked host, a proxy in the way, or a TLS problem: _ssl.c:983"
         in text
     )
+    assert "(tried 5 times)." in text
     assert "export HTTPS_PROXY=http://<proxy>:<port>" in text and "HF_ENDPOINT" in text
     assert "Traceback" not in text
+
+
+def test_a_flaky_link_is_retried_and_an_http_answer_is_not(hub: FakeHub, tmp_path: Path) -> None:
+    real_open = fm.urllib.request.urlopen
+    failures = {"left": 2}
+    pauses: list[float] = []
+
+    def flaky(request: object, timeout: int = 0) -> object:
+        if failures["left"] > 0:
+            failures["left"] -= 1
+            raise TimeoutError("The handshake operation timed out")
+        return real_open(request, timeout=timeout)
+
+    out = io.StringIO()
+    made = fm.Hub(endpoint=hub.endpoint, opener=flaky, sleep=pauses.append)
+    plan = fm.plan_model(made, fm.Source.parse("tiny=demo/tiny"), tmp_path, log=out)
+    assert plan.commit == "abc123def4567890"
+    assert pauses == [2.0, 4.0]
+    assert "trying again in 2 s (1 of 4)" in out.getvalue()
+    assert out.getvalue().count("the hub did not answer") == 2
+
+    pauses.clear()
+    with pytest.raises(fm.FetchError) as missing:
+        fm.plan_model(made, fm.Source.parse("gone=demo/missing"), tmp_path, log=out)
+    assert "The hub has nothing at" in missing.value.what_happened
+    assert pauses == [], "a 404 is an answer, not a flaky link"

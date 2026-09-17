@@ -39,6 +39,7 @@ import os
 import re
 import shutil
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -190,6 +191,31 @@ class Hub:
     token: str | None = None
     opener: Opener = urllib.request.urlopen
     timeout_s: int = 60
+    #: A flaky link (a TLS handshake that times out, a reset) is retried this many more times
+    #: with a growing pause; an HTTP answer such as 401 or 404 is never retried.
+    retries: int = 4
+    retry_pause_s: float = 2.0
+    sleep: Callable[[float], None] | None = None  # time.sleep unless a test says otherwise
+
+    def _open(self, request: urllib.request.Request, *, log: TextIO | None = None) -> Any:
+        attempt = 0
+        while True:
+            try:
+                return self.opener(request, timeout=self.timeout_s)  # type: ignore[call-arg]
+            except urllib.error.HTTPError:
+                raise
+            except OSError as exc:
+                if attempt >= self.retries:
+                    raise
+                attempt += 1
+                pause = self.retry_pause_s * 2 ** (attempt - 1)
+                reason = getattr(exc, "reason", None) or exc
+                if log is not None:
+                    log.write(
+                        f"  the hub did not answer ({reason}); trying again in {pause:g} s "
+                        f"({attempt} of {self.retries})\n"
+                    )
+                (self.sleep or time.sleep)(pause)
 
     def _request(
         self, url: str, *, headers: dict[str, str] | None = None
@@ -206,9 +232,9 @@ class Hub:
             )
         return urllib.request.Request(url, headers=merged)  # noqa: S310 — scheme checked above
 
-    def _json(self, url: str) -> Any:
+    def _json(self, url: str, *, log: TextIO | None = None) -> Any:
         try:
-            with self.opener(self._request(url), timeout=self.timeout_s) as response:  # type: ignore[call-arg]
+            with self._open(self._request(url), log=log) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
             raise self._http_error(url, exc) from exc
@@ -219,7 +245,8 @@ class Hub:
         reason = getattr(exc, "reason", None) or exc
         return FetchError(
             f"Could not reach {self.endpoint}.",
-            f"No route, a blocked host, a proxy in the way, or a TLS problem: {reason}.",
+            f"No route, a blocked host, a proxy in the way, or a TLS problem: {reason} "
+            f"(tried {self.retries + 1} times).",
             "If this site reaches the internet through a proxy, export "
             "HTTPS_PROXY=http://<proxy>:<port> (the script honours it) and run again. If the "
             "hub is blocked here, run this on a connected host, or point HF_ENDPOINT at a "
@@ -246,17 +273,19 @@ class Hub:
             "Try again in a minute; if it repeats, check the proxy log.",
         )
 
-    def revision_sha(self, source: Source) -> str:
+    def revision_sha(self, source: Source, *, log: TextIO | None = None) -> str:
         data = self._json(
-            f"{self.endpoint}/api/models/{source.repo}/revision/{urllib.parse.quote(source.revision)}"
+            f"{self.endpoint}/api/models/{source.repo}/revision/{urllib.parse.quote(source.revision)}",
+            log=log,
         )
         sha = data.get("sha")
         return str(sha) if sha else source.revision
 
-    def tree(self, source: Source) -> list[RemoteFile]:
+    def tree(self, source: Source, *, log: TextIO | None = None) -> list[RemoteFile]:
         data = self._json(
             f"{self.endpoint}/api/models/{source.repo}/tree/"
-            f"{urllib.parse.quote(source.revision)}?recursive=true"
+            f"{urllib.parse.quote(source.revision)}?recursive=true",
+            log=log,
         )
         files: list[RemoteFile] = []
         for entry in data:
@@ -290,9 +319,7 @@ class Hub:
             have = 0
         headers = {"Range": f"bytes={have}-"} if have else {}
         try:
-            with self.opener(
-                self._request(url, headers=headers), timeout=self.timeout_s
-            ) as response:  # type: ignore[call-arg]
+            with self._open(self._request(url, headers=headers), log=log) as response:
                 status = getattr(response, "status", 200)
                 mode = "ab" if have and status == 206 else "wb"
                 if mode == "wb":
@@ -460,9 +487,10 @@ def plan_model(
     *,
     include: Sequence[str] = (),
     exclude: Sequence[str] = (),
+    log: TextIO | None = None,
 ) -> ModelPlan:
-    commit = hub.revision_sha(source)
-    files = hub.tree(source)
+    commit = hub.revision_sha(source, log=log)
+    files = hub.tree(source, log=log)
     chosen, skipped = select(files, include=include, exclude=exclude)
     if not chosen:
         raise FetchError(
@@ -754,7 +782,7 @@ def main(
         # Say what will happen before it happens (CLAUDE.md §9): list and size everything,
         # check the disk, and only then download.
         plans = [
-            plan_model(hub, source, dest, include=args.include, exclude=args.exclude)
+            plan_model(hub, source, dest, include=args.include, exclude=args.exclude, log=out)
             for source in sources
         ]
         for plan in plans:
