@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from slas_git.credentials import CredentialError, FakeSealer
+from slas_git.credentials import CredentialError, FakeSealer, Sealer
 from slas_git.hostapi import UrllibHttpClient
 from slas_git.hosts import GitHost, GitHosts
 from slas_git.redact import find_secrets, redact
@@ -719,9 +719,14 @@ def test_unavailable_sealer_makes_credential_routes_503_and_health_says_so(
         settings = Settings(data_root=tmp_path / "data", hosts_file=tmp_path / "hosts.yaml")
         hosts_file = HostsFile(settings.hosts_file)
         hosts_file.save(fake_hosts(server))
-        sealer = build_sealer("aes-gcm", SECRET_KEY)
-        if not isinstance(sealer, UnavailableSealer):  # pragma: no cover — cryptography present
-            pytest.skip("the cryptography package is installed here")
+        assert build_sealer("aes-gcm", SECRET_KEY).name == "aes-gcm"  # the production default
+        sealer: Sealer = UnavailableSealer(
+            ThreePartMessage(
+                "The AES-GCM sealer is not available on this host.",
+                "Its package is missing.",
+                "Install it.",
+            )
+        )
         broker = build_broker(settings, hosts=hosts_file.load(), sealer=sealer)
         client = TestClient(
             create_app(broker=broker, hosts=hosts_file), raise_server_exceptions=False
