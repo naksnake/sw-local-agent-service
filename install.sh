@@ -6,6 +6,10 @@
 #   weights and models.yaml → docker compose up → wait healthy → print the URL and the
 #   one-time administrator password.
 #
+#   --build (ADR-0014): on a connected quickstart host, pull the third-party images by their
+#   pinned tags and build the first-party images from this checkout instead of loading a
+#   bundle; the filled image lock is written under the data root, never committed.
+#
 # Read-only steps come first; nothing on the host changes until every one of them passed.
 # Idempotent: running it twice is safe. `--dry-run` performs the read-only steps for real
 # and prints what the changing steps would do.
@@ -17,6 +21,7 @@ PROFILE="${SLAS_PROFILE:-quickstart}"
 DATA_ROOT="${SLAS_DATA_ROOT:-/AI/Agent}"
 BUNDLE_DIR="${SLAS_BUNDLE_DIR:-$SCRIPT_DIR/bundle}"
 REGISTRY="${SLAS_REGISTRY:-}"
+BUILD=0
 COSIGN_KEY="${SLAS_COSIGN_KEY:-$SCRIPT_DIR/config/cosign.pub}"
 LOCK_FILE="${SLAS_IMAGE_LOCK:-$SCRIPT_DIR/compose/images.lock.json}"
 MODELS_DIR="${SLAS_MODELS_DIR:-}"
@@ -32,7 +37,7 @@ SKIP_PREFLIGHT=0
 
 usage() {
   cat <<EOF
-Usage: ./install.sh [--profile quickstart|prod] [--data-root PATH] [--bundle DIR | --registry HOST]
+Usage: ./install.sh [--profile quickstart|prod] [--data-root PATH] [--bundle DIR | --registry HOST | --build]
                     [--models DIR] [--fetch-models] [--models-only] [--dry-run] [--preflight-only] [--json]
 
 Installs SW Local Agent Service on this host: preflight, verification, .env and secrets,
@@ -45,6 +50,13 @@ step passed.
                        Default: ./bundle when it exists.
   --registry HOST      Pull from a registry inside the perimeter (Harbor); every image is
                        verified with cosign before it is pulled (prod).
+  --build              Build from this source checkout on a connected host (quickstart only,
+                       ADR-0014): pull the third-party images by their pinned tags, build the
+                       first-party images from images/<name>/Dockerfile, write the filled image
+                       lock to <data root>/images.lock.json, then start the stack from those
+                       images. Registry label: \$SLAS_REGISTRY or "local". Needs Docker with
+                       Compose, uv (or an existing .venv), and a route to the registries.
+                       \`./install.sh --build --fetch-models\` is the one-command connected install.
   --models DIR         Model weights fetched with scripts/fetch_models.py on a connected host.
                        Their checksums are verified, they are placed under <data root>/Models,
                        and Models/models.yaml is written from config/models.<profile>.yaml
@@ -74,6 +86,7 @@ while [[ $# -gt 0 ]]; do
     --bundle=*)       BUNDLE_DIR="${1#*=}"; shift ;;
     --registry)       REGISTRY="${2:-}"; shift 2 ;;
     --registry=*)     REGISTRY="${1#*=}"; shift ;;
+    --build)          BUILD=1; shift ;;
     --models)         MODELS_DIR="${2:-}"; shift 2 ;;
     --models=*)       MODELS_DIR="${1#*=}"; shift ;;
     --models-only)    MODELS_ONLY=1; shift ;;
@@ -105,6 +118,13 @@ if [[ -z "$DATA_ROOT" ]]; then
   echo "The data root is empty." >&2
   echo "Likely cause: --data-root or SLAS_DATA_ROOT was set to nothing." >&2
   echo "What to do: pass a directory, for example --data-root /AI/Agent." >&2
+  exit 2
+fi
+
+if [[ $BUILD -eq 1 && "$PROFILE" == "prod" ]]; then
+  echo "--build is for the quickstart profile only." >&2
+  echo "Likely cause: the prod profile verifies every image's cosign signature, and images built on this host carry none (ADR-0014)." >&2
+  echo "What to do: for prod, build and sign on the release host (scripts/lock-images.sh --sign, scripts/build-bundle.sh --profile prod) and install from that bundle or from Harbor; for a connected quickstart host, drop --profile prod." >&2
   exit 2
 fi
 
@@ -181,6 +201,22 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------------------- 1a the deploy packages' environment (--build)
+# The installer's Python steps (the image lock, .env) import the deploy packages, whose
+# dependencies the bundle ships and a source checkout gets from uv.lock. --build is the
+# connected path, so the locked environment is created here when it is missing.
+if [[ $BUILD -eq 1 && ! -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+  if ! command -v uv >/dev/null 2>&1; then
+    nothing_changed "--build needs the locked Python environment, and neither .venv nor uv is on this host. Likely cause: the checkout is fresh and uv is not installed. What to do: install uv (https://docs.astral.sh/uv/), or run \`uv sync --frozen --no-dev\` in $SCRIPT_DIR on a host that has it, then run ./install.sh --build again." 1
+  fi
+  echo
+  echo "Creating the locked Python environment in $SCRIPT_DIR/.venv with uv (uv sync --frozen --no-dev)."
+  if ! (cd "$SCRIPT_DIR" && uv sync --frozen --no-dev); then
+    nothing_changed "uv sync did not finish. Likely cause: no route to the package index, or uv.lock and pyproject.toml disagree. What to do: read uv's message above, fix it, then run ./install.sh --build again." 1
+  fi
+  PYTHON="$SCRIPT_DIR/.venv/bin/python"
+fi
+
 # ---------------------------------------------------------------------------- 1b fetch the model weights (optional)
 # Downloads into the staging directory, never into the data root; the running platform never
 # downloads anything (INV-1). Whether the platform host may fetch while it is being prepared is
@@ -204,7 +240,13 @@ if [[ $MODELS_ONLY -eq 0 ]]; then   # --models-only needs neither a bundle nor a
 echo
 echo "Verifying what will be installed ($PROFILE profile)."
 SOURCE=""
-if [[ -n "$REGISTRY" ]]; then
+if [[ $BUILD -eq 1 ]]; then
+  SOURCE="local"
+  if [[ -z "$REGISTRY" && -f "$DATA_ROOT/.env" ]]; then
+    REGISTRY="$(sed -n 's/^SLAS_REGISTRY=//p' "$DATA_ROOT/.env" | tail -n 1)"   # keep the label a previous install tagged with
+  fi
+  REGISTRY="${REGISTRY:-local}"
+elif [[ -n "$REGISTRY" ]]; then
   SOURCE="registry"
 elif [[ -d "$BUNDLE_DIR" ]]; then
   SOURCE="bundle"
@@ -225,7 +267,19 @@ if [[ "$PROFILE" == "prod" ]]; then
   fi
 fi
 
-if [[ "$SOURCE" == "bundle" ]]; then
+if [[ "$SOURCE" == "local" ]]; then
+  LOCK_FILE="$DATA_ROOT/images.lock.json"   # filled by the build step below; never committed
+  echo "Images are built from this checkout and pulled by their pinned tags after the read-only checks (ADR-0014); the filled image lock goes to $LOCK_FILE."
+  for tool in docker uv; do
+    if [[ "$tool" == "uv" && -x "$SCRIPT_DIR/.venv/bin/python" ]]; then continue; fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      nothing_changed "--build needs $tool on this host and it was not found. Likely cause: the host was prepared for a bundle install only. What to do: install $tool, then run ./install.sh --build again." 1
+    fi
+  done
+  if ! docker compose version >/dev/null 2>&1; then
+    nothing_changed "Docker Compose (the \`docker compose\` plugin) is not available. Likely cause: Docker was installed without the compose plugin. What to do: install docker-compose-plugin, then run ./install.sh --build again." 1
+  fi
+elif [[ "$SOURCE" == "bundle" ]]; then
   if [[ "$PROFILE" == "prod" ]]; then
     if [[ ! -f "$BUNDLE_DIR/manifest.json" || ! -f "$BUNDLE_DIR/manifest.json.sig" ]]; then
       nothing_changed "The bundle at $BUNDLE_DIR has no signed manifest. Likely cause: an incomplete download or a bundle built without signing. What to do: download the complete release bundle again." 1
@@ -459,12 +513,39 @@ TLS_NAMES="127.0.0.1,localhost,$(hostname -f 2>/dev/null || hostname)"
 PUBLIC_HOST="${SLAS_PUBLIC_HOST:-$(hostname -f 2>/dev/null || hostname)}"
 ENV_FILE="$DATA_ROOT/.env"
 
+# ---------------------------------------------------------------------------- 3a build and pull the images (--build)
+if [[ "$SOURCE" == "local" ]]; then
+  echo
+  echo "Building the first-party images from $SCRIPT_DIR and pulling the third-party images for the $PROFILE profile (registry label $REGISTRY, version $VERSION)."
+  echo "This host reaches the image registries, PyPI and the npm registry for the build; the running platform still has no egress (ADR-0014)."
+  build_args=(build-images --lock "$SCRIPT_DIR/compose/images.lock.json" --profile "$PROFILE" \
+    --registry "$REGISTRY" --version "$VERSION" --repo "$SCRIPT_DIR" --out "$LOCK_FILE")
+  if [[ $DRY_RUN -eq 1 ]]; then
+    build_args+=(--dry-run)
+  else
+    mkdir -p "$DATA_ROOT"
+  fi
+  if ! "$PYTHON" -m slas_deploy.installer "${build_args[@]}"; then
+    echo
+    echo "Building or pulling the images did not finish; the messages above say which one and why."
+    echo "Likely cause: no route to a registry, a build error, or the Docker daemon is not running."
+    echo "What to do: fix what the message names, then run ./install.sh --build again; images already built or pulled are kept and the stack was not started."
+    exit 1
+  fi
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "Would check that lock: every image the $PROFILE profile starts must have an image ID."
+  elif ! "$PYTHON" -m slas_deploy.installer check-lock --lock "$LOCK_FILE" --profile "$PROFILE"; then
+    echo "The lock written by the build does not pin every image the $PROFILE profile starts; the stack was not started."
+    exit 1
+  fi
+fi
+
 echo
 if [[ $DRY_RUN -eq 1 ]]; then
   echo "Would write $ENV_FILE ($PROFILE keys, registry $REGISTRY, version $VERSION; keys you set are kept)."
-  echo "Would create the missing secret files under $DATA_ROOT/secrets (0600)."
+  echo "Would create the missing secret files under $DATA_ROOT/secrets (0600) and $DATA_ROOT/tls for the edge's certificates."
 else
-  mkdir -p "$DATA_ROOT"
+  mkdir -p "$DATA_ROOT" "$DATA_ROOT/tls"   # tls: the edge's CA and certificates, owned by the user running the stack
   "$PYTHON" -m slas_deploy.installer write-env --example "$SCRIPT_DIR/config/.env.example" \
     --target "$ENV_FILE" --profile "$PROFILE" --data-root "$DATA_ROOT" --version "$VERSION" \
     --registry "$REGISTRY" --uid "$(id -u)" --gid "$(id -g)" --tls-names "$TLS_NAMES" \
@@ -510,32 +591,58 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
-echo "Waiting for the services to report healthy."
-for _ in $(seq 1 60); do
-  unhealthy="$("${COMPOSE[@]}" ps --format json | "$PYTHON" -c '
-import json, sys
-rows = [json.loads(l) for l in sys.stdin if l.strip()]
-bad = [r.get("Service") or r.get("Name") for r in rows
-       if (r.get("State") != "running" and r.get("State") != "exited") or (r.get("Health") not in ("", "healthy", None))]
-print(" ".join(str(b) for b in bad))' 2>/dev/null || echo "compose")"
+# A service counts as healthy when it is running and its healthcheck says healthy (or it has
+# none); restarting, created, health "starting" or "unhealthy", and a non-zero exit are not.
+# SLAS_HEALTH_WAIT_S (default 300) and SLAS_HEALTH_POLL_S (default 5) shape the wait.
+HEALTH_WAIT_S="${SLAS_HEALTH_WAIT_S:-300}"
+HEALTH_POLL_S="${SLAS_HEALTH_POLL_S:-5}"
+echo "Waiting up to $HEALTH_WAIT_S s for the services to report healthy."
+waited=0
+unhealthy=""
+while :; do
+  unhealthy="$("${COMPOSE[@]}" ps --all --format json 2>/dev/null | "$PYTHON" -m slas_deploy.installer unhealthy 2>/dev/null || echo "compose")"
   if [[ -z "$unhealthy" ]]; then
     break
   fi
-  sleep 5
+  if [[ $waited -ge $HEALTH_WAIT_S ]]; then
+    break
+  fi
+  sleep "$HEALTH_POLL_S"
+  waited=$((waited + HEALTH_POLL_S))
 done
-if [[ -n "${unhealthy:-}" ]]; then
-  echo "Some services are not healthy yet: $unhealthy."
-  echo "Likely cause: a slow first start (models, Keycloak) or a failed dependency."
-  echo "What to do: run \`slas status\` in a minute; \`slas logs <service>\` shows why one is not up."
+if [[ -n "$unhealthy" ]]; then
+  echo
+  echo "After $HEALTH_WAIT_S s these services are not healthy: $unhealthy."
+  echo "Likely cause: a slow first start (models, Keycloak), a failed dependency, or a container that keeps restarting; each one's last log lines follow."
+  echo "What to do: read the lines below, fix what they name, then run ./install.sh again; \`slas status\` and \`slas logs <service>\` show the same at any time."
+  for svc in $unhealthy; do
+    echo
+    echo "--- $svc: last 20 log lines"
+    "${COMPOSE[@]}" logs --tail 20 --no-color "$svc" 2>&1 || echo "(no logs: the container may not have been created)"
+  done
   exit 1
 fi
 
 echo
 echo "SW Local Agent Service is up. Sign in at https://$PUBLIC_HOST"
+# The one-time administrator password is shown only while the api says the bootstrap is
+# still pending (ADR-0007, docs/api-contract.md: `slas-api bootstrap status`).
 ADMIN_PASSWORD_FILE="$DATA_ROOT/secrets/admin-initial-password"
-if [[ -f "$ADMIN_PASSWORD_FILE" ]]; then
-  echo "Administrator: admin@slas.local — one-time password: $(cat "$ADMIN_PASSWORD_FILE") (you will choose a new one at first sign-in)."
-fi
+bootstrap="$("${COMPOSE[@]}" exec -T api slas-api bootstrap status 2>/dev/null | tr -d '[:space:]' || true)"
+case "$bootstrap" in
+  pending)
+    if [[ -f "$ADMIN_PASSWORD_FILE" ]]; then
+      echo "Administrator: admin@slas.local — one-time password: $(cat "$ADMIN_PASSWORD_FILE") (you will choose a new one at first sign-in)."
+    else
+      echo "The administrator's one-time password is still pending, but $ADMIN_PASSWORD_FILE is missing. Likely cause: the secrets directory was changed by hand. What to do: reset it with \`docker compose exec api slas-api user add\` or restore the file from a backup."
+    fi ;;
+  done)
+    echo "Administrator: admin@slas.local — the administrator already chose a password; the one-time password is no longer valid." ;;
+  *)
+    echo "Could not ask the api whether the administrator's one-time password is still pending (it answered: ${bootstrap:-nothing})."
+    echo "Likely cause: the api is still starting, or its image does not carry the slas-api command yet."
+    echo "What to do: in a minute run \`docker compose exec api slas-api bootstrap status\`; while it prints pending, the password in $ADMIN_PASSWORD_FILE is the one to sign in with." ;;
+esac
 if [[ "$PROFILE" == "prod" ]]; then
   echo "Keycloak: https://$PUBLIC_HOST/auth (realm slas). Vault: unseal keys were printed by the bootstrap; store them offline now."
 fi

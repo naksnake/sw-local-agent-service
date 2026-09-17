@@ -9,6 +9,8 @@ sentence per thing it did.
     check-lock      refuse to continue while the profile starts an unpinned image
     check-manifest  compare a bundle's manifest with the lock
     compose-files   the -f arguments for the profile and the overlays .env asks for
+    build-images    --build (ADR-0014): pull, build, tag; write the filled lock to the data root
+    unhealthy       read `docker compose ps --format json`; print the services not healthy yet
 """
 
 from __future__ import annotations
@@ -19,8 +21,9 @@ import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Final, TextIO
+from typing import Any, Final, TextIO
 
+from slas_deploy.build import BuildError, LocalRunner, Runner, build_images, describe, plan
 from slas_deploy.compose import PROD_SECRETS, QUICKSTART_SECRETS
 from slas_deploy.images import (
     BundleManifest,
@@ -31,6 +34,7 @@ from slas_deploy.images import (
     check_manifest,
     parse_lock_json,
     registry_for,
+    render_lock_json,
 )
 from slas_schemas.envfile import EnvFile, generate_secret, read_env, write_atomic
 
@@ -171,6 +175,80 @@ def _load_lock(path: Path) -> ImageLock:
     return parse_lock_json(path.read_text(encoding="utf-8"))
 
 
+def unhealthy_services(ps_json: str) -> list[str]:
+    """The services `docker compose ps --format json` shows as not healthy yet.
+
+    Accepts one JSON object per line (compose v2.21+) or a JSON array. Healthy means state
+    `running` with health `healthy` or no healthcheck; `restarting`, `created`, `paused`,
+    `dead`, health `starting` or `unhealthy` are not. A container that exited with 0 is a
+    finished one-shot job (minio-init) and is fine; a non-zero exit is not.
+    """
+    text = ps_json.strip()
+    if not text:
+        return []
+    rows: list[dict[str, Any]]
+    try:
+        parsed = json.loads(text)
+        rows = parsed if isinstance(parsed, list) else [parsed]
+    except json.JSONDecodeError:
+        rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+    unhealthy: list[str] = []
+    for row in rows:
+        name = str(row.get("Service") or row.get("Name") or "unknown")
+        state = str(row.get("State") or "").lower()
+        health = str(row.get("Health") or "").lower()
+        exit_code = row.get("ExitCode", 0)
+        if state == "exited" and str(exit_code) == "0":
+            continue
+        if state != "running" or health not in ("", "healthy"):
+            unhealthy.append(name)
+    return unhealthy
+
+
+def run_build(
+    *,
+    lock_path: Path,
+    profile: Profile,
+    registry: str,
+    version: str,
+    repo: Path,
+    out_path: Path,
+    dry_run: bool,
+    out: TextIO,
+    runner: Runner | None = None,
+) -> int:
+    lock = _load_lock(lock_path)
+    if dry_run:
+        describe(
+            plan(lock, profile, registry=registry, version=version, repo=repo),
+            out=out,
+            lock_path=out_path,
+        )
+        return EXIT_OK
+    try:
+        filled = build_images(
+            lock,
+            profile,
+            registry=registry,
+            version=version,
+            repo=repo,
+            runner=runner or LocalRunner(),
+            out=out,
+        )
+    except BuildError as exc:
+        out.write(exc.message.render() + "\n")
+        return EXIT_PROBLEMS
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(out_path, render_lock_json(filled), mode=0o644)
+    wanted = filled.for_profile(profile)
+    built = sum(1 for image in wanted if image.first_party)
+    out.write(
+        f"Wrote the filled image lock to {out_path}: {built} images built from this checkout, "
+        f"{len(wanted) - built} pulled and tagged for {registry}.\n"
+    )
+    return EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> int:
     out = stdout if stdout is not None else sys.stdout
     parser = argparse.ArgumentParser(prog="slas_deploy.installer")
@@ -207,7 +285,32 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
     cf.add_argument("--profile", choices=("quickstart", "prod"), required=True)
     cf.add_argument("--compose-dir", required=True)
 
+    build = commands.add_parser("build-images")
+    build.add_argument("--lock", required=True, help="the unpinned lock in the repository")
+    build.add_argument("--profile", choices=("quickstart", "prod"), required=True)
+    build.add_argument("--registry", required=True)
+    build.add_argument("--version", required=True)
+    build.add_argument("--repo", required=True, help="the checkout: the build context")
+    build.add_argument("--out", required=True, help="where the filled lock is written")
+    build.add_argument("--dry-run", action="store_true")
+
+    commands.add_parser("unhealthy", help="stdin: docker compose ps --format json")
+
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.command == "build-images":
+        return run_build(
+            lock_path=Path(args.lock),
+            profile=args.profile,
+            registry=args.registry,
+            version=args.version,
+            repo=Path(args.repo),
+            out_path=Path(args.out),
+            dry_run=args.dry_run,
+            out=out,
+        )
+    if args.command == "unhealthy":
+        out.write(" ".join(unhealthy_services(sys.stdin.read())) + "\n")
+        return EXIT_OK
     if args.command == "write-env":
         changed = write_env(
             example=Path(args.example),

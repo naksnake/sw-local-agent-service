@@ -15,12 +15,14 @@ weights in a directory fetched on a connected host (§2).
 | Station runner on a physical test station | runs | `deploy/station-runner/`, offline wheels, mTLS enrolment |
 | Kernel (with the ADR-0013 skill gate), skills, HAL, executors, gateway, model manager, git broker, observability | run against fakes, the Python unit suite (`uv run pytest`), 28 WebUI tests | Python packages in this repository |
 | Model weights: fetched on a connected host from the pinned `config/model-sources.txt`, verified and placed under `Models/` with `models.yaml` by `./install.sh --models DIR --models-only` | runs | `scripts/fetch_models.py`, `config/models.<profile>.yaml`, §2 |
-| `docker compose up` of the platform stack | **blocked** | first-party images have no Dockerfiles yet except the sandboxes and the screen worker; `compose/images.lock.*` is unpinned, so the installer refuses (INV-8) |
+| `docker compose up` of the platform stack from this checkout on a **connected** quickstart host: `./install.sh --build` builds every first-party image (`images/<name>/Dockerfile`, bases by digest), pulls the third-party ones by their pinned tags, writes the filled lock to `/AI/Agent/images.lock.json` and starts the stack | runs (ADR-0014) | §3; the signed offline bundle for prod still waits on a release host and the vendored caches |
+| Behind the edge once the stack is up: sign-in, Home, Admin → People, Admin → Settings, Models (the `api` and `webui` images build `apps/api` and `apps/webui`) | runs with the api and WebUI rounds | `docs/api-contract.md`; the api image needs `apps/api` in the uv workspace as `slas-api` |
+| The other services (orchestrator, gateway, model manager, sandbox manager, git broker, executors, search) inside the stack | health only | each container answers `/health` and `/metrics` with `python -m slas_observability.serve <name>` until its own entrypoint lands; Prometheus and Grafana scrape them today |
 | vLLM instances started by the model manager | **blocked** | the Podman driver behind `ContainerRuntime` waits on its dependency approval; the registry, fit and swap logic are done |
-| Sign-in, users, Postgres-backed tickets | **blocked** | `apps/api` stack (ADR-0005) not approved |
 
-So: today the box can be prepared, checked and used for development and for the station
-runner. The one-command install becomes real once the three blocked rows land.
+So: today the box can be prepared, checked, brought up from source with `--build`, and
+signed in to; the agents' services come alive round by round inside the running stack. The
+air-gapped bundle install stays the release path (§3).
 
 ## The procedure, in order
 
@@ -32,15 +34,16 @@ Tick each line; every command below is explained in the section it points to.
 | 2 | B300 host | Mount ≥ 200 GiB at `/AI/Agent`; a separate volume for `Models/` (≥ 1.5 TB for the plan) | `slas doctor` Disk space is ✓ | §1 |
 | 3 | Connected host | `scripts/fetch_models.py fetch --sources config/model-sources.txt --profile prod --dry-run --dest ./models`, then the same without `--dry-run` | "Total: 7 models, …" then one sentence per model and `models/manifest.json` | §2 |
 | 4 | Sneakernet → B300 | Copy `models/` next to `install.sh` (or anywhere, and pass `--models DIR`); `./install.sh --profile prod --models-only` verifies the checksums, places the weights under `/AI/Agent/Models/` and writes `models.yaml` from `config/models.prod.yaml` | "Placed 7 models under /AI/Agent/Models" and "Wrote … from the prod template." | §2, §4 |
-| 5 | Repository | Decide the three dependency items that block the container stack: `apps/api` stack (ADR-0005), the Podman driver for the model manager, first-party Dockerfiles | ADRs accepted | §0 |
-| 6 | Connected build host | `scripts/lock-images.sh --sign`, `scripts/build-bundle.sh --profile prod`; commit the filled lock | `compose/images.lock.*` has no null digest | §3 |
-| 7 | Sneakernet → B300 | Carry `slas-bundle-<version>.tgz` and `config/cosign.pub` | both files on the host | §3 |
-| 8 | B300 host | `./install.sh --profile prod --dry-run`, then `./install.sh --profile prod` | the sign-in URL and one-time admin password are printed | §3 |
+| 5 | B300 host (connected, quickstart) | `./install.sh --build --fetch-models --dry-run`, then the same without `--dry-run` (ADR-0014) | "SW Local Agent Service is up. Sign in at https://…" and the one-time password while the api says the bootstrap is pending | §3a |
+| 6 | Connected build host (prod) | `scripts/lock-images.sh --sign`, `scripts/build-bundle.sh --profile prod`; commit the filled lock | `compose/images.lock.*` has no null digest | §3b |
+| 7 | Sneakernet → B300 | Carry `slas-bundle-<version>.tgz` and `config/cosign.pub` | both files on the host | §3b |
+| 8 | B300 host | `./install.sh --profile prod --dry-run`, then `./install.sh --profile prod` | the sign-in URL and one-time admin password are printed | §3b |
 | 9 | Browser | Sign in, change the password, Admin → People, Admin → Stations → Issue code | first station enrolled | §5 |
 | 10 | B300 host | `slas backup drill` once; record the RTO | a row in `docs/runbooks/restore-drill.md` | prod runbook |
 
-Steps 1 to 4 can be done today (step 4 with `--models-only`, since the full install waits
-on the bundle). Steps 6 to 10 wait on step 5.
+Steps 1 to 5 can be done today (step 5 is the connected quickstart path; step 4 alone with
+`--models-only` when the weights arrive before the host is connected). Steps 6 to 10 are
+the prod path and wait on a release host with the release key and the vendored caches.
 
 ## 1 · Prepare the host
 
@@ -125,7 +128,45 @@ prod about 1.2 TiB. The matching registries are
 4. Edit roles later on the Models page or in `models.yaml`; the format is in
    `services/model-manager/models.example.yaml`, the layout for this box in §4.
 
-## 3 · Install the platform stack (when the blocked rows land)
+## 3 · Install the platform stack
+
+### 3a · From this checkout on a connected host (quickstart, ADR-0014)
+
+On the box itself, as root, with Docker 29 and the Compose plugin installed and a route to
+Docker Hub, ghcr.io, quay.io, nvcr.io, PyPI and the npm registry:
+
+```bash
+git clone <this repository> && cd sw-local-agent-service
+./install.sh --build --fetch-models --dry-run   # preflight; the fetch plan; every pull and build described
+./install.sh --build --fetch-models             # weights → build and pull images → .env → up → sign-in URL
+```
+
+What happens, in order: the preflight; the quickstart weights are fetched into `./models`
+(skip `--fetch-models` if they are already under `/AI/Agent/Models`); the locked Python
+environment is created with `uv` when `.venv` is missing; every third-party image is pulled
+by its pinned tag and retagged `local/<reference>`; every first-party image is built from
+`images/<name>/Dockerfile` with the repository root as context (bases by digest, Python
+dependencies from `uv.lock`, JavaScript from `pnpm-lock.yaml`); the filled lock is written
+to `/AI/Agent/images.lock.json` and checked; `.env`, the secret files and `/AI/Agent/tls`
+are written; the weights are placed; `docker compose up -d --pull never` starts the stack;
+the installer waits up to five minutes for every service to be healthy and, if one is not,
+prints its last 20 log lines in three parts. At the end it asks the api whether the
+administrator's one-time password is still pending and prints it only then.
+
+The first build downloads base images and packages and takes a while; a second run is
+mostly cached. `SLAS_REGISTRY` names the local tag label (default `local`),
+`SLAS_HEALTH_WAIT_S` the health budget. The browser will warn about the certificate:
+export the edge's root from `/AI/Agent/tls/caddy/pki/authorities/local/root.crt` and trust
+it, or set `SLAS_TLS_MODE=provided` in `.env` with `server.crt`/`server.key` under
+`/AI/Agent/tls/` and run `docker compose up -d` again.
+
+Honest scope: this is an INV-1 exception for the preparation window only (ADR-0014). What
+answers behind the edge today is sign-in, Home, Admin → People, Admin → Settings and Models;
+every other service answers `/health` and `/metrics` and nothing else until its round. The
+build is not reproducible bit for bit (Debian and Alpine packages are not yet pinned), which
+is why the filled lock stays on the host and is never committed.
+
+### 3b · From the signed bundle (prod, the release path)
 
 On the connected build host, once per release:
 

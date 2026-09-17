@@ -23,7 +23,7 @@ FORBIDDEN_MOUNTS = ("/tmp/.X11-unix", "/dev/input", "docker.sock")  # noqa: S108
 
 def test_every_deployment_file_is_in_step_with_the_code() -> None:
     files = rendered_files()
-    assert len(files) == 20
+    assert len(files) == 29
     for relative, content in files.items():
         path = REPO_ROOT / relative
         assert path.is_file(), f"{relative} is missing; run `uv run python -m slas_deploy.render`"
@@ -34,9 +34,9 @@ def test_every_deployment_file_is_in_step_with_the_code() -> None:
 
 
 def test_render_writes_everywhere_and_prints_a_count(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
-    assert len(write_all(tmp_path)) == 20
+    assert len(write_all(tmp_path)) == 29
     assert render_main([str(tmp_path / "again")]) == 0
-    assert "20 files written" in capsys.readouterr().out
+    assert "29 files written" in capsys.readouterr().out
 
 
 def test_the_base_stack_follows_the_zone_model_and_adr_0003() -> None:
@@ -66,6 +66,14 @@ def test_the_base_stack_follows_the_zone_model_and_adr_0003() -> None:
         if name != "edge":
             assert "ports" not in service, f"only edge publishes a port, not {name}"
     assert services["edge"]["ports"] == ["${SLAS_HTTPS_PORT}:443"]
+    assert services["edge"]["sysctls"] == {"net.ipv4.ip_unprivileged_port_start": "0"}
+    assert services["edge"]["environment"]["SLAS_TLS_MODE"] == "${SLAS_TLS_MODE}"
+    for holder in compose.RUNTIME_SOCKET_HOLDERS:
+        assert (
+            f"{compose.RUNTIME_SOCKET}:{compose.RUNTIME_SOCKET_IN_CONTAINER}"
+            in services[holder]["volumes"]
+        )
+    assert "SLAS_RUNTIME_SOCKET" in (REPO_ROOT / "config" / ".env.example").read_text()
     assert set(doc["secrets"]) == {*compose.QUICKSTART_SECRETS, "grafana_admin_password"}
     for secret in doc["secrets"].values():
         assert secret["file"].startswith("${SLAS_DATA_ROOT}/secrets/")

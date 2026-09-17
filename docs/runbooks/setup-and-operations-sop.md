@@ -27,12 +27,15 @@ Two states apply to every step:
 | Station runner on a physical test station, mTLS enrolment | Today | — |
 | Kernel, skills, HAL, executors, gateway, model manager, Git broker, observability | Today, against fakes | — |
 | Model weights fetched on a connected host and verified offline | Today | — |
-| `docker compose up` of the platform stack | Waits | first-party Dockerfiles; a filled image lock |
+| `docker compose up` of the platform stack from a source checkout on a connected quickstart host (`./install.sh --build`, ADR-0014) | Today | the signed bundle for prod still waits on a release host |
 | vLLM instances started by the model manager | Waits | the Podman driver's dependency approval |
 | Sign-in, people, Postgres tickets | Waits | the `apps/api` stack (ADR-0005) |
 
-The three decisions are dependency approvals nobody has answered. Until they are, the host is a
-development and station-runner host. §10 says how to use it that way.
+The two waiting rows are dependency approvals nobody has answered. Until they are, a connected
+quickstart host runs the stack from source (`./install.sh --build`, ADR-0014) with sign-in,
+Home, People, Settings and Models behind the edge and every other service answering health
+only; an air-gapped host is a development and station-runner host. §10 says how to use it
+that way.
 
 ## 3 · Roles
 
