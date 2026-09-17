@@ -34,7 +34,8 @@ from slas_kernel.executor import ExecutionContext, UnknownPrimitiveError
 from slas_kernel.rca import CrossChecker
 from slas_orchestrator.coding.breakdown import TaskItem
 from slas_orchestrator.coding.export import zip_project
-from slas_sandbox_manager.manager import SandboxManager, Session
+from slas_sandbox_manager.manager import Session
+from slas_sandbox_manager.runtime import ExecResult
 from slas_sandbox_manager.spec import WORKSPACE
 from slas_schemas.common import SlasModel
 from slas_schemas.errors import ThreePartMessage
@@ -147,10 +148,45 @@ def snapshot(project_dir: Path) -> dict[str, str]:
     return files
 
 
+class SandboxAccess(Protocol):
+    """What the executor needs from the sandbox manager (ADR-0015).
+
+    The in-process `slas_sandbox_manager.manager.SandboxManager` satisfies it, and so does
+    the orchestrator's HTTP client (`slas_orchestrator.clients.HttpSandboxManager`): open
+    and exec travel over the wire, while the two paths are computed locally because both
+    containers mount the same `${SLAS_DATA_ROOT}`.
+    """
+
+    def project_dir(self, user: str, slug: str) -> Path: ...
+
+    def artifacts_dir(self, user: str, run_id: str) -> Path: ...
+
+    def open(
+        self,
+        user: str,
+        slug: str,
+        *,
+        image: str,
+        language: str,
+        display_name: str,
+        ttl_s: int | None = None,
+    ) -> Session: ...
+
+    def exec(
+        self,
+        session_id: str,
+        argv: Sequence[str],
+        *,
+        cwd: str = WORKSPACE,
+        timeout_s: int = 600,
+        stdin: str | None = None,
+    ) -> ExecResult: ...
+
+
 class SandboxGitExec:
     """Runs git inside the sandbox through the manager's exec API (argv only)."""
 
-    def __init__(self, manager: SandboxManager, session_id: str) -> None:
+    def __init__(self, manager: SandboxAccess, session_id: str) -> None:
         self.manager = manager
         self.session_id = session_id
 
@@ -174,7 +210,7 @@ class CodingExecutor:
     def __init__(
         self,
         *,
-        manager: SandboxManager,
+        manager: SandboxAccess,
         coder: Coder,
         cross_checker: CrossChecker | None = None,
         git_access: GitAccess | None = None,
@@ -221,6 +257,12 @@ class CodingExecutor:
             raise RuntimeError(f"{context.ticket_id} has no open sandbox; run sandbox_open first")
         return session
 
+    def _project(self, session: Session) -> Path:
+        # Computed here, not read from the session's mounts: over HTTP the mount source is
+        # the path as the sandbox manager (or the host) sees it, while this process reads
+        # the project under its own `${SLAS_DATA_ROOT}`.
+        return Path(self.manager.project_dir(session.user, session.slug))
+
     # --- steps -------------------------------------------------------------------------
 
     def _toolchain(self, step: Step, context: ExecutionContext) -> Observation:
@@ -247,7 +289,7 @@ class CodingExecutor:
         return Observation(
             exit_code=0,
             summary=f"{session.runtime_sentence} {session.handle.spec.sentence()}",
-            stdout=f"project={session.project_dir}\nbase={self._base[context.ticket_id]}\n",
+            stdout=f"project={self._project(session)}\nbase={self._base[context.ticket_id]}\n",
         )
 
     def _run_checks(self, session: Session, checks: list[dict[str, object]]) -> list[CheckResult]:
@@ -269,7 +311,7 @@ class CodingExecutor:
 
     def _iterate(self, step: Step, context: ExecutionContext) -> Observation:
         session = self._require_session(context)
-        project = Path(session.project_dir)
+        project = self._project(session)
         task = TaskItem.model_validate(step.args["task"])
         checks = list(step.args.get("checks", []))
         max_iterations = int(step.args.get("max_iterations", 6))
@@ -363,7 +405,7 @@ class CodingExecutor:
     def _export_zip(self, step: Step, context: ExecutionContext) -> Observation:
         session = self._require_session(context)
         out = self.manager.artifacts_dir(context.user, context.ticket_id) / f"{session.slug}.zip"
-        export = zip_project(Path(session.project_dir), out)
+        export = zip_project(self._project(session), out)
         return Observation(
             exit_code=0,
             summary=f"ZIP exported to {export.path} (sha256 {export.sha256[:12]}…).",  # type: ignore[index]
