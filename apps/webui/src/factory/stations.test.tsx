@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { App } from "../App";
 import { FakeGitApi } from "../git/api";
+import { renderApp } from "../test-utils";
 import { FakeStationsAdminApi } from "./api";
 import { StationsAdmin } from "./StationsAdmin";
 
@@ -69,7 +69,7 @@ describe("Admin → Stations", () => {
   });
 
   it("is reachable from Admin next to Git hosts", async () => {
-    render(<App gitApi={new FakeGitApi()} stationsApi={new FakeStationsAdminApi()} />);
+    renderApp({ gitApi: new FakeGitApi(), stationsApi: new FakeStationsAdminApi() });
     fireEvent.click(screen.getByRole("button", { name: "Admin" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Git hosts" })).toBeTruthy();
     fireEvent.click(within(screen.getByLabelText("Admin sections")).getByRole("button", { name: "Stations" }));
