@@ -4,10 +4,13 @@
 > this file first and treats it as authoritative. Where this file conflicts with a
 > request, surface the conflict; never resolve it silently.
 >
-> **Version 3.2 · 2026-09-16** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
+> **Version 3.3 · 2026-09-17** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
 > (phases, done criteria) and `docs/PROMPTS.md` (copy-paste session prompts).
 > 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14). 3.2 records open decisions
-> 12–14 (model weights and voters) raised by the shipped model registries.
+> 12–14 (model weights and voters) raised by the shipped model registries. 3.3 accepts the
+> `apps/api` stack (ADR-0005) and the build-from-source path for a connected quickstart host
+> (ADR-0014: `./install.sh --build` builds and pulls images and fetches weights on that host
+> before the stack starts; the running platform still downloads nothing, INV-1).
 
 ---
 
@@ -817,8 +820,9 @@ decisions cannot be met; accept that for quickstart, add a third family (about 2
 on a fourth GPU, as `models.prod.yaml` does with MiniMax-M2.7), or make the panel size a
 per-profile rule. (13) Fetching weights on the platform host — INV-1 covers the running
 platform; the runbooks assume a separate connected build host, and `scripts/fetch_models.py`
-also works on the platform host before it is installed. Decide whether that preparation
-window is allowed. (14) Voter instances — the model manager starts one vLLM instance per
+also works on the platform host before it is installed. ADR-0014 allows that preparation
+window on a connected quickstart host (`--fetch-models`, `--build`); the prod path keeps the
+separate build host and the signed bundle. (14) Voter instances — the model manager starts one vLLM instance per
 role and one per voter; a voter that is the same model as a role gets a second instance. The
 shipped registries are laid out for that; letting a voter share the role's instance would
 free GPUs and needs an ADR (boundary of `services/model-manager`).

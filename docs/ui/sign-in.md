@@ -39,6 +39,7 @@ Your sign-in ended after *8 hours*. Sign in again to continue.
 |---|---|
 | Heading | Choose a new password |
 | Lede | Your password was made for one use. Pick one only you know. |
+| Field (only after a reload, when the sign-in password is no longer in memory) | Current password — help: The one-time password you signed in with. |
 | Help under the first field | At least 12 characters. Longer beats complicated. |
 | Field | New password |
 | Field | Type it again |
