@@ -53,6 +53,7 @@ from slas_deploy.images import (
     compose_profiles,
     parse_agents,
     parse_lock_json,
+    profiles_sentence,
     registry_for,
     render_lock_json,
     services_off_for,
@@ -93,6 +94,8 @@ PROD_KEYS: Final[dict[str, str]] = {
 
 #: Secret files whose content is derived, not random.
 DERIVED_SECRETS: Final[frozenset[str]] = frozenset({"redis.conf"})
+#: Secret files created empty: a person fills them in when needed (the hub token, ADR-0018).
+EMPTY_SECRETS: Final[frozenset[str]] = frozenset({"hf_token"})
 
 #: Where the two engines put their socket on a stock host. Rootless Podman's lives under
 #: $XDG_RUNTIME_DIR; the compose default and the doctor look at the rootful path.
@@ -265,6 +268,8 @@ def write_secrets(secrets_dir: Path, profile: Profile) -> list[str]:
             content = f"requirepass {password}\nprotected-mode yes\nsave 900 1\nappendonly yes\n"
         elif name == "admin-initial-password":
             content = generate_secret(18)
+        elif name in EMPTY_SECRETS:
+            content = ""
         else:
             content = generate_secret(32)
         world_readable = name in {
@@ -436,6 +441,12 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
 
     agents_cmd = commands.add_parser("agents", help="validate --agents; print profiles as JSON")
     agents_cmd.add_argument("--agents", default="")
+    agents_cmd.add_argument(
+        "--profile",
+        choices=("quickstart", "prod"),
+        default="quickstart",
+        help="the install profile: quickstart adds the `fetch` compose profile (ADR-0018)",
+    )
 
     man = commands.add_parser("check-manifest")
     man.add_argument("--lock", required=True)
@@ -470,7 +481,7 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
         out.write(exc.message.render() + "\n")
         return EXIT_PROBLEMS
     if args.command == "agents":
-        profiles = compose_profiles(agents)
+        profiles = compose_profiles(agents, args.profile)
         off = [name for name in AGENTS if name in AGENT_NOUNS and name not in agents]
         sentence = "Agents: " + ", ".join(agents) + "."
         if off:
@@ -488,7 +499,8 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
                 {
                     "agents": list(agents),
                     "profiles": profiles,
-                    "off_services": services_off_for(agents),
+                    "profiles_sentence": profiles_sentence(profiles),
+                    "off_services": services_off_for(agents, args.profile),
                     "sentence": sentence,
                 }
             )

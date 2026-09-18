@@ -50,6 +50,10 @@ scrape_configs:
           - factory-executor:8000
         labels:
           service: factory-executor
+      - targets:
+          - model-fetcher:8000
+        labels:
+          service: model-fetcher
   - job_name: vllm
     metrics_path: /metrics
     static_configs:

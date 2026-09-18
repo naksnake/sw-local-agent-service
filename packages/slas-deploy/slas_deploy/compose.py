@@ -57,6 +57,9 @@ NETWORKS: Final[dict[str, bool]] = {
     "slas-lab": False,
     "slas-factory": False,
     "slas-git": False,
+    # The only egress of the stack (ADR-0018): model-fetcher alone, to the hub allowlist, on
+    # the quickstart profile only. Every other network with a route out belongs to one zone.
+    "slas-egress": False,
 }
 
 #: The Docker network the vLLM containers join. Compose names a network
@@ -78,6 +81,7 @@ SERVICE_URLS: Final[dict[str, str]] = {
     "SLAS_GIT_BROKER_URL": "http://git-broker:8000",
     "SLAS_VALIDATION_EXECUTOR_URL": "http://validation-executor:8000",
     "SLAS_FACTORY_EXECUTOR_URL": "http://factory-executor:8000",
+    "SLAS_MODEL_FETCHER_URL": "http://model-fetcher:8000",
 }
 
 #: Which service reads which URL variables (contract round 2 §1, "Read by").
@@ -88,6 +92,7 @@ URL_READERS: Final[dict[str, tuple[str, ...]]] = {
         "SLAS_ORCHESTRATOR_URL",
         "SLAS_GIT_BROKER_URL",
         "SLAS_FACTORY_EXECUTOR_URL",
+        "SLAS_MODEL_FETCHER_URL",
     ),
     "agent-core-orchestrator": (
         "SLAS_GATEWAY_URL",
@@ -130,7 +135,13 @@ SOLE_MEMBERS: Final[dict[str, str]] = {
     "slas-lab": "validation-executor",
     "slas-factory": "factory-executor",
     "slas-git": "git-broker",
+    "slas-egress": "model-fetcher",
 }
+
+#: The hub hosts the model fetcher may reach (ADR-0018), as compose hands them to it; a
+#: person narrows or widens the list in .env (SLAS_HUB_HOSTS) and names a mirror (HF_ENDPOINT).
+HUB_HOSTS_DEFAULT: Final = "huggingface.co,cdn-lfs.huggingface.co,*.hf.co"
+HUB_ENDPOINT_DEFAULT: Final = "https://huggingface.co"
 
 #: Services allowed to see the container runtime socket (§12: they start containers).
 RUNTIME_SOCKET_HOLDERS: Final[frozenset[str]] = frozenset({"model-manager", "sandbox-manager"})
@@ -147,6 +158,9 @@ QUICKSTART_SECRETS: Final[tuple[str, ...]] = (
     "minio_root_password",
     "secret_key",
     "admin-initial-password",
+    # The model fetcher's token for gated hub repositories (ADR-0018): created empty, a person
+    # pastes a token into the file when a repository needs one; never an environment variable.
+    "hf_token",
 )
 PROD_SECRETS: Final[tuple[str, ...]] = (
     "vault_approle_role_id",
@@ -439,6 +453,28 @@ def base_compose() -> dict[str, Any]:
         secrets=["secret_key", "postgres_password"],
         tmpfs=["/run/slas-keys:mode=700,size=16m"],
         depends_on=["postgres"],
+    )
+    # The only component with a route out (ADR-0018; CLAUDE.md §4.1 zone F): sole member of
+    # slas-egress, to the hub allowlist alone, through HTTPS_PROXY when .env names one. It
+    # writes Models/<id>/, SHA256SUMS, manifest.json and models.yaml and nothing else; no
+    # runtime socket, no credential store. Behind the `fetch` compose profile, which install.sh
+    # turns on for quickstart and never for prod (prod keeps the signed bundle path).
+    services["model-fetcher"] = _slas(
+        "model-fetcher",
+        networks=["slas-backend", "slas-egress"],
+        environment={
+            "SLAS_BIND": SERVICE_BIND,
+            "SLAS_MODELS_DIR": "/data/Models",
+            "SLAS_HUB_HOSTS": f"${{SLAS_HUB_HOSTS:-{HUB_HOSTS_DEFAULT}}}",
+            "HF_ENDPOINT": f"${{HF_ENDPOINT:-{HUB_ENDPOINT_DEFAULT}}}",
+            "HTTPS_PROXY": "${HTTPS_PROXY:-}",
+            "HF_TOKEN_FILE": "/run/secrets/hf_token",
+            # This one container is online by decision; the flag says so for whoever reads it.
+            "HF_HUB_OFFLINE": "0",
+        },
+        volumes=[f"{DATA}/Models:/data/Models"],
+        secrets=["hf_token"],
+        extra={"profiles": ["fetch"]},
     )
     services["validation-executor"] = _slas(
         "validation-executor",
@@ -868,6 +904,10 @@ def prod_override() -> dict[str, Any]:
         }
     }
     services["screen-worker"] = {"environment": {"DISPLAY_ISOLATION": "kata"}}
+    # model-fetcher (ADR-0018) stays off on prod: compose cannot remove a service in an
+    # override, so the base file keeps it behind the `fetch` profile, install.sh never adds
+    # `fetch` to COMPOSE_PROFILES for prod, and a leftover container is removed like the parts
+    # ADR-0017 turns off. Prod installs weights from the signed bundle only.
     for service in (
         "llm-gateway",
         "agent-core-orchestrator",
@@ -960,7 +1000,9 @@ HEADERS: Final[dict[str, str]] = {
         "compose/images.lock.*; install.sh refuses to start an image the lock does not pin.\n"
         "Round 2 (ADR-0015): services reach each other through the SLAS_*_URL variables; the\n"
         "vllm-* containers are not services here — model-manager starts them from SLAS_VLLM_IMAGE\n"
-        "on the slas_slas-inference network (docs/api-contract-round-2.md §3)."
+        "on the slas_slas-inference network (docs/api-contract-round-2.md §3).\n"
+        "ADR-0018: model-fetcher, behind the `fetch` profile (COMPOSE_PROFILES on quickstart,\n"
+        "never on prod), is the only service with a route out: slas-egress, hub allowlist only."
     ),
     "prod.override.yml": (
         "The prod profile (CLAUDE.md §3, ADR-0012): Vault (credentials resolved at dispatch),\n"

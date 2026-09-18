@@ -905,7 +905,7 @@ def test_fit_route_and_unknown_model(tmp_path: Path) -> None:
 
 def test_route_table_matches_the_contract(tmp_path: Path) -> None:
     contract = (REPO_ROOT / "docs" / "api-contract-round-2.md").read_text(encoding="utf-8")
-    section = contract.split("## 3. model-manager", 1)[1].split("## 4.", 1)[0]
+    section = contract.split("## 3. model-manager", 1)[1].split("## 3b.", 1)[0]
     documented = set(re.findall(r"`(GET|POST) (/v1/[^\s`?]+)`", section))
     assert documented == {
         ("GET", "/v1/status"),

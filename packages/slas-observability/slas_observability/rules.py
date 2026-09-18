@@ -24,6 +24,19 @@ SERVICES: Final[tuple[str, ...]] = (
     "factory-executor",
 )
 
+#: Services one install profile starts and the other never does: the model fetcher is
+#: quickstart only (ADR-0018), so a prod Prometheus does not scrape a target that is not there.
+PROFILE_SERVICES: Final[dict[str, tuple[str, ...]]] = {
+    "quickstart": ("model-fetcher",),
+    "prod": (),
+}
+
+
+def services_for(profile: str = "quickstart") -> tuple[str, ...]:
+    """Every first-party service the profile's Prometheus scrapes."""
+    return (*SERVICES, *PROFILE_SERVICES.get(profile, ()))
+
+
 VLLM_ROLES: Final[tuple[str, ...]] = ("coder", "planner", "triage", "embed", "rerank")
 
 #: The voters of each profile's shipped registry (config/models.<profile>.yaml, rendered from
@@ -87,7 +100,7 @@ def prometheus_config(profile: str = "quickstart") -> dict[str, Any]:
                 "metrics_path": "/metrics",
                 "static_configs": [
                     {"targets": [f"{service}:8000"], "labels": {"service": service}}
-                    for service in SERVICES
+                    for service in services_for(profile)
                 ],
             },
             {

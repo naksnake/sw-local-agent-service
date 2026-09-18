@@ -169,6 +169,7 @@ DOWNSTREAM_SERVICES = {
     "sandbox_manager": "sandbox-manager",
     "factory_executor": "factory-executor",
     "model_manager": "model-manager",
+    "model_fetcher": "model-fetcher",
 }
 
 

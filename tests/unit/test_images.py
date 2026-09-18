@@ -27,9 +27,12 @@ def dockerfile(name: str) -> str:
 def test_the_lock_names_the_images_the_task_expects() -> None:
     assert set(FIRST_PARTY) == {
         "edge", "webui", "api", "agent-core-orchestrator", "llm-gateway", "model-manager",
-        "sandbox-manager", "screen-worker", "git-broker", "validation-executor",
+        "model-fetcher", "sandbox-manager", "screen-worker", "git-broker", "validation-executor",
         "factory-executor", "local-search-api", "postgres-pgbackrest",
     }  # fmt: skip
+    # The model fetcher is the one quickstart-only image (ADR-0018): prod never starts it.
+    fetcher = next(image for image in DEFAULT_IMAGES if image.name == "model-fetcher")
+    assert fetcher.profiles == ["quickstart"] and fetcher.first_party
     rendered = {service.name for service in dockerfiles.PYTHON_SERVICES}
     assert rendered | set(dockerfiles.HAND_WRITTEN) == set(FIRST_PARTY)
     assert not rendered & set(dockerfiles.HAND_WRITTEN)
@@ -204,13 +207,31 @@ def test_agents_choose_which_executor_images_start() -> None:
     ]
     assert services_off_for(("coding", "knowledge")) == ["validation-executor", "factory-executor"]
     assert services_off_for(("coding", "validation", "factory", "knowledge")) == []
-    assert compose_profiles(("coding",)) == []
-    assert compose_profiles(("coding", "factory")) == ["factory"]
-    assert compose_profiles(("coding", "validation", "factory", "knowledge")) == [
+    # Quickstart adds the model fetcher's `fetch` profile (ADR-0018); prod never does, and
+    # removes a leftover model-fetcher container like the parts that are off.
+    assert compose_profiles(("coding",)) == ["fetch"]
+    assert compose_profiles(("coding",), "prod") == []
+    assert compose_profiles(("coding", "factory")) == ["factory", "fetch"]
+    assert compose_profiles(("coding", "validation", "factory", "knowledge"), "prod") == [
         "validation",
         "factory",
         "knowledge",
     ]
+    assert services_off_for(("coding",), "prod")[-1] == "model-fetcher"
+    assert "model-fetcher" not in services_off_for(("coding",), "quickstart")
+    from slas_deploy.images import profiles_sentence
+
+    assert profiles_sentence([]) == ""
+    assert profiles_sentence(["fetch"]) == (
+        "Compose profiles: fetch (the model fetcher of the quickstart profile, ADR-0018)."
+    )
+    assert profiles_sentence(["validation", "factory"]) == (
+        "Compose profiles: validation,factory (the parts you chose with --agents)."
+    )
+    assert profiles_sentence(["factory", "fetch"]) == (
+        "Compose profiles: factory,fetch (the parts you chose with --agents, and the model "
+        "fetcher of the quickstart profile, ADR-0018)."
+    )
 
     lock = default_lock()
     everything = {image.name for image in lock.for_profile("quickstart")}

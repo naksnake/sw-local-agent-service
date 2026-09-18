@@ -275,12 +275,15 @@ fi
 if [[ -z "$AGENTS" && -f "$DATA_ROOT/.env" ]]; then
   AGENTS="$(sed -n 's/^SLAS_AGENTS=//p' "$DATA_ROOT/.env" | tail -n 1 | tr -d '"')"
 fi
-if ! agents_choice="$("$PYTHON" -m slas_deploy.installer agents --agents "$AGENTS")"; then
+if ! agents_choice="$("$PYTHON" -m slas_deploy.installer agents --agents "$AGENTS" --profile "$PROFILE")"; then
   echo "$agents_choice" >&2
   exit 2
 fi
 AGENTS="$("$PYTHON" -c 'import json,sys; print(",".join(json.loads(sys.argv[1])["agents"]))' "$agents_choice")"
+# The compose profiles: the optional parts of ADR-0017 plus, on quickstart, `fetch` for the
+# model fetcher (ADR-0018); prod never activates it.
 COMPOSE_PROFILES="$("$PYTHON" -c 'import json,sys; print(",".join(json.loads(sys.argv[1])["profiles"]))' "$agents_choice")"
+PROFILES_SENTENCE="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["profiles_sentence"])' "$agents_choice")"
 AGENTS_SENTENCE="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["sentence"])' "$agents_choice")"
 # The compose services of the parts that are off; their containers from an earlier install
 # are removed before the stack starts and ignored by the health wait.
@@ -703,7 +706,7 @@ if [[ "$SOURCE" == "registry" ]]; then
   run_or_print "${COMPOSE[@]}" pull --quiet
 fi
 if [[ -n "${COMPOSE_PROFILES:-}" ]]; then
-  echo "Compose profiles: $COMPOSE_PROFILES (the executors of the agents you chose)."
+  echo "$PROFILES_SENTENCE"
 fi
 # `docker compose up` leaves the container of a service whose profile is off, so one an
 # earlier install started (the knowledge base before it became optional, an executor after

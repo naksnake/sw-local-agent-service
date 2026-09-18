@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Final, Literal
+from pathlib import Path
+from typing import Any, Final, Literal
 
+import yaml
 from pydantic import Field, ValidationError, model_validator
 
 from slas_llm_gateway.routing import ROLES, Routes
@@ -371,6 +373,61 @@ def profile_registry(profile: str) -> Registry:
     return registry_from_mapping(PROFILE_REGISTRIES[profile], source=f"models.{profile}.yaml")
 
 
+def read_registry_file(path: Path) -> tuple[dict[str, Any], str]:
+    """The registry file as a mapping plus its leading comment lines (the header a rewrite
+    keeps), or a three-part `RegistryError` when the file is missing, not YAML or invalid.
+    The mapping is validated, so a caller may edit and re-validate it."""
+    source = str(path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RegistryError(
+            ThreePartMessage(
+                f"The model registry {source} could not be read.",
+                f"The file is missing or unreadable ({type(exc).__name__}).",
+                "Run `./install.sh` again, which writes the profile's registry when none "
+                "exists, or create it from services/model-manager/models.example.yaml.",
+            )
+        ) from exc
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise RegistryError(
+            ThreePartMessage(
+                f"The model registry {source} could not be used.",
+                f"It is not valid YAML ({str(exc).splitlines()[0][:120]}).",
+                f"Fix {source} on the Models page or by hand.",
+            )
+        ) from exc
+    registry_from_mapping(data, source=source)
+    header_lines: list[str] = []
+    for line in text.splitlines():
+        if not line.startswith("#"):
+            break
+        header_lines.append(line[1:].strip())
+    if not isinstance(data, dict):  # pragma: no cover — validated above
+        raise RegistryError(
+            ThreePartMessage(
+                f"The model registry {source} could not be used.",
+                "Its top level is not a mapping.",
+                f"Fix {source} on the Models page or by hand.",
+            )
+        )
+    return dict(data), "\n".join(header_lines)
+
+
+def write_registry_file(path: Path, data: Mapping[str, object], *, header: str = "") -> Registry:
+    """Validate `data`, render it and replace `path` atomically (a reader never sees a half
+    file, INV-9: the model manager picks the new file up on its next tick)."""
+    registry = registry_from_mapping(data, source=str(path))
+    rendered = render_registry_yaml(data, header=header)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(rendered, encoding="utf-8")
+    tmp.replace(path)
+    return registry
+
+
 def render_registry_yaml(data: Mapping[str, object], *, header: str = "") -> str:
     registry = registry_from_mapping(data)
     lines: list[str] = []
@@ -387,8 +444,9 @@ def render_registry_yaml(data: Mapping[str, object], *, header: str = "") -> str
         lines.append(f"    vram_gib: {model.vram_gib:g}")
         lines.append(f"    context: {model.context}")
         lines.append(f"    roles: [{', '.join(model.roles)}]")
-    lines.append("roles:")
+    # An empty mapping or list is written as such: a bare `roles:` reads back as null.
+    lines.append("roles:" if registry.roles else "roles: {}")
     lines.extend(f"  {role}: {model_id}" for role, model_id in registry.roles.items())
-    lines.append("voters:")
+    lines.append("voters:" if registry.voters else "voters: []")
     lines.extend(f"  - {model_id}" for model_id in registry.voters)
     return "\n".join(lines) + "\n"

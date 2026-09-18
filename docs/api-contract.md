@@ -139,7 +139,9 @@ first."*
 
 Service URLs on the api (round-2 §1, set by compose): `SLAS_ORCHESTRATOR_URL`,
 `SLAS_GIT_BROKER_URL`, `SLAS_SANDBOX_MANAGER_URL`, `SLAS_FACTORY_EXECUTOR_URL`,
-`SLAS_MODEL_MANAGER_URL`; the defaults are the compose service names on port 8000.
+`SLAS_MODEL_MANAGER_URL`, `SLAS_MODEL_FETCHER_URL`; the defaults are the compose service
+names on port 8000. On a prod install the model fetcher does not run (ADR-0018), so its four
+routes answer the 503 *"The model-fetcher did not answer."* there.
 "signed in" in the last column means any signed-in person; two names mean either one.
 
 | Browser route | Forwards to | Capability |
@@ -198,4 +200,9 @@ Service URLs on the api (round-2 §1, set by compose): `SLAS_ORCHESTRATOR_URL`,
 | `GET /api/v1/models/status` | model-manager `/v1/status` | signed in |
 | `POST /api/v1/models/swap` | model-manager `/v1/swap` | `model:manage` |
 | `POST /api/v1/models/rollback` | model-manager `/v1/rollback` | `model:manage` |
+| `PUT /api/v1/models/roles` | model-manager `/v1/roles` | `model:manage` |
+| `GET /api/v1/models/fetches` | model-fetcher `/v1/fetches` | signed in |
+| `POST /api/v1/models/fetches` | model-fetcher `/v1/fetches` | `model:manage` |
+| `GET /api/v1/models/fetches/{id}` | model-fetcher `/v1/fetches/{id}` | signed in |
+| `DELETE /api/v1/models/fetches/{id}` | model-fetcher `/v1/fetches/{id}` | `model:manage` |
 | `POST /api/v1/git/projects/{slug}/terminal` | sandbox-manager: `/v1/sessions` (query `user`, `slug`), then `/v1/sessions/{session}/terminal` | `git:terminal` |

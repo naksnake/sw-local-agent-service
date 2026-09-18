@@ -19,6 +19,7 @@ members = [
     "slas-http",
     "slas-kernel",
     "slas-llm-gateway",
+    "slas-model-fetcher",
     "slas-model-manager",
     "slas-observability",
     "slas-orchestrator",
@@ -971,6 +972,31 @@ requires-dist = [
 ]
 
 [[package]]
+name = "slas-model-fetcher"
+version = "0.0.1"
+source = { editable = "services/model-fetcher" }
+dependencies = [
+    { name = "pyyaml" },
+    { name = "slas-fetch" },
+    { name = "slas-http" },
+    { name = "slas-model-manager" },
+    { name = "slas-observability" },
+    { name = "slas-schemas" },
+    { name = "types-pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pyyaml", specifier = "==6.0.3" },
+    { name = "slas-fetch", editable = "packages/slas-fetch" },
+    { name = "slas-http", editable = "packages/slas-http" },
+    { name = "slas-model-manager", editable = "services/model-manager" },
+    { name = "slas-observability", editable = "packages/slas-observability" },
+    { name = "slas-schemas", editable = "packages/slas-schemas" },
+    { name = "types-pyyaml", specifier = "==6.0.12.20260906" },
+]
+
+[[package]]
 name = "slas-model-manager"
 version = "0.0.1"
 source = { editable = "services/model-manager" }
@@ -1233,6 +1259,7 @@ dependencies = [
     { name = "slas-http" },
     { name = "slas-kernel" },
     { name = "slas-llm-gateway" },
+    { name = "slas-model-fetcher" },
     { name = "slas-model-manager" },
     { name = "slas-observability" },
     { name = "slas-orchestrator" },
@@ -1274,6 +1301,7 @@ requires-dist = [
     { name = "slas-http", editable = "packages/slas-http" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
     { name = "slas-llm-gateway", editable = "services/llm-gateway" },
+    { name = "slas-model-fetcher", editable = "services/model-fetcher" },
     { name = "slas-model-manager", editable = "services/model-manager" },
     { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-orchestrator", editable = "services/agent-core-orchestrator" },

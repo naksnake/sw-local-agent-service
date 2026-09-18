@@ -10,7 +10,10 @@ import hashlib
 import io
 import json
 import re
+import shutil
 import threading
+import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -217,7 +220,7 @@ def test_dry_run_lists_sizes_checks_the_disk_and_downloads_nothing(
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest), "--dry-run")
     assert code == 0 and "3 files, 1.0 MiB, 0 B still to fetch;" in out
 
-    monkeypatch.setattr(fm.shutil, "disk_usage", lambda _path: SimpleNamespace(free=1000))
+    monkeypatch.setattr(shutil, "disk_usage", lambda _path: SimpleNamespace(free=1000))
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(tmp_path / "small"))
     assert code == 1
     assert "Not enough free disk at" in out and "1000 B is free, 1,047,611 bytes short." in out
@@ -229,7 +232,7 @@ def test_a_cut_download_resumes_inside_the_run(
     hub: FakeHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pauses: list[float] = []
-    monkeypatch.setattr(fm.time, "sleep", pauses.append)
+    monkeypatch.setattr(time, "sleep", pauses.append)
     dest = tmp_path / "models"
     hub.cut_after = 300_000
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))
@@ -249,7 +252,7 @@ def test_a_link_that_stalls_without_progress_gives_up_and_the_disk_check_counts_
     hub: FakeHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pauses: list[float] = []
-    monkeypatch.setattr(fm.time, "sleep", pauses.append)
+    monkeypatch.setattr(time, "sleep", pauses.append)
     dest = tmp_path / "models"
     hub.cut_after = 300_000
     hub.stall_ranges = True
@@ -265,15 +268,15 @@ def test_a_link_that_stalls_without_progress_gives_up_and_the_disk_check_counts_
     hub.stall_ranges = False
     hub.requests.clear()
     remainder = 1_048_576 - 300_000 + len(CONFIG) + len(README)
-    real_disk_usage = fm.shutil.disk_usage
-    monkeypatch.setattr(fm.shutil, "disk_usage", lambda _path: SimpleNamespace(free=remainder + 10))
+    real_disk_usage = shutil.disk_usage
+    monkeypatch.setattr(shutil, "disk_usage", lambda _path: SimpleNamespace(free=remainder + 10))
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))
     assert code == 0, out
     assert "3 files, 1.0 MiB, 731.1 KiB still to fetch (293.0 KiB already here resumes)" in out
     assert (dest / "tiny" / "model.safetensors").read_bytes() == WEIGHTS
     ranges = [r for path, r in hub.requests if path.endswith("/model.safetensors") and r]
     assert ranges == ["bytes=300000-"]
-    monkeypatch.setattr(fm.shutil, "disk_usage", real_disk_usage)
+    monkeypatch.setattr(shutil, "disk_usage", real_disk_usage)
 
     hub.requests.clear()
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))
@@ -482,7 +485,7 @@ def test_a_timeout_or_blocked_host_is_reported_in_three_parts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pauses: list[float] = []
-    monkeypatch.setattr(fm.time, "sleep", pauses.append)
+    monkeypatch.setattr(time, "sleep", pauses.append)
 
     def hanging_opener(_request: object, timeout: int = 0) -> object:
         raise TimeoutError("_ssl.c:983: The handshake operation timed out")
@@ -508,11 +511,11 @@ def test_a_timeout_or_blocked_host_is_reported_in_three_parts(
 
 
 def test_a_flaky_link_is_retried_and_an_http_answer_is_not(hub: FakeHub, tmp_path: Path) -> None:
-    real_open = fm.urllib.request.urlopen
+    real_open = urllib.request.urlopen
     failures = {"left": 2}
     pauses: list[float] = []
 
-    def flaky(request: object, timeout: int = 0) -> object:
+    def flaky(request: urllib.request.Request, timeout: int = 0) -> object:
         if failures["left"] > 0:
             failures["left"] -= 1
             raise TimeoutError("The handshake operation timed out")
@@ -644,7 +647,7 @@ def test_the_hub_host_allowlist_refuses_other_hosts_and_off_list_redirects(
 
     # A redirect to a host outside the list is refused too, before a byte is fetched.
     handler = fm._AllowlistedRedirects(fm.DEFAULT_HUB_HOSTS)
-    request = fm.urllib.request.Request("https://huggingface.co/demo/tiny/resolve/main/x")
+    request = urllib.request.Request("https://huggingface.co/demo/tiny/resolve/main/x")
     with pytest.raises(fm.FetchError, match=r"cdn\.example\.net is not an allowed model hub host"):
         handler.redirect_request(request, None, 302, "Found", {}, "https://cdn.example.net/blob/x")
     followed = handler.redirect_request(

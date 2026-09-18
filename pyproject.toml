@@ -22,6 +22,7 @@ dependencies = [
   "slas-http",
   "slas-kernel",
   "slas-llm-gateway",
+  "slas-model-fetcher",
   "slas-model-manager",
   "slas-observability",
   "slas-orchestrator",
@@ -58,6 +59,7 @@ members = [
   "services/factory-executor",
   "services/git-broker",
   "services/llm-gateway",
+  "services/model-fetcher",
   "services/model-manager",
   "services/sandbox-manager",
   "services/screen-worker",
@@ -81,6 +83,7 @@ slas-hal = { workspace = true }
 slas-http = { workspace = true }
 slas-kernel = { workspace = true }
 slas-llm-gateway = { workspace = true }
+slas-model-fetcher = { workspace = true }
 slas-model-manager = { workspace = true }
 slas-observability = { workspace = true }
 slas-orchestrator = { workspace = true }
@@ -131,7 +134,7 @@ allowed-confusables = ["：", "（", "）", "；", "，", "。", "×"]
 [tool.ruff.lint.isort]
 known-first-party = [
   "slas_api", "slas_authz", "slas_cli", "slas_container", "slas_deploy", "slas_diff", "slas_eval", "slas_factory_executor", "slas_fetch", "slas_git", "slas_git_broker", "slas_hal",
-  "slas_http", "slas_kernel", "slas_llm_gateway", "slas_model_manager", "slas_observability", "slas_orchestrator",
+  "slas_http", "slas_kernel", "slas_llm_gateway", "slas_model_fetcher", "slas_model_manager", "slas_observability", "slas_orchestrator",
   "slas_rag",
   "slas_sandbox_manager", "slas_schemas", "slas_screen", "slas_screen_worker", "slas_skills",
   "slas_sop", "slas_station_runner", "slas_triage", "slas_validation_executor",
@@ -151,6 +154,7 @@ files = [
   "services/factory-executor",
   "services/git-broker",
   "services/llm-gateway",
+  "services/model-fetcher",
   "services/model-manager",
   "services/sandbox-manager",
   "services/screen-worker",
@@ -181,6 +185,7 @@ addopts = [
   "--cov=slas_http",
   "--cov=slas_kernel",
   "--cov=slas_llm_gateway",
+  "--cov=slas_model_fetcher",
   "--cov=slas_model_manager",
   "--cov=slas_orchestrator",
   "--cov=slas_rag",

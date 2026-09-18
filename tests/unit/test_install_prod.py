@@ -133,9 +133,14 @@ def test_prod_dry_run_verifies_the_bundle_then_only_describes_the_changes(tmp_pa
         assert found > position, f"{marker!r} missing or out of order in:\n{out}"
         position = found
     assert not data_root.exists(), "a dry run writes nothing"
-    assert len(calls) == 1 and calls[0].startswith("cosign verify-blob --key")
+    assert calls[0].startswith("cosign verify-blob --key")
     assert "--insecure-ignore-tlog --private-infrastructure" in calls[0]
-    assert not any(c.startswith("docker") for c in calls), "docker is only described in a dry run"
+    # Docker is only asked read-only questions in a dry run: whether an earlier install left a
+    # container of a part this install does not start (ADR-0017), the model fetcher among them
+    # on prod (ADR-0018); nothing is loaded, removed or started.
+    assert all(c.startswith("docker ps -aq --filter ") for c in calls[1:]), calls
+    assert any(c.endswith("compose.service=model-fetcher") for c in calls), "off on prod"
+    assert not any(c.startswith(("docker load", "docker rm", "docker compose")) for c in calls)
 
 
 def test_a_bad_manifest_signature_stops_before_anything_is_touched(tmp_path: Path) -> None:

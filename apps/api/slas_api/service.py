@@ -164,6 +164,7 @@ class Downstream:
     sandbox_manager: ServiceClient
     factory_executor: ServiceClient
     model_manager: ServiceClient
+    model_fetcher: ServiceClient
 
     @classmethod
     def from_settings(cls, settings: Settings) -> Downstream:
@@ -173,6 +174,7 @@ class Downstream:
             sandbox_manager=ServiceClient("sandbox-manager", settings.slas_sandbox_manager_url),
             factory_executor=ServiceClient("factory-executor", settings.slas_factory_executor_url),
             model_manager=ServiceClient("model-manager", settings.slas_model_manager_url),
+            model_fetcher=ServiceClient("model-fetcher", settings.slas_model_fetcher_url),
         )
 
     def clients(self) -> tuple[ServiceClient, ...]:
@@ -182,6 +184,7 @@ class Downstream:
             self.sandbox_manager,
             self.factory_executor,
             self.model_manager,
+            self.model_fetcher,
         )
 
     def close(self) -> None:

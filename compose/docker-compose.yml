@@ -6,6 +6,8 @@
 # Round 2 (ADR-0015): services reach each other through the SLAS_*_URL variables; the
 # vllm-* containers are not services here — model-manager starts them from SLAS_VLLM_IMAGE
 # on the slas_slas-inference network (docs/api-contract-round-2.md §3).
+# ADR-0018: model-fetcher, behind the `fetch` profile (COMPOSE_PROFILES on quickstart,
+# never on prod), is the only service with a route out: slas-egress, hub allowlist only.
 name: slas
 networks:
   slas-edge: {}
@@ -25,6 +27,7 @@ networks:
   slas-lab: {}
   slas-factory: {}
   slas-git: {}
+  slas-egress: {}
 volumes:
   postgres_data: {}
   redis_data: {}
@@ -45,6 +48,8 @@ secrets:
     file: "${SLAS_DATA_ROOT}/secrets/secret_key"
   admin-initial-password:
     file: "${SLAS_DATA_ROOT}/secrets/admin-initial-password"
+  hf_token:
+    file: "${SLAS_DATA_ROOT}/secrets/hf_token"
   grafana_admin_password:
     file: "${SLAS_DATA_ROOT}/secrets/grafana_admin_password"
 services:
@@ -156,6 +161,7 @@ services:
       SLAS_ORCHESTRATOR_URL: http://agent-core-orchestrator:8000
       SLAS_GIT_BROKER_URL: http://git-broker:8000
       SLAS_FACTORY_EXECUTOR_URL: http://factory-executor:8000
+      SLAS_MODEL_FETCHER_URL: http://model-fetcher:8000
     logging:
       driver: json-file
       options:
@@ -528,6 +534,48 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+  model-fetcher:
+    image: "${SLAS_REGISTRY}/slas/model-fetcher:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-backend
+      - slas-egress
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "0"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      SLAS_BIND: 0.0.0.0:8000
+      SLAS_MODELS_DIR: /data/Models
+      SLAS_HUB_HOSTS: "${SLAS_HUB_HOSTS:-huggingface.co,cdn-lfs.huggingface.co,*.hf.co}"
+      HF_ENDPOINT: "${HF_ENDPOINT:-https://huggingface.co}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      HF_TOKEN_FILE: /run/secrets/hf_token
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:8000/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "${SLAS_DATA_ROOT}/Models:/data/Models"
+    secrets:
+      - hf_token
+    profiles:
+      - fetch
   validation-executor:
     image: "${SLAS_REGISTRY}/slas/validation-executor:${SLAS_VERSION}"
     restart: unless-stopped

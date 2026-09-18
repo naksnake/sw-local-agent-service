@@ -191,7 +191,13 @@ def test_prometheus_scrapes_every_service_and_the_files_are_plain_yaml() -> None
     config = prometheus_config()
     jobs = {job["job_name"]: job for job in config["scrape_configs"]}
     targets = [t for job in jobs["slas-services"]["static_configs"] for t in job["targets"]]
-    assert targets == [f"{service}:8000" for service in SERVICES]
+    assert targets == [f"{service}:8000" for service in (*SERVICES, "model-fetcher")]
+    # The model fetcher is quickstart only (ADR-0018): a prod Prometheus does not scrape it.
+    prod_jobs = {job["job_name"]: job for job in prometheus_config("prod")["scrape_configs"]}
+    prod_targets = [t for sc in prod_jobs["slas-services"]["static_configs"] for t in sc["targets"]]
+    assert prod_targets == [f"{service}:8000" for service in SERVICES]
+    assert "model-fetcher:8000" in (OBS / "prometheus" / "prometheus.yml").read_text()
+    assert "model-fetcher:8000" not in (OBS / "prometheus" / "prometheus.prod.yml").read_text()
     assert "vllm-coder:8000" in [t for sc in jobs["vllm"]["static_configs"] for t in sc["targets"]]
     assert config["alerting"]["alertmanagers"][0]["static_configs"][0]["targets"] == [
         "alertmanager:9093"

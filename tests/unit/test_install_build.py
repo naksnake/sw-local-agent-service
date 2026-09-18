@@ -203,7 +203,12 @@ def test_build_dry_run_describes_every_pull_and_build_and_touches_nothing(tmp_pa
     assert "Would build local/slas/factory-executor" not in out
     assert "Would build local/slas/local-search-api" not in out, "the knowledge base is off too"
     assert "Would pull docker.io/qdrant/qdrant" not in out, "the knowledge base's image too"
-    assert "Compose profiles:" not in out
+    # The model fetcher is quickstart only (ADR-0018): built here, behind the `fetch` profile.
+    assert (
+        f"Would build local/slas/model-fetcher:{VERSION} from images/model-fetcher/Dockerfile."
+        in out
+    )
+    assert "Compose profiles: fetch (the model fetcher of the quickstart profile, ADR-0018)." in out
     assert "hashicorp/vault" not in out
     assert (
         f"Would write the filled image lock to {data_root}/images.lock.json ({len(first_party)} built, {len(third_party)} pulled); it is never committed."
@@ -262,13 +267,16 @@ def test_agents_flag_adds_the_executors_and_their_compose_profiles(tmp_path: Pat
     )
     assert f"Would build local/slas/validation-executor:{VERSION}" in out
     assert f"Would build local/slas/factory-executor:{VERSION}" in out
-    assert "Compose profiles: validation,factory (the executors of the agents you chose)." in out
+    assert (
+        "Compose profiles: validation,factory,fetch (the parts you chose with --agents, and the "
+        "model fetcher of the quickstart profile, ADR-0018)." in out
+    )
 
     only_factory, _, _ = run_install(tmp_path, "--dry-run", "--agents", "factory")
     assert only_factory.returncode == 0, only_factory.stdout + only_factory.stderr
     assert "Agents: coding, factory." in only_factory.stdout
     assert "Would build local/slas/validation-executor" not in only_factory.stdout
-    assert "Compose profiles: factory (" in only_factory.stdout
+    assert "Compose profiles: factory,fetch (" in only_factory.stdout
 
     unknown, calls, _ = run_install(tmp_path, "--dry-run", "--agents", "coding,screen")
     assert unknown.returncode == 2
