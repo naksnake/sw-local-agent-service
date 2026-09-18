@@ -241,6 +241,7 @@ uv run python -m slas_cli doctor               # 對本主機執行預檢
 | 預檢 ✗ Runtime socket：「No container-runtime socket was found at …」 | Podman 的 socket 與 Docker 的 socket 都不存在 | `systemctl --user enable --now podman.socket`，或安裝 Docker；其他路徑請設定 `SLAS_RUNTIME_SOCKET` |
 | 預檢 ! gVisor runtime：「runsc is not registered …」 | 未安裝 gVisor，或未向引擎註冊 | `sudo runsc install && sudo systemctl restart docker`；quickstart 以強化的 runc 繼續 |
 | 預檢 ✗ NVIDIA runtime | toolkit 已安裝但未為該引擎設定 | `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` |
+| 預檢 ✗ GPU fabric，或每個模型實例都「keeps crashing」並出現 `Error 802: system not yet initialized` | NVSwitch 系統（B300、B200、H100 SXM 等 SXM GPU）未安裝 NVIDIA Fabric Manager：nvidia-smi 正常，CUDA 無法初始化 | `sudo apt install nvidia-fabricmanager-<驅動主版號>`（驅動 595.x 用 595），`sudo systemctl enable --now nvidia-fabricmanager`，等到 `nvidia-smi --query-gpu=fabric.state --format=csv` 顯示 Completed，再執行 `./install.sh` |
 | 「The sandbox image list could not be read …」 | 本檢出的沙箱管理器尚未提供 `images list` | 更新檢出；`uv sync --frozen`；再執行 `./install.sh --build` |
 | `model-manager` 或 `sandbox-manager` 不健康：「runtime: down」 | `SLAS_RUNTIME_SOCKET` 指向的 socket 不是引擎提供的，或引擎已停止 | 檢查 `.env`、`ls -l` 該 socket、重啟引擎、`docker compose -p slas up -d` |
 | 程式撰寫任務：「no instance serves the role coder yet」 | `vllm-coder` 仍在啟動，或容納不下 | Models 頁面：等待「healthy」，或為該角色選擇較小的版本 |

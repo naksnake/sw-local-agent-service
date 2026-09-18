@@ -39,7 +39,7 @@ def bare_host() -> FakeHost:
 
 def test_healthy_host_passes_every_check() -> None:
     results = run_checks(FakeHost.healthy(), SETTINGS)
-    assert len(results) == len(ALL_CHECKS) == 19
+    assert len(results) == len(ALL_CHECKS) == 20
     assert [result.status for result in results] == ["ok"] * len(ALL_CHECKS)
 
 
@@ -499,6 +499,53 @@ def test_gpu_container_toolkit() -> None:
     skipped = checks.check_gpu_container_toolkit(host, SETTINGS)
     assert skipped.status == "skip"
     assert skipped.summary == "Skipped because no GPU driver was found."
+
+
+def test_gpu_fabric_not_initialized_names_fabric_manager() -> None:
+    """The first host: eight B300 SXM GPUs, nvidia-smi fine, every vLLM instance crashing
+    with CUDA error 802 because Fabric Manager was not installed."""
+    host = FakeHost.healthy()
+    host.outputs[checks.FABRIC_QUERY] = CommandResult(
+        0, "".join(f"{i}, Not Started, N/A\n" for i in range(8))
+    )
+    result = checks.check_gpu_fabric(host, SETTINGS)
+    assert result.status == "fail"
+    assert result.summary == (
+        "The NVLink fabric is not initialized on 8 GPUs (fabric state: Not Started)."
+    )
+    assert result.detail is not None
+    assert "error 802" in result.detail.likely_cause
+    assert "nvidia-fabricmanager-595" in result.detail.what_to_do
+    assert "systemctl enable --now nvidia-fabricmanager" in result.detail.what_to_do
+
+    host.outputs[checks.FABRIC_QUERY] = CommandResult(
+        0, "0, Completed, Success\n1, In Progress, N/A\n"
+    )
+    partial = checks.check_gpu_fabric(host, SETTINGS)
+    assert partial.status == "fail"
+    assert partial.summary.startswith("The NVLink fabric is not initialized on 1 GPU ")
+
+
+def test_gpu_fabric_ready_or_absent() -> None:
+    host = FakeHost.healthy()
+    host.outputs[checks.FABRIC_QUERY] = CommandResult(
+        0, "".join(f"{i}, Completed, Success\n" for i in range(8))
+    )
+    assert checks.check_gpu_fabric(host, SETTINGS).summary == (
+        "The NVLink fabric is up on 8 GPUs (Fabric Manager is running)."
+    )
+    host.outputs[checks.FABRIC_QUERY] = CommandResult(0, "0, N/A, N/A\n1, [N/A], [N/A]\n")
+    assert checks.check_gpu_fabric(host, SETTINGS).summary == (
+        "These GPUs have no NVSwitch fabric; nothing to bring up."
+    )
+    # An older driver does not know the field: nothing to check, never a failure.
+    host.outputs[checks.FABRIC_QUERY] = CommandResult(
+        1, "", 'Field "fabric.state" is not a valid field to query.'
+    )
+    older = checks.check_gpu_fabric(host, SETTINGS)
+    assert older.status == "ok" and "older driver" in older.summary
+    del host.commands["nvidia-smi"]
+    assert checks.check_gpu_fabric(host, SETTINGS).status == "skip"
 
 
 # --- data root, disk, port -----------------------------------------------------------------

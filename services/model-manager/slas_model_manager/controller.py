@@ -88,9 +88,54 @@ LOG_PREFIX: Final = re.compile(
     r"^(\(\S+ pid=\d+\) ?)?((ERROR|INFO|WARNING|DEBUG|CRITICAL) \d\d-\d\d \d\d:\d\d:\d\d"
     r" \[[^\]]*\] ?|(ERROR|INFO|WARNING|DEBUG|CRITICAL) )?"
 )  # one space at most after each part: the message's own indentation must survive
+#: Crash signatures the manager can explain in a sentence: the substring vLLM (or CUDA, or
+#: the kernel) logs, the likely cause, and what to do on the host. Deterministic text, never
+#: a model's guess (CLAUDE.md §1.2 value 7). The KV-cache case is handled, not explained.
+KNOWN_CRASHES: Final[tuple[tuple[str, str, str], ...]] = (
+    (
+        "Error 802: system not yet initialized",
+        "This is an NVSwitch system (SXM GPUs) and NVIDIA Fabric Manager is not running, so "
+        "CUDA cannot initialize although nvidia-smi works.",
+        "On the host: sudo apt install nvidia-fabricmanager-<driver major> (e.g. 595 for "
+        "driver 595.x), sudo systemctl enable --now nvidia-fabricmanager, then wait for the "
+        "next reconcile; `slas doctor` checks this as GPU fabric.",
+    ),
+    (
+        "no kernel image is available for execution on the device",
+        "The pinned vLLM image was built without this GPU's architecture.",
+        "Change the vLLM image in compose/images.lock to a build for this GPU (an ADR pins "
+        "it), run ./install.sh --build again.",
+    ),
+    (
+        "CUDA driver version is insufficient",
+        "The host's NVIDIA driver is older than the CUDA runtime in the vLLM image.",
+        "Upgrade the driver on the host, or pin a vLLM image built for the installed driver's "
+        "CUDA version, then run ./install.sh --build again.",
+    ),
+    (
+        "could not select device driver",
+        "The container engine has no NVIDIA runtime, so the instance got no GPU.",
+        "On the host: sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl "
+        "restart docker, then run ./install.sh again.",
+    ),
+    (
+        "torch.OutOfMemoryError",
+        "The GPU ran out of memory while loading: another instance or process holds it.",
+        "Check nvidia-smi for other processes on that GPU; SLAS_GPU_IDS in .env keeps GPUs "
+        "for other work.",
+    ),
+)
 FRAME_LINE: Final = re.compile(r'^\s*File ".*", line \d+')
 CARET_LINE: Final = re.compile(r"^\s*[\^~]+\s*$")
 TRACEBACK_HEAD: Final = re.compile(r"^\s*Traceback \(most recent call last\):\s*$")
+
+
+def _known_crash(lines: Sequence[str]) -> tuple[str, str] | None:
+    """(likely cause, what to do) for the first known signature in the evidence, or None."""
+    for marker, cause, what_to_do in KNOWN_CRASHES:
+        if any(marker in line for line in lines):
+            return cause, what_to_do
+    return None
 
 
 def _without_frames(lines: Sequence[str]) -> list[str]:
@@ -809,11 +854,16 @@ class Controller:
             if restarts >= CRASH_LOOP_RESTARTS:
                 sentence = (
                     f"{display} keeps crashing: the runtime started it {restarts} times and it "
-                    f"exited each time, so it never finishes loading. What it logged before "
-                    f"it last exited:\n{tail}"
+                    f"exited each time, so it never finishes loading."
                 )
             else:
-                sentence = f"{display} crashed. Last log lines:\n{tail}"
+                sentence = f"{display} crashed."
+            known = _known_crash(lines)
+            if known is not None:
+                cause, what_to_do = known
+                sentence += f" Likely cause: {cause} What to do: {what_to_do}"
+            heading = "What it logged before it last exited" if restarts else "Last log lines"
+            sentence += f" {heading}:\n{tail}"
         if state != "starting":
             self._starting_since.pop(name, None)
         return InstanceState(

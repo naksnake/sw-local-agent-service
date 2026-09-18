@@ -650,6 +650,71 @@ def check_gpu(host: Host, settings: DoctorSettings) -> CheckResult:
     )
 
 
+#: nvidia-smi's per-GPU fabric fields (driver 535 and later). On an NVSwitch system (HGX,
+#: SXM boards: B300, B200, H100 SXM) the state is Completed once NVIDIA Fabric Manager has
+#: brought the NVLink fabric up; until then every CUDA call fails with error 802 "system not
+#: yet initialized" while nvidia-smi itself works. GPUs without NVSwitch report N/A.
+FABRIC_QUERY: tuple[str, ...] = (
+    "nvidia-smi",
+    "--query-gpu=index,fabric.state,fabric.status",
+    "--format=csv,noheader,nounits",
+)
+FABRIC_READY = frozenset({"completed", "n/a", "[n/a]", "not supported", "[not supported]"})
+
+
+def _parse_fabric(text: str) -> list[tuple[str, str, str]]:
+    """(index, state, status) per line of the fabric query; junk lines are skipped."""
+    rows: list[tuple[str, str, str]] = []
+    for line in text.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) == 3 and parts[0].isdigit():
+            rows.append((parts[0], parts[1], parts[2]))
+    return rows
+
+
+def check_gpu_fabric(host: Host, settings: DoctorSettings) -> CheckResult:
+    """The first host: eight B300 SXM GPUs, nvidia-smi fine, every vLLM instance crashing
+    at start with CUDA error 802 because Fabric Manager was not installed. That is a host
+    step, so preflight says it before any model is started."""
+    check_id, title = "gpu_fabric", "GPU fabric"
+    if host.which("nvidia-smi") is None:
+        return _skip(check_id, title, "Skipped because no GPU driver was found.")
+    result = host.run(list(FABRIC_QUERY), timeout_s=20.0)
+    rows = _parse_fabric(result.stdout) if result.ok else []
+    if not rows:
+        return _ok(
+            check_id,
+            title,
+            "nvidia-smi does not report a fabric state (no NVSwitch, or an older driver); "
+            "nothing to bring up.",
+        )
+    waiting = [(index, state) for index, state, _ in rows if state.lower() not in FABRIC_READY]
+    if not waiting:
+        if all(state.lower() != "completed" for _, state, _ in rows):
+            return _ok(check_id, title, "These GPUs have no NVSwitch fabric; nothing to bring up.")
+        return _ok(
+            check_id,
+            title,
+            f"The NVLink fabric is up on {_plural(len(rows), 'GPU')} (Fabric Manager is running).",
+        )
+    states = ", ".join(sorted({state for _, state in waiting}))
+    return _problem(
+        check_id,
+        title,
+        "fail",
+        f"The NVLink fabric is not initialized on {_plural(len(waiting), 'GPU')} "
+        f"(fabric state: {states}).",
+        "This is an NVSwitch system (SXM GPUs), and NVIDIA Fabric Manager is not installed or "
+        "not running. nvidia-smi works without it, but every CUDA program, so every model "
+        'instance, fails at start with error 802 "system not yet initialized".',
+        "Install the Fabric Manager package that matches the driver's major version (Ubuntu: "
+        "sudo apt install nvidia-fabricmanager-<major>, e.g. nvidia-fabricmanager-595 for "
+        "driver 595.x), run sudo systemctl enable --now nvidia-fabricmanager, wait until "
+        "nvidia-smi --query-gpu=fabric.state --format=csv shows Completed, then run "
+        "./install.sh again.",
+    )
+
+
 def check_gpu_container_toolkit(host: Host, settings: DoctorSettings) -> CheckResult:
     check_id, title = "gpu_container_toolkit", "GPU in containers"
     if host.which("nvidia-smi") is None:
@@ -864,6 +929,7 @@ ALL_CHECKS: tuple[Check, ...] = (
     check_id_mapping_helpers,
     check_cgroups_v2,
     check_gpu,
+    check_gpu_fabric,
     check_gpu_container_toolkit,
     check_nvidia_runtime,
     check_data_root,

@@ -894,6 +894,47 @@ def test_crash_evidence_keeps_the_engine_root_cause_and_drops_the_traceback_fram
     )
 
 
+def test_a_known_crash_signature_gets_a_cause_and_a_host_fix(tmp_path: Path) -> None:
+    """The first host: eight B300 SXM GPUs and no Fabric Manager. vLLM's engine died with
+    CUDA error 802 and the row showed a traceback; it now says what that means and what to
+    run on the host, in the three-part shape every error has (CLAUDE.md §11)."""
+    h = Harness(tmp_path, coder_first=True)
+    h.controller.reconcile()
+    h.api.logs_text["vllm-coder"] = "\n".join(
+        [
+            EC + "EngineCore failed to start.",
+            EC + "    torch._C._cuda_init()",
+            EC + "RuntimeError: Unexpected error from cudaGetDeviceCount(). Did you run some "
+            "cuda functions before calling NumCudaDevices() that might have already set an "
+            "error? Error 802: system not yet initialized",
+            AP + "RuntimeError: Engine core initialization failed. See root cause above. "
+            "Failed core proc(s): {}",
+        ]
+    )
+    h.api.restarting("vllm-coder", times=87)
+    h.controller.reconcile()
+    sentence = h.rows()["vllm-coder"]["sentence"]
+    first, _, evidence = sentence.partition("\n")
+    assert first == (
+        "Qwen3.8-27B keeps crashing: the runtime started it 87 times and it exited each time, "
+        "so it never finishes loading. Likely cause: This is an NVSwitch system (SXM GPUs) and "
+        "NVIDIA Fabric Manager is not running, so CUDA cannot initialize although nvidia-smi "
+        "works. What to do: On the host: sudo apt install nvidia-fabricmanager-<driver major> "
+        "(e.g. 595 for driver 595.x), sudo systemctl enable --now nvidia-fabricmanager, then "
+        "wait for the next reconcile; `slas doctor` checks this as GPU fabric. What it logged "
+        "before it last exited:"
+    )
+    assert "Error 802: system not yet initialized" in evidence
+    assert not h.events("instance.context_reduced"), "not a KV-cache problem"
+
+    # A crash the table does not know keeps the plain sentence.
+    h.api.logs_text["vllm-planner"] = "RuntimeError: something new"
+    h.api.restarting("vllm-planner", times=3)
+    h.prober.healthy = {"vllm-coder"}
+    h.controller.reconcile()
+    assert "Likely cause" not in h.rows()["vllm-planner"]["sentence"]
+
+
 def test_a_context_that_does_not_fit_the_kv_cache_is_halved_and_kept(tmp_path: Path) -> None:
     """vLLM refuses to start when `--max-model-len` needs more KV cache than the GPU has left
     beside the weights, and exits within a minute or two; with `restart: unless-stopped`
