@@ -935,6 +935,165 @@ def test_a_known_crash_signature_gets_a_cause_and_a_host_fix(tmp_path: Path) -> 
     assert "Likely cause" not in h.rows()["vllm-planner"]["sentence"]
 
 
+def _api_server_traceback(frames: int = 36) -> list[str]:
+    """The API server's own traceback: many frames, no error word, ending in the pointer."""
+    lines = [AP + "Traceback (most recent call last):"]
+    for i in range(frames):
+        lines.append(
+            AP + f'  File "/usr/local/lib/python3.12/dist-packages/vllm/x{i}.py", line {i}'
+        )
+        lines.append(
+            AP + "    next(self.gen)" if i % 2 else AP + "    return func(*args, **kwargs)"
+        )
+    lines.append(
+        AP + "RuntimeError: Engine core initialization failed. See root cause above. "
+        "Failed core proc(s): {}"
+    )
+    return lines
+
+
+def _silent_engine_death(last_engine_lines: list[str]) -> str:
+    """The real host's log shape: the engine logs its progress, then nothing (killed, or a
+    fault inside a kernel), then the API server's long traceback, then the fresh attempt."""
+    engine = "(EngineCore pid=693) INFO 09-18 08:45:39 [core.py:123] "
+    return "\n".join(
+        [
+            AP + "INFO 09-18 08:45:22 [model.py:2021] Using max model len 131072",
+            engine + "Initializing a V1 LLM engine (v0.29.0) with config: model='/data/Models/x'",
+            *(engine + line for line in last_engine_lines),
+            *_api_server_traceback(),
+            AP + "INFO 09-18 08:47:10 [model.py:2021] Using max model len 131072",
+            AP + "<frozen importlib._bootstrap_external>:1297: FutureWarning: cuda.cudart",
+        ]
+    )
+
+
+def test_a_silent_engine_death_shows_the_engine_last_lines_and_the_stage(tmp_path: Path) -> None:
+    """The first host, round four: after Fabric Manager the row still showed only
+    "next(self.gen)" and the API server's pointer, because the server's forty frame lines
+    split the cluster and the engine had logged no error at all (it was killed). The row now
+    quotes the engine's last lines, names the stage it died in and reads that stage."""
+    h = Harness(tmp_path, coder_first=True)
+    h.controller.reconcile()
+    h.api.logs_text["vllm-coder"] = _silent_engine_death(
+        ["Starting to load model /data/Models/qwen3.8-27b-fp8...", "Loading safetensors shard 3/12"]
+    )
+    h.api.restarting("vllm-coder", times=8)
+    h.controller.reconcile()
+    row = h.rows()["vllm-coder"]
+    assert row["state"] == "failed"
+    first, _, evidence = row["sentence"].partition("\n")
+    assert first.startswith("Qwen3.8-27B keeps crashing: the runtime started it 8 times")
+    assert "It died while loading its weights (the last stage its engine logged)." in first
+    assert "Likely cause: The process was killed while reading the weights" in first
+    assert 'dmesg -T | grep -iE "killed process|out of memory|xid" | tail' in first
+    assert "sha256sum -c SHA256SUMS" in first
+    lines = evidence.split("\n")
+    assert "Loading safetensors shard 3/12" in evidence and "Starting to load model" in evidence
+    assert "Engine core initialization failed" in evidence
+    assert "next(self.gen)" not in evidence and 'File "' not in evidence
+    assert "FutureWarning" not in evidence, "the fresh attempt is not the evidence"
+    assert lines[0].endswith("Using max model len 131072"), "the attempt from its first line"
+    assert len(lines) <= 40
+    assert not any(a.kind == "stop" for a in h.controller.reconcile().actions), (
+        "a death while loading weights is not what eager execution fixes"
+    )
+    assert "vllm-coder" not in h.controller._eager
+
+    # A loading instance that restarted names the stage when the engine gave no error.
+    h.api.restarting("vllm-coder", times=1)
+    h.controller.reconcile()
+    assert "Before it last exited it was loading its weights." in h.rows()["vllm-coder"]["sentence"]
+
+
+def test_a_death_during_warm_up_earns_one_retry_with_eager_execution(tmp_path: Path) -> None:
+    """A generate engine that dies during the warm-up without an exception of its own (a
+    kernel or the compiler failing for this GPU) is started again once with --enforce-eager;
+    the flag is kept across manager restarts, never applied to a pooling instance, never twice."""
+    warmup = [
+        "Starting to load model /data/Models/qwen3.8-27b-fp8...",
+        "Loading weights took 95.2 seconds",
+        "Model loading took 27.1 GiB and 96.0 seconds",
+        "Available KV cache memory: 210.5 GiB",
+        "Capturing CUDA graphs (mixed prefill-decode, PIECEWISE): 40%",
+    ]
+    h = Harness(tmp_path, coder_first=True)
+    h.controller.reconcile()
+    h.api.logs_text["vllm-coder"] = _silent_engine_death(warmup)
+    h.api.restarting("vllm-coder", times=3)
+    report = h.controller.reconcile()
+    stop = next(a for a in report.actions if a.kind == "stop" and a.name == "vllm-coder")
+    assert stop.reason == (
+        "crashed while capturing CUDA graphs without an error of its own; started again with "
+        "eager execution (no torch.compile, no CUDA graphs; slower)"
+    )
+    cmd = h.api.bodies["vllm-coder"]["Cmd"]
+    assert cmd[-1] == "--enforce-eager" and cmd.count("--enforce-eager") == 1
+    assert "--structured-outputs-config" in cmd
+    row = h.rows()["vllm-coder"]
+    assert row["state"] == "starting"
+    assert "It runs with eager execution" in row["sentence"]
+    assert [e["stage"] for e in h.events("instance.eager_fallback")] == ["capturing CUDA graphs"]
+
+    # A manager restart reads the flag from the container and keeps it: no replacement.
+    again = Harness(tmp_path, api=h.api, coder_first=True)
+    report = again.controller.reconcile()
+    assert all(a.kind == "keep" for a in report.actions if a.name == "vllm-coder")
+    again.prober.healthy = {"vllm-coder"}
+    again.controller.reconcile()
+    row = again.rows()["vllm-coder"]
+    assert row["state"] == "healthy" and "It runs with eager execution" in row["sentence"]
+
+    # It dies the same way with eager execution: no second retry, the row says what is left.
+    again.prober.healthy = set()
+    again.api.logs_text["vllm-coder"] = _silent_engine_death(warmup)
+    again.api.restarting("vllm-coder", times=3)
+    report = again.controller.reconcile()
+    assert not [a for a in report.actions if a.kind == "stop"]
+    row = again.rows()["vllm-coder"]
+    assert row["state"] == "failed"
+    assert "It died while capturing CUDA graphs" in row["sentence"]
+    assert "It runs with eager execution" in row["sentence"]
+    assert "vLLM build for its architecture or a BF16 checkpoint" in row["sentence"]
+
+    # A pooling instance never gets the flag, whatever its log says.
+    pooled = Harness(tmp_path)
+    pooled.controller.reconcile()
+    pooled.api.logs_text["vllm-embed"] = _silent_engine_death(warmup)
+    pooled.api.restarting("vllm-embed", times=3)
+    report = pooled.controller.reconcile()
+    assert not [a for a in report.actions if a.kind == "stop"]
+    assert "--enforce-eager" not in pooled.api.specs["vllm-embed"].argv
+
+    # An engine that raised an exception of its own is shown, not retried in eager mode.
+    spoken = Harness(tmp_path, coder_first=True)
+    spoken.controller.reconcile()
+    spoken.api.logs_text["vllm-coder"] = ENGINE_CORE_CRASH.replace(
+        "no kernel image is available for execution on the device", "something else"
+    )
+    spoken.api.restarting("vllm-coder", times=3)
+    report = spoken.controller.reconcile()
+    assert not [a for a in report.actions if a.kind == "stop"]
+    assert not spoken.events("instance.eager_fallback")
+
+
+def test_a_fatal_signal_line_is_the_error_cluster(tmp_path: Path) -> None:
+    h = Harness(tmp_path, coder_first=True)
+    h.controller.reconcile()
+    h.api.logs_text["vllm-coder"] = "\n".join(
+        [
+            AP + "INFO 09-18 08:45:22 [model.py:2021] Using max model len 131072",
+            "(EngineCore pid=693) INFO 09-18 08:45:39 [core.py:123] Loading weights took 95 s",
+            "(EngineCore pid=693) Fatal Python error: Segmentation fault",
+            AP + "INFO 09-18 08:47:10 [model.py:2021] Using max model len 131072",
+        ]
+    )
+    h.api.restarting("vllm-coder", times=1)
+    h.controller.reconcile()
+    sentence = h.rows()["vllm-coder"]["sentence"]
+    assert "Before it last exited it logged: (EngineCore pid=693) Fatal Python error" in sentence
+
+
 def test_a_context_that_does_not_fit_the_kv_cache_is_halved_and_kept(tmp_path: Path) -> None:
     """vLLM refuses to start when `--max-model-len` needs more KV cache than the GPU has left
     beside the weights, and exits within a minute or two; with `restart: unless-stopped`

@@ -590,6 +590,8 @@ Ada/Ampere, one BF16 reference kept for eval regression. `--enable-prefix-cachin
 old flag exits at start). `context` in the registry is a cap: when vLLM exits because that
 length does not fit the GPU's KV cache beside the weights, the Model Manager starts the instance
 again with half the context (never below 8192), says so on the Models page, and keeps the value.
+An engine that dies during warm-up without an error of its own is started again once with
+`--enforce-eager`; a crash-looping row names the stage the engine died in and its last lines.
 
 ## §8 LLMOps
 **8.1 Eval** — Ragas/TruLens configured against local vLLM only (`slas_eval/judges.py` is

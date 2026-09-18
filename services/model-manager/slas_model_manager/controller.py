@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 import threading
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final, Literal
@@ -47,6 +48,7 @@ from slas_model_manager.runtime import (
     ContainerRef,
     ContainerRuntime,
     context_of,
+    is_eager,
     kv_cache_estimate,
     kv_cache_too_small,
     task_for_role,
@@ -78,10 +80,71 @@ CRASH_EVIDENCE_KEEP: Final = 40
 CRASH_CLUSTER_GAP: Final = 30
 ERROR_LINE: Final = re.compile(
     r"Traceback|Error|ERROR|CRITICAL|Killed|out of memory|OutOfMemory|No available memory|"
-    r"not enough memory|Not enough memory"
+    r"not enough memory|Not enough memory|Fatal Python error|Segmentation fault|Bus error|"
+    r"Aborted|core dumped|SIGKILL|SIGSEGV|SIGBUS|SIGABRT|illegal memory access"
 )
 #: An exception's own message line ("ValueError: …"), as opposed to a traceback frame.
-EXCEPTION_LINE: Final = re.compile(r"\b\w*(Error|Exception|Killed)\b: ")
+EXCEPTION_LINE: Final = re.compile(r"\b\w*(Error|Exception|Killed)\b: |Fatal Python error: ")
+#: A Python exception the engine raised itself (a reason in words), as opposed to a process
+#: that died without one (a signal, the OOM killer, a fault inside a kernel).
+PY_EXCEPTION: Final = re.compile(r"\b\w*(Error|Exception)\b: ")
+#: The first line vLLM's API server logs on every start; it separates one attempt from the
+#: next in a log the runtime keeps across restarts.
+ATTEMPT_START: Final = re.compile(r"vLLM API server version|Using max model len")
+#: The engine process's lines: "(EngineCore pid=N)" or "(EngineCore_DP0 pid=N)".
+ENGINE_PREFIX: Final = re.compile(r"^\(EngineCore\S* pid=\d+\)")
+#: What the engine logs at each start-up stage, in order (vLLM v1 log strings), and how the
+#: row names that stage. The last one seen before the errors is where the engine died.
+STARTUP_STAGES: Final[tuple[tuple[str, str], ...]] = (
+    ("Initializing a V1 LLM engine", "starting its engine"),
+    ("Starting to load model", "loading its weights"),
+    ("Loading weights took", "initialising after the weights loaded"),
+    ("Model loading took", "initialising after the model loaded"),
+    ("Available KV cache memory", "sizing its KV cache"),
+    ("GPU KV cache size", "allocating its KV cache"),
+    ("Capturing CUDA graphs", "capturing CUDA graphs"),
+    ("init engine (profile, create kv cache, warmup model) took", "finishing its engine start"),
+    ("Application startup complete", "serving"),
+)
+#: For a death without an exception of its own, what the stage says about the cause.
+WARMUP_HINT: Final = (
+    "It died in the first forward pass or the warm-up after the weights loaded, without an "
+    "error of its own: a kernel, the compiler or CUDA graph capture failed for this GPU.",
+    "The manager starts it again once with eager execution (no torch.compile, no CUDA graphs). "
+    "If this row still says so afterwards, this GPU needs a vLLM build for its architecture "
+    "or a BF16 checkpoint of the model.",
+)
+STAGE_HINTS: Final[dict[str, tuple[str, str]]] = {
+    "starting its engine": (
+        "It died before reading any weights, while setting up the CUDA context and the model "
+        "configuration, without an error of its own.",
+        "Read the engine's last lines above; on the host, `docker logs {name} 2>&1 | grep "
+        "EngineCore | tail -40` shows the full text.",
+    ),
+    "loading its weights": (
+        "The process was killed while reading the weights: host memory ran out, the disk "
+        "returned an error, or a weights file is truncated or corrupt.",
+        'On the host run `dmesg -T | grep -iE "killed process|out of memory|xid" | tail` '
+        "and `sha256sum -c SHA256SUMS` in the model's directory under Models/.",
+    ),
+    "initialising after the weights loaded": WARMUP_HINT,
+    "initialising after the model loaded": WARMUP_HINT,
+    "sizing its KV cache": WARMUP_HINT,
+    "allocating its KV cache": WARMUP_HINT,
+    "capturing CUDA graphs": WARMUP_HINT,
+    "finishing its engine start": WARMUP_HINT,
+}
+#: The stages after which a silent death earns the one eager retry; set to False to disable.
+EAGER_FALLBACK: Final = True
+EAGER_STAGES: Final[frozenset[str]] = frozenset(
+    stage for stage, hint in STAGE_HINTS.items() if hint is WARMUP_HINT
+)
+EAGER_NOTE: Final = (
+    "It runs with eager execution: its engine died during warm-up on this GPU with compiled "
+    "kernels and CUDA graphs."
+)
+ENGINE_HEADING: Final = "The engine's last lines before it died:"
+ERRORS_HEADING: Final = "The errors that followed:"
 #: What a log line carries before its message: vLLM's process prefix and the logger's
 #: level, time and location. Stripped for classification only, never from the evidence.
 LOG_PREFIX: Final = re.compile(
@@ -128,6 +191,38 @@ KNOWN_CRASHES: Final[tuple[tuple[str, str, str], ...]] = (
 FRAME_LINE: Final = re.compile(r'^\s*File ".*", line \d+')
 CARET_LINE: Final = re.compile(r"^\s*[\^~]+\s*$")
 TRACEBACK_HEAD: Final = re.compile(r"^\s*Traceback \(most recent call last\):\s*$")
+
+
+@dataclass(frozen=True, slots=True)
+class CrashReport:
+    """What the log of a restarted container says about its last failed attempt."""
+
+    #: The frame-less lines of the attempt, from the API server's first line to the last error.
+    attempt: list[str]
+    #: What the row shows: the errors, the engine's last lines, at most CRASH_EVIDENCE_KEEP.
+    evidence: list[str]
+    #: The last start-up stage logged before the errors, or None when none was.
+    stage: str | None
+    #: Whether the engine raised a Python exception of its own (a reason in words) rather
+    #: than dying of a signal, the OOM killer or a fault inside a kernel.
+    engine_exception: bool
+
+
+def _stage_of(lines: Sequence[str]) -> str | None:
+    stage: str | None = None
+    for line in lines:
+        for marker, name in STARTUP_STAGES:
+            if marker in line:
+                stage = name
+    return stage
+
+
+def _head_and_tail(lines: list[str], limit: int) -> list[str]:
+    if len(lines) <= limit:
+        return lines
+    head, tail = limit - 10, 9
+    left_out = len(lines) - head - tail
+    return [*lines[:head], f"… {left_out} more traceback lines left out …", *lines[-tail:]]
 
 
 def _known_crash(lines: Sequence[str]) -> tuple[str, str] | None:
@@ -215,6 +310,9 @@ class Controller:
         #: learnt from a crash loop and kept across manager restarts from the container's argv.
         self._context_cap: dict[str, int] = {}
         self._context_note: dict[str, str] = {}
+        #: Instances running with eager execution after a silent warm-up crash (kept across
+        #: manager restarts from the container's argv), one retry each.
+        self._eager: set[str] = set()
         self.registry_path = registry_path
         self.gateway = gateway
         self.gpu_ids = list(gpu_ids)
@@ -611,6 +709,7 @@ class Controller:
                 image=self.image,
                 task=task_for_role(role),
                 max_model_len=self._context_cap.get(action.name),
+                enforce_eager=action.name in self._eager,
             )
             try:
                 refs[action.name] = self.runtime.start(spec)
@@ -687,9 +786,18 @@ class Controller:
         if current < entry.context and name not in self._context_cap:
             self._context_cap[name] = current
             self._context_note[name] = self._context_sentence(current, entry.context)
-        shrunk = self._shrink_context_after_crash(entry, ref, status)
-        if shrunk is not None:
-            return shrunk
+        # The same for eager execution: a container already running with the flag keeps it.
+        if is_eager(ref.spec.argv):
+            self._eager.add(name)
+        crash_looping = status == "failed" and self._restarts.get(name, 0) >= CRASH_LOOP_RESTARTS
+        report = self._crash_report(name) if crash_looping else None
+        if report is not None:
+            shrunk = self._shrink_context_after_crash(entry, ref, report)
+            if shrunk is not None:
+                return shrunk
+            eager = self._eager_after_silent_crash(ref, role, report)
+            if eager is not None:
+                return eager
         expected = vllm_spec(
             entry,
             name=name,
@@ -697,6 +805,7 @@ class Controller:
             image=self.image,
             task=task_for_role(role),
             max_model_len=self._context_cap.get(name),
+            enforce_eager=name in self._eager,
         )
         if ref.spec.image != self.image:
             return f"runs {ref.spec.image}, but the image lock names {self.image}"
@@ -708,23 +817,20 @@ class Controller:
         return None
 
     def _shrink_context_after_crash(
-        self, entry: ModelEntry, ref: ContainerRef, status: InstanceStatus | None
+        self, entry: ModelEntry, ref: ContainerRef, report: CrashReport
     ) -> str | None:
         """A crash loop whose log says the context does not fit the KV cache is started
         again with half the context (never below MIN_CONTEXT); the reason to replace it,
         or None when this is not that crash or the floor is reached."""
         name = ref.name
-        if status != "failed" or self._restarts.get(name, 0) < CRASH_LOOP_RESTARTS:
-            return None
-        evidence = self._crash_evidence(name)
-        if not kv_cache_too_small(evidence):
+        if not kv_cache_too_small(report.attempt):
             return None
         current = context_of(ref.spec.argv) or entry.context
         if current <= MIN_CONTEXT:
             return None
         # Half the context, and never above what vLLM itself estimated would fit.
         smaller = current // 2
-        estimate = kv_cache_estimate(evidence)
+        estimate = kv_cache_estimate(report.attempt)
         if estimate is not None:
             smaller = min(smaller, estimate)
         smaller = max(MIN_CONTEXT, smaller)
@@ -736,6 +842,26 @@ class Controller:
         return (
             f"crashed because a context of {current} tokens does not fit in the GPU's KV "
             f"cache next to the weights; started again with {smaller}"
+        )
+
+    def _eager_after_silent_crash(
+        self, ref: ContainerRef, role: str | None, report: CrashReport
+    ) -> str | None:
+        """A generate engine that died during warm-up without an exception of its own (a
+        fault inside a compiled kernel or CUDA graph capture, typically on a GPU the build
+        knows badly) is started again once with eager execution; the reason, or None."""
+        name = ref.name
+        if not EAGER_FALLBACK or name in self._eager or task_for_role(role) != "generate":
+            return None
+        if report.stage not in EAGER_STAGES or report.engine_exception:
+            return None
+        if _known_crash(report.attempt) is not None:
+            return None  # a known cause has its own fix; eager execution is not it
+        self._eager.add(name)
+        self.log.warning("instance.eager_fallback", instance=name, stage=report.stage)
+        return (
+            f"crashed while {report.stage} without an error of its own; started again with "
+            "eager execution (no torch.compile, no CUDA graphs; slower)"
         )
 
     @staticmethod
@@ -832,6 +958,8 @@ class Controller:
             sentence = f"{display} is serving {served} at {instance_url(name)}."
             if name in self._context_note:
                 sentence += " " + self._context_note[name]
+            if name in self._eager:
+                sentence += " " + EAGER_NOTE
             if role is not None and entry is not None:
                 self.swaps.register_serving(role, entry, ref)
         elif status == "starting" and name in self._ever_healthy:
@@ -849,8 +977,12 @@ class Controller:
         else:
             state = "failed"
             restarts = self._restarts.get(name, 0)
-            lines = self._crash_evidence(name) if restarts else self.runtime.last_log_lines(name)
-            tail = "\n".join(lines) if lines else "the runtime kept no log lines"
+            report = self._crash_report(name) if restarts else None
+            if report is not None:
+                lines, shown = report.attempt, report.evidence
+            else:
+                lines = shown = self.runtime.last_log_lines(name)
+            tail = "\n".join(shown) if shown else "the runtime kept no log lines"
             if restarts >= CRASH_LOOP_RESTARTS:
                 sentence = (
                     f"{display} keeps crashing: the runtime started it {restarts} times and it "
@@ -858,10 +990,20 @@ class Controller:
                 )
             else:
                 sentence = f"{display} crashed."
+            if report is not None and report.stage is not None:
+                sentence += f" It died while {report.stage} (the last stage its engine logged)."
+            if name in self._eager:
+                sentence += " " + EAGER_NOTE
             known = _known_crash(lines)
+            if known is None and report is not None and not report.engine_exception:
+                # No error in words: the stage is the only clue, and it has a reading.
+                known = STAGE_HINTS.get(report.stage or "")
             if known is not None:
                 cause, what_to_do = known
-                sentence += f" Likely cause: {cause} What to do: {what_to_do}"
+                sentence += (
+                    f" Likely cause: {cause.format(name=name)} "
+                    f"What to do: {what_to_do.format(name=name)}"
+                )
             heading = "What it logged before it last exited" if restarts else "Last log lines"
             sentence += f" {heading}:\n{tail}"
         if state != "starting":
@@ -889,50 +1031,77 @@ class Controller:
         text += "; not answering yet."
         if name in self._context_note:
             text += " " + self._context_note[name]
+        if name in self._eager:
+            text += " " + EAGER_NOTE
         restarts = self._restarts.get(name, 0)
         if restarts:
             times = "once" if restarts == 1 else f"{restarts} times"
             text += f" It exited {times} before and the runtime started it again."
             # The first exception of the failed attempt is the root cause; the API server's
             # later "Engine core initialization failed" only points back at it.
-            errors = [line for line in self._crash_evidence(name) if EXCEPTION_LINE.search(line)]
-            if errors:
+            report = self._crash_report(name)
+            errors = [line for line in report.attempt if EXCEPTION_LINE.search(line)]
+            # The API server's "see root cause above" is a pointer, not a reason: prefer any
+            # other exception, then the stage the engine died in, then the pointer itself.
+            own = [line for line in errors if "See root cause above" not in line]
+            if own:
+                text += f" Before it last exited it logged: {own[0].strip()[:200]}"
+            elif report.stage is not None:
+                text += f" Before it last exited it was {report.stage}."
+            elif errors:
                 text += f" Before it last exited it logged: {errors[0].strip()[:200]}"
         lines = [line for line in self.runtime.last_log_lines(name, 5) if line.strip()]
         if lines:
             text += f" Last log line: {lines[-1].strip()[:200]}"
         return text
 
-    def _crash_evidence(
+    def _crash_evidence(self, name: str) -> list[str]:
+        return self._crash_report(name).evidence
+
+    def _crash_report(
         self, name: str, *, before: int = 4, after: int = 1, limit: int = CRASH_EVIDENCE_KEEP
-    ) -> list[str]:
-        """The messages of the last failed attempt a restarted container logged.
+    ) -> CrashReport:
+        """What the log says about the last failed attempt of a restarted container.
 
         The runtime keeps one log across restarts, so the tail of a crash-looping container
         is the fresh attempt's start-up lines, not the reason it died. The reason is in the
         last cluster of error lines before that: vLLM's engine process logs its own traceback
         ("EngineCore failed to start" and the exception) and the API server then logs a second
-        traceback that only says "see root cause above". The cluster is taken whole, the
-        traceback frames (`File "…"`, the code line under each, the carets) are dropped so the
-        exception messages stand out, and a long remainder keeps its head, where the root
-        cause is, and its tail. Falls back to the last lines when nothing looks like an error.
+        traceback that only says "see root cause above". Traceback frames (`File "…"`, the
+        code line under each, the carets) are dropped from the whole tail FIRST, so the API
+        server's forty frame lines cannot split the engine's error from the server's; then
+        the cluster is found, the attempt is cut at the API server's first line of that start,
+        the engine's last lines before the errors are kept (an engine killed by a signal, the
+        OOM killer or a fault inside a kernel logs no error at all, and its last line names
+        the stage it died in), and a long remainder keeps its head and its tail.
         """
-        lines = self.runtime.last_log_lines(name, CRASH_EVIDENCE_LINES)
+        lines = _without_frames(self.runtime.last_log_lines(name, CRASH_EVIDENCE_LINES))
         hits = [i for i, line in enumerate(lines) if ERROR_LINE.search(line)]
         if not hits:
-            return lines[-limit:]
+            attempt = lines[-limit:]
+            return CrashReport(attempt, attempt, _stage_of(attempt), False)
         last = hits[-1]
         first = last
         for i in reversed(hits[:-1]):
             if first - i > CRASH_CLUSTER_GAP:
                 break
             first = i
-        window = _without_frames(lines[max(0, first - before) : last + after + 1])
-        if len(window) <= limit:
-            return window
-        head, tail = limit - 10, 9
-        left_out = len(window) - head - tail
-        return [*window[:head], f"… {left_out} more traceback lines left out …", *window[-tail:]]
+        starts = [i for i, line in enumerate(lines[:first]) if ATTEMPT_START.search(line)]
+        start = starts[-1] if starts else max(0, first - before)
+        end = last + after + 1
+        attempt = lines[start:end]
+        engine_before = [line for line in lines[start:first] if ENGINE_PREFIX.match(line)]
+        window = lines[max(start, first - before) : end]
+        last_words = engine_before[-3:]
+        if last_words and any(line not in window for line in last_words):
+            window = [ENGINE_HEADING, *last_words, ERRORS_HEADING, *window]
+        engine_lines = [line for line in attempt if ENGINE_PREFIX.match(line)]
+        return CrashReport(
+            attempt=attempt,
+            evidence=_head_and_tail(window, limit),
+            stage=_stage_of(lines[start:first]),
+            engine_exception=any(PY_EXCEPTION.search(line) for line in engine_lines),
+        )
 
     @staticmethod
     def _entry_for(registry: Registry, model_id: str) -> ModelEntry | None:

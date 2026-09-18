@@ -116,7 +116,11 @@ the log lines around the last error before its last exit, never as loading. When
 says the context does not fit the KV cache, the manager replaces the container with half
 the `--max-model-len` (never below 8192), says so on the row, and keeps the smaller value
 across its own restarts by reading it from the container's argv; `context` in
-`models.yaml` is the cap, not a promise.
+`models.yaml` is the cap, not a promise. The evidence is the last failed attempt (from the
+API server's first line) minus traceback frames, with the engine process's last lines and
+the start-up stage it died in ("It died while loading its weights"); an engine that died
+during warm-up without an exception of its own is started again once with `--enforce-eager`,
+kept across manager restarts the same way, never for a pooling instance.
 
 | Route | Body → Answer |
 |---|---|
