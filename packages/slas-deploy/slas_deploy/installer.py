@@ -161,6 +161,18 @@ def create_data_dirs(root: Path, directories: Sequence[str] = DATA_DIRECTORIES) 
     return created
 
 
+def merge_names(existing: str, wanted: str) -> str:
+    """`SLAS_TLS_NAMES` as the union of what the file says and what this install needs, the
+    file's order first, no duplicates: a name added by hand stays, and a name the installer
+    learnt since (the host's address for browsers that use the IP) joins it."""
+    merged: list[str] = []
+    for part in (*existing.split(","), *wanted.split(",")):
+        name = part.strip()
+        if name and name not in merged:
+            merged.append(name)
+    return ",".join(merged)
+
+
 def write_env(
     *,
     example: Path,
@@ -173,10 +185,15 @@ def write_env(
     gid: int,
     tls_names: str,
     public_host: str,
+    public_host_chosen: bool = False,
     runtime_socket: str | None = None,
     agents: Sequence[str] = DEFAULT_AGENTS,
 ) -> list[str]:
-    """Fill the keys the profile needs, never touching a key a person already set."""
+    """Fill the keys the profile needs, never touching a key a person already set.
+
+    Two keys behave differently: `SLAS_TLS_NAMES` is merged (the edge's certificate can only
+    gain names), and `SLAS_PUBLIC_HOST` is replaced when `public_host_chosen` says the person
+    named it on this run (`--public-host`, `SLAS_PUBLIC_HOST`)."""
     defaults = EnvFile.parse(example.read_text(encoding="utf-8"))
     env = read_env(target) if target.is_file() else EnvFile.parse(defaults.render())
     changed: list[str] = []
@@ -184,6 +201,14 @@ def write_env(
     def at_default(key: str) -> bool:
         current = env.get(key)
         return current is None or current == "" or current == (defaults.get(key) or "")
+
+    merged_names = merge_names(env.get("SLAS_TLS_NAMES") or "", tls_names)
+    if env.get("SLAS_TLS_NAMES") != merged_names:
+        env.set("SLAS_TLS_NAMES", merged_names, under_marker="# --- prod profile (ADR-0012) ---")
+        changed.append("SLAS_TLS_NAMES")
+    if public_host_chosen and env.get("SLAS_PUBLIC_HOST") != public_host:
+        env.set("SLAS_PUBLIC_HOST", public_host, under_marker="# --- prod profile (ADR-0012) ---")
+        changed.append("SLAS_PUBLIC_HOST")
 
     # The installer owns these: they describe this install, not a choice a person makes.
     owned = {
@@ -203,7 +228,6 @@ def write_env(
     # the template's default.
     settable = {
         "SLAS_REGISTRY": registry,
-        "SLAS_TLS_NAMES": tls_names,
         "SLAS_PUBLIC_HOST": public_host,
     }
     if runtime_socket:
@@ -367,6 +391,11 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
     env_cmd.add_argument("--tls-names", required=True)
     env_cmd.add_argument("--public-host", required=True)
     env_cmd.add_argument(
+        "--public-host-chosen",
+        action="store_true",
+        help="the person named --public-host on this run; it replaces what .env says",
+    )
+    env_cmd.add_argument(
         "--runtime-socket",
         default="",
         help="host path of the container-runtime socket to record (empty keeps the default)",
@@ -523,6 +552,7 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
             gid=args.gid,
             tls_names=args.tls_names,
             public_host=args.public_host,
+            public_host_chosen=args.public_host_chosen,
             runtime_socket=args.runtime_socket or None,
             agents=agents,
         )

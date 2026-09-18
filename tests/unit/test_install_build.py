@@ -436,6 +436,9 @@ def test_build_pulls_tags_builds_writes_a_pinned_lock_and_starts_the_stack(tmp_p
     assert not any(c.startswith("docker load") for c in calls)
     assert any(" exec -T api slas-api bootstrap status" in c for c in calls)
     assert "SW Local Agent Service is up." in out
+    assert "SLAS_TLS_NAMES=127.0.0.1,localhost," in env_text, "the edge answers to the host's names"
+    assert "SLAS_PUBLIC_HOST=" in env_text and "SLAS_PUBLIC_HOST=\n" not in env_text
+    assert "The certificate is self-signed: the browser asks once whether to continue." in out
     password = (data_root / "secrets" / "admin-initial-password").read_text().strip()
     assert f"one-time password: {password}" in out
 
@@ -942,6 +945,52 @@ def test_write_env_records_the_runtime_socket_only_while_it_is_at_the_default(
         "a person's choice is kept"
     )
     assert write(None) == []
+
+
+def test_write_env_merges_tls_names_and_replaces_the_public_host_only_when_chosen(
+    tmp_path: Path,
+) -> None:
+    """A browser may use the host's IP: the edge's names can only grow, and the sign-in name
+    changes only when the person names it (--public-host)."""
+    from slas_deploy.installer import merge_names, write_env
+    from slas_schemas.envfile import read_env
+
+    assert merge_names("", "127.0.0.1,localhost,rex") == "127.0.0.1,localhost,rex"
+    assert merge_names("127.0.0.1,localhost,rex", "127.0.0.1, localhost,rex,10.1.2.3,rex") == (
+        "127.0.0.1,localhost,rex,10.1.2.3"
+    )
+    assert merge_names("lab.example, rex", "127.0.0.1,rex") == "lab.example,rex,127.0.0.1"
+
+    target = tmp_path / ".env"
+
+    def write(tls_names: str, public_host: str, *, chosen: bool = False) -> list[str]:
+        return write_env(
+            example=REPO_ROOT / "config" / ".env.example", target=target, profile="quickstart", data_root=tmp_path,
+            version="1", registry="local", uid=1, gid=1, tls_names=tls_names, public_host=public_host,
+            public_host_chosen=chosen,
+        )  # fmt: skip
+
+    # First install: the host's name only (as installs before the host's addresses were added).
+    changed = write("127.0.0.1,localhost,rex", "rex")
+    assert {"SLAS_TLS_NAMES", "SLAS_PUBLIC_HOST"} <= set(changed)
+    env = read_env(target)
+    assert (
+        env.get("SLAS_TLS_NAMES") == "127.0.0.1,localhost,rex"
+        and env.get("SLAS_PUBLIC_HOST") == "rex"
+    )
+    # A person adds a name by hand; the next run keeps it and adds the address it learnt.
+    env.set("SLAS_TLS_NAMES", "127.0.0.1,localhost,rex,lab.example")
+    target.write_text(env.render())
+    assert write("127.0.0.1,localhost,rex,10.1.2.3,rex", "rex") == ["SLAS_TLS_NAMES"]
+    env = read_env(target)
+    assert env.get("SLAS_TLS_NAMES") == "127.0.0.1,localhost,rex,lab.example,10.1.2.3"
+    assert env.get("SLAS_PUBLIC_HOST") == "rex", "not chosen on this run, so the file's name stays"
+    # The same run again changes nothing; --public-host <ip> replaces the sign-in name.
+    assert write("127.0.0.1,localhost,rex,10.1.2.3", "rex") == []
+    assert write("127.0.0.1,localhost,rex,10.1.2.3", "10.1.2.3", chosen=True) == [
+        "SLAS_PUBLIC_HOST"
+    ]
+    assert read_env(target).get("SLAS_PUBLIC_HOST") == "10.1.2.3"
 
 
 def test_data_dirs_are_created_once_as_this_user(tmp_path: Path) -> None:

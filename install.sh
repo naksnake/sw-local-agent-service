@@ -40,6 +40,11 @@ MODEL_SOURCES="${SLAS_MODEL_SOURCES:-$SCRIPT_DIR/config/model-sources.txt}"
 PODMAN_SOCKET="${SLAS_PODMAN_SOCKET:-/run/podman/podman.sock}"
 DOCKER_SOCKET="${SLAS_DOCKER_SOCKET:-/var/run/docker.sock}"
 VERSION="$(grep -m1 '^version' "$SCRIPT_DIR/pyproject.toml" | sed 's/.*"\(.*\)"/\1/')"
+# The name browsers use for the sign-in URL; --public-host or SLAS_PUBLIC_HOST names it, else
+# the host's own name. Every name and address the edge answers to goes in SLAS_TLS_NAMES.
+PUBLIC_HOST="${SLAS_PUBLIC_HOST:-}"
+PUBLIC_HOST_CHOSEN=0
+[[ -n "$PUBLIC_HOST" ]] && PUBLIC_HOST_CHOSEN=1
 JSON=0
 DRY_RUN=0
 PREFLIGHT_ONLY=0
@@ -59,6 +64,9 @@ step passed.
                        Validation and Factory bring their executor containers and their pages
                        (ADR-0017). Also read from \$SLAS_AGENTS and the existing .env.
   --data-root PATH     Where the platform keeps its data. Default: \$SLAS_DATA_ROOT or /AI/Agent.
+  --public-host NAME   The name or IP address browsers use for the sign-in URL (SLAS_PUBLIC_HOST).
+                       Default: this host's name. The edge answers to it, to localhost and to every
+                       IP address of this host (SLAS_TLS_NAMES), so https://<ip> works too.
   --bundle DIR         Install from an offline bundle (its manifest is verified with cosign in prod).
                        Default: ./bundle when it exists.
   --registry HOST      Pull from a registry inside the perimeter (Harbor); every image is
@@ -101,6 +109,8 @@ while [[ $# -gt 0 ]]; do
     --agents=*)       AGENTS="${1#*=}"; shift ;;
     --data-root)      DATA_ROOT="${2:-}"; shift 2 ;;
     --data-root=*)    DATA_ROOT="${1#*=}"; shift ;;
+    --public-host)    PUBLIC_HOST="${2:-}"; PUBLIC_HOST_CHOSEN=1; shift 2 ;;
+    --public-host=*)  PUBLIC_HOST="${1#*=}"; PUBLIC_HOST_CHOSEN=1; shift ;;
     --bundle)         BUNDLE_DIR="${2:-}"; shift 2 ;;
     --bundle=*)       BUNDLE_DIR="${1#*=}"; shift ;;
     --registry)       REGISTRY="${2:-}"; shift 2 ;;
@@ -549,8 +559,23 @@ run_or_print() {
   fi
 }
 
-TLS_NAMES="127.0.0.1,localhost,$(hostname -f 2>/dev/null || hostname)"
-PUBLIC_HOST="${SLAS_PUBLIC_HOST:-$(hostname -f 2>/dev/null || hostname)}"
+HOST_NAME="$(hostname -f 2>/dev/null || hostname)"
+# The host's IPv4 addresses on real interfaces (not the container bridges), so a browser may
+# use https://<ip> as well as the name; `hostname -I` is the fallback without iproute2.
+host_ips() {
+  local found=""
+  if command -v ip >/dev/null 2>&1; then
+    found="$(ip -4 -o addr show scope global 2>/dev/null \
+      | awk '$2 !~ /^(docker|br-|veth|virbr|podman|cni|flannel|tun)/ { sub(/\/.*/, "", $4); print $4 }')"
+  fi
+  if [[ -z "$found" ]]; then
+    found="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '^127\.' || true)"
+  fi
+  printf '%s\n' "$found" | awk 'NF && !seen[$0]++'
+}
+HOST_IPS="$(host_ips | paste -sd, -)"
+if [[ -z "$PUBLIC_HOST" ]]; then PUBLIC_HOST="$HOST_NAME"; fi
+TLS_NAMES="127.0.0.1,localhost,$HOST_NAME${HOST_IPS:+,$HOST_IPS},$PUBLIC_HOST"
 ENV_FILE="$DATA_ROOT/.env"
 
 # ---------------------------------------------------------------------------- 3a build and pull the images (--build)
@@ -621,10 +646,14 @@ if [[ $DRY_RUN -eq 1 ]]; then
   "$PYTHON" -m slas_deploy.installer data-dirs --root "$DATA_ROOT" --dry-run
 else
   mkdir -p "$DATA_ROOT"
-  "$PYTHON" -m slas_deploy.installer write-env --example "$SCRIPT_DIR/config/.env.example" \
-    --target "$ENV_FILE" --profile "$PROFILE" --data-root "$DATA_ROOT" --version "$VERSION" \
-    --registry "$REGISTRY" --uid "$(id -u)" --gid "$(id -g)" --tls-names "$TLS_NAMES" \
-    --public-host "$PUBLIC_HOST" --runtime-socket "$RUNTIME_SOCKET" --agents "$AGENTS"
+  env_args=(--example "$SCRIPT_DIR/config/.env.example" --target "$ENV_FILE" --profile "$PROFILE" \
+    --data-root "$DATA_ROOT" --version "$VERSION" --registry "$REGISTRY" --uid "$(id -u)" --gid "$(id -g)" \
+    --tls-names "$TLS_NAMES" --public-host "$PUBLIC_HOST" --runtime-socket "$RUNTIME_SOCKET" --agents "$AGENTS")
+  if [[ $PUBLIC_HOST_CHOSEN -eq 1 ]]; then env_args+=(--public-host-chosen); fi
+  "$PYTHON" -m slas_deploy.installer write-env "${env_args[@]}"
+  # The sign-in URL follows the file: a name set there by hand or on an earlier run stays.
+  env_public_host="$(sed -n 's/^SLAS_PUBLIC_HOST=//p' "$ENV_FILE" | tail -n 1 | tr -d '"')"
+  [[ -n "$env_public_host" ]] && PUBLIC_HOST="$env_public_host"
   "$PYTHON" -m slas_deploy.installer secrets --dir "$DATA_ROOT/secrets" --profile "$PROFILE"
   # Every directory a service bind-mounts, created as the user the stack runs as (SLAS_UID):
   # tls (the edge's CA), Coding, Toolchains, .git-broker, Tickets, Skills, SOP, Validation,
@@ -734,7 +763,13 @@ if [[ -n "$unhealthy" ]]; then
 fi
 
 echo
-echo "SW Local Agent Service is up. Sign in at https://$PUBLIC_HOST"
+also=""
+for addr in ${HOST_IPS//,/ }; do
+  [[ "$addr" == "$PUBLIC_HOST" ]] && continue
+  also="${also:+$also, }https://$addr"
+done
+echo "SW Local Agent Service is up. Sign in at https://$PUBLIC_HOST${also:+ (also at $also)}"
+echo "The certificate is self-signed: the browser asks once whether to continue."
 # The one-time administrator password is shown only while the api says the bootstrap is
 # still pending (ADR-0007, docs/api-contract.md: `slas-api bootstrap status`).
 ADMIN_PASSWORD_FILE="$DATA_ROOT/secrets/admin-initial-password"

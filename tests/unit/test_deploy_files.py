@@ -440,10 +440,11 @@ def test_installer_writes_env_and_secrets_idempotently(tmp_path: Path) -> None:
     second = write_env(
         example=REPO_ROOT / "config" / ".env.example", target=target, profile="prod",
         data_root=tmp_path / "data", version="0.0.2", registry="harbor.internal", uid=1000,
-        gid=1000, tls_names="x", public_host="y",
+        gid=1000, tls_names="127.0.0.1,localhost", public_host="y",
     )  # fmt: skip
     assert second == ["SLAS_VERSION"], "a second run changes only what the installer owns"
     assert read_env(target).get("SLAS_BACKUP_RETENTION_DAYS") == "365"
+    assert read_env(target).get("SLAS_PUBLIC_HOST") == "slas.lab.internal", "not chosen, kept"
 
     created = write_secrets(tmp_path / "data" / "secrets", "prod")
     assert set(created) == {
