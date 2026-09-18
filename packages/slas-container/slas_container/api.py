@@ -48,11 +48,20 @@ class ContainerInfo(SlasModel):
     health: str | None = Field(default=None, description="healthy, unhealthy, starting")
     labels: dict[str, str] = Field(default_factory=dict)
     ip_addresses: dict[str, str] = Field(default_factory=dict, description="network → IP")
+    #: The last exit code; for a running container the code of its previous exit (0 if none).
     exit_code: int | None = None
+    #: How many times the restart policy started the container again after it exited
+    #: (`RestartCount` from inspect; the list route does not carry it, so 0 there).
+    restart_count: int = 0
 
     @property
     def running(self) -> bool:
         return self.state == "running"
+
+    @property
+    def restarted_after_failure(self) -> bool:
+        """Running now, but the restart policy has started it again after a failed exit."""
+        return self.running and self.restart_count > 0 and (self.exit_code or 0) != 0
 
 
 class ExecResult(SlasModel):
@@ -234,6 +243,7 @@ class ContainerApi:
                 if isinstance(cfg, Mapping) and cfg.get("IPAddress")
             },
             exit_code=int(state["ExitCode"]) if state.get("ExitCode") is not None else None,
+            restart_count=int(item.get("RestartCount") or 0),
         )
 
     def list(self, *, label: str | None = None, all_states: bool = True) -> list[ContainerInfo]:

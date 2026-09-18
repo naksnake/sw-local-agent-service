@@ -53,6 +53,9 @@ DEFAULT_RECONCILE_INTERVAL_S: Final = 30.0
 MODEL_MANAGE: Final = "model:manage"
 #: The role whose instance the Coding Agent needs first (CLAUDE.md §1.4, ADR-0017).
 CODER_ROLE: Final = "coder"
+#: A running container the restart policy has started this many times after failed exits
+#: is a crash loop, reported `failed` with its log tail, not "loading".
+CRASH_LOOP_RESTARTS: Final = 3
 
 
 class SystemClock:
@@ -106,6 +109,8 @@ class Controller:
         #: loading for a quarter of an hour; the Coding Agent needs that one instance first.
         self.coder_first = coder_first
         self._starting_since: dict[str, datetime] = {}
+        #: Restarts after failed exits, per container (0 when the last exit was clean).
+        self._restarts: dict[str, int] = {}
         self.registry_path = registry_path
         self.gateway = gateway
         self.gpu_ids = list(gpu_ids)
@@ -396,16 +401,42 @@ class Controller:
         )
         desired = desired_instances(registry)
         starting = [a for a in actions if a.kind == "start"]
-        deferred = self._deferred_behind_coder(starting, statuses, desired)
-        starting = [a for a in starting if a.name not in deferred]
         coder_name = instance_name(CODER_ROLE)
+        gate = self._coder_gate_holds(starting, statuses, desired)
+        deferred = {a.name for a in starting if a.name != coder_name} if gate else set()
+        starting = [a for a in starting if a.name not in deferred]
+        waiting_reason = f"waits until {coder_name} answers"
         # The report says what happened this tick: a deferred start is not a start.
         actions = [
-            a.model_copy(update={"kind": "keep", "reason": f"waits until {coder_name} answers"})
+            a.model_copy(update={"kind": "keep", "reason": waiting_reason})
             if a.name in deferred
             else a
             for a in actions
         ]
+        # Instances that were already loading beside the coder (containers from before this
+        # manager started) are paused the same way: stopped now, started when the coder
+        # answers. Otherwise a manager restart on a host where all seven load at once would
+        # leave the coder competing for the disk exactly as before.
+        for name in sorted(statuses):
+            if (
+                gate
+                and name != coder_name
+                and name in desired
+                and statuses[name] == "starting"
+                and name not in self._ever_healthy
+                and any(a.kind == "keep" and a.name == name for a in actions)
+            ):
+                actions = [a for a in actions if a.name != name]
+                actions.append(
+                    Action(
+                        kind="stop",
+                        name=name,
+                        model_id=desired[name],
+                        reason=f"{waiting_reason}; it was loading beside the coder",
+                    )
+                )
+                deferred.add(name)
+                self.log.info("instance.paused", instance=name, reason=waiting_reason)
         touched = {a.name for a in actions if a.kind != "keep"}
         pinned = {
             name: (ref.spec.gpu_ids, self._needed(registry, ref.spec.model_id))
@@ -506,28 +537,26 @@ class Controller:
         self._states = fresh
         return actions
 
-    def _deferred_behind_coder(
+    def _coder_gate_holds(
         self,
         starting: list[Action],
         statuses: Mapping[str, InstanceStatus | None],
         desired: Mapping[str, str],
-    ) -> set[str]:
-        """The starts that wait while the coder's instance loads (coder first, then the rest).
+    ) -> bool:
+        """Whether every other instance waits while the coder's loads (coder first).
 
         The gate holds while the coder is being started this tick or is running without
-        having answered yet; a coder that crashed, does not fit or is not in the registry
-        holds nobody back.
+        having answered yet; a coder that crashed (or keeps crashing), does not fit or is
+        not in the registry holds nobody back.
         """
         coder_name = instance_name(CODER_ROLE)
         if not self.coder_first or coder_name not in desired:
-            return set()
+            return False
         coder_starts_now = any(a.name == coder_name for a in starting)
         coder_loading = (
             statuses.get(coder_name) == "starting" and coder_name not in self._ever_healthy
         )
-        if not (coder_starts_now or coder_loading):
-            return set()
-        return {a.name for a in starting if a.name != coder_name}
+        return coder_starts_now or coder_loading
 
     def _outdated_reason(self, registry: Registry, ref: ContainerRef) -> str | None:
         """Why a container serving the right model must still be replaced, or None."""
@@ -605,9 +634,19 @@ class Controller:
     def _container_status(self, ref: ContainerRef) -> InstanceStatus | None:
         info = self.runtime.state_of(ref.name)
         if info is None:
+            self._restarts.pop(ref.name, None)
             return None
+        self._restarts[ref.name] = info.restart_count if info.restarted_after_failure else 0
         if info.running:
-            return "healthy" if self.runtime.is_healthy(ref) else "starting"
+            if self.runtime.is_healthy(ref):
+                return "healthy"
+            # `restart: unless-stopped` starts a crashed vLLM again within seconds, so a
+            # crash loop reads as "running" nearly all the time. The first host showed seven
+            # instances "loading" for a quarter of an hour that way. The restart count says
+            # what the state cannot; a few restarts after failed exits is a crash, not a load.
+            if self._restarts[ref.name] >= CRASH_LOOP_RESTARTS:
+                return "failed"
+            return "starting"
         if info.state == "exited" and info.exit_code == 0:
             return "stopped"
         return "failed"
@@ -645,7 +684,14 @@ class Controller:
             state = "failed"
             lines = self.runtime.last_log_lines(name)
             tail = "\n".join(lines) if lines else "the runtime kept no log lines"
-            sentence = f"{display} crashed. Last log lines:\n{tail}"
+            restarts = self._restarts.get(name, 0)
+            if restarts >= CRASH_LOOP_RESTARTS:
+                sentence = (
+                    f"{display} keeps crashing: the runtime started it {restarts} times and it "
+                    f"exited each time, so it never finishes loading. Last log lines:\n{tail}"
+                )
+            else:
+                sentence = f"{display} crashed. Last log lines:\n{tail}"
         if state != "starting":
             self._starting_since.pop(name, None)
         return InstanceState(
@@ -669,6 +715,10 @@ class Controller:
         if minutes >= 1:
             text += f" for {minutes} min"
         text += "; not answering yet."
+        restarts = self._restarts.get(name, 0)
+        if restarts:
+            times = "once" if restarts == 1 else f"{restarts} times"
+            text += f" It exited {times} before and the runtime started it again."
         lines = [line for line in self.runtime.last_log_lines(name, 5) if line.strip()]
         if lines:
             text += f" Last log line: {lines[-1].strip()[:200]}"

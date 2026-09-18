@@ -107,8 +107,11 @@ publishes the table to the gateway (`PUT /v1/instances`). The loop runs in a thr
 `SLAS_RECONCILE_INTERVAL_S` (default 30) and on `POST /v1/reconcile`. With
 `SLAS_START_CODER_FIRST=1` (the default) the coder's instance is started alone and every other
 start waits, reported `starting` with "waits its turn", until the coder answers its health
-check or fails; a `starting` instance's sentence carries how long it has loaded and vLLM's
-last log line.
+check or fails; an instance found already loading beside the coder (a container from before
+the manager started) is stopped and waits the same way. A `starting` instance's sentence
+carries how long it has loaded and vLLM's last log line. A running container whose
+`RestartCount` reached 3 after failed exits (the restart policy hides a crash loop as
+"running") is reported `failed` as "keeps crashing" with its log tail, never as loading.
 
 | Route | Body → Answer |
 |---|---|

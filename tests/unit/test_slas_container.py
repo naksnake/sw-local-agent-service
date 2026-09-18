@@ -304,3 +304,24 @@ def test_fake_mirrors_the_surface() -> None:
     with pytest.raises(ContainerError):
         fake.list()
     fake.close()
+
+
+def test_inspect_carries_the_restart_count_and_the_last_exit_code() -> None:
+    """`restart: unless-stopped` starts a crashed container again within seconds, so the
+    model manager reads the restart count to tell a crash loop from a load."""
+    from slas_container.api import ContainerApi
+
+    item = {
+        "Id": "id-vllm-coder",
+        "Name": "/vllm-coder",
+        "Config": {"Image": "vllm:pinned"},
+        "State": {"Status": "running", "ExitCode": 1},
+        "RestartCount": 4,
+    }
+    info = ContainerApi._info_from_inspect(item)
+    assert info.running and info.restart_count == 4 and info.exit_code == 1
+    assert info.restarted_after_failure
+    clean = ContainerApi._info_from_inspect({**item, "State": {"Status": "running", "ExitCode": 0}})
+    assert clean.restart_count == 4 and not clean.restarted_after_failure
+    fresh = ContainerApi._info_from_inspect({**item, "RestartCount": None})
+    assert fresh.restart_count == 0 and not fresh.restarted_after_failure

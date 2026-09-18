@@ -30,6 +30,8 @@ class FakeContainerApi:
         self.images: set[str] = set(images)
         self.execs: list[tuple[str, list[str]]] = []
         self.logs_text: dict[str, str] = {}
+        self.restart_counts: dict[str, int] = {}
+        self.exit_codes: dict[str, int] = {}
         self._handler: ExecHandler | None = None
         self.down = False
 
@@ -44,6 +46,16 @@ class FakeContainerApi:
     def crash(self, name: str, exit_code: int = 1) -> None:
         self.states[name] = "exited"
         self.healths[name] = None
+        self.exit_codes[name] = exit_code
+        self.logs_text.setdefault(name, f"exited with {exit_code}")
+
+    def restarting(self, name: str, *, times: int, exit_code: int = 1) -> None:
+        """The container exited `times` times with `exit_code` and the restart policy
+        started it again each time; it is running (again) now."""
+        self.states[name] = "running"
+        self.healths[name] = None
+        self.restart_counts[name] = times
+        self.exit_codes[name] = exit_code
         self.logs_text.setdefault(name, f"exited with {exit_code}")
 
     def _require_up(self) -> None:
@@ -83,6 +95,8 @@ class FakeContainerApi:
             health=self.healths.get(name),
             labels=dict(spec.labels),
             ip_addresses={spec.network: "10.0.0.2"} if spec.network != "none" else {},
+            exit_code=self.exit_codes.get(name),
+            restart_count=self.restart_counts.get(name, 0),
         )
 
     def list(self, *, label: str | None = None, all_states: bool = True) -> list[ContainerInfo]:
@@ -152,6 +166,8 @@ class FakeContainerApi:
         self.bodies.pop(name, None)
         self.states.pop(name, None)
         self.healths.pop(name, None)
+        self.exit_codes.pop(name, None)
+        self.restart_counts.pop(name, None)
 
     def logs(self, name: str, *, tail: int = 200) -> str:
         self._require_up()

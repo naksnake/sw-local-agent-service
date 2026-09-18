@@ -848,7 +848,8 @@ while :; do
   if [[ $waited -ge $MODEL_WAIT_S ]]; then break; fi
   # Once a minute, the coder's line: how long it has loaded and what vLLM last logged.
   if [[ $MODEL_POLL_S -gt 0 && $waited -gt 0 && $(( waited % 60 )) -eq 0 ]]; then
-    coder_line="$(printf '%s\n' "$instances_report" | grep -m1 'vllm-coder' || true)"
+    # The coder's own row ("  vllm-coder (coder): …"), not the summary that lists every name.
+    coder_line="$(printf '%s\n' "$instances_report" | grep -m1 -E '^ +vllm-coder \(' || true)"
     echo "  after ${waited} s:${coder_line:-  no coder instance is listed yet}"
   fi
   sleep "$MODEL_POLL_S"

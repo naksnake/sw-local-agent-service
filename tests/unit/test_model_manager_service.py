@@ -662,6 +662,96 @@ def test_the_coder_loads_first_and_the_other_instances_wait_until_it_answers(
     assert len(at_once.api.specs) == 7
 
 
+def test_instances_already_loading_beside_the_coder_are_paused_until_it_answers(
+    tmp_path: Path,
+) -> None:
+    """The first host again: the seven containers existed before the fixed manager started,
+    so a gate on new starts alone changed nothing. Instances found loading beside a loading
+    coder are stopped and wait their turn; a container that was healthy once is left alone."""
+    before = Harness(tmp_path)  # an older manager started everything at once
+    before.controller.reconcile()
+    assert len(before.api.specs) == 7
+
+    h = Harness(tmp_path, api=before.api, coder_first=True)
+    report = h.controller.reconcile()
+    assert sorted(h.api.specs) == ["vllm-coder"]
+    paused = {a.name: a.reason for a in report.actions if a.kind == "stop"}
+    assert set(paused) == {
+        "vllm-embed",
+        "vllm-planner",
+        "vllm-rerank",
+        "vllm-triage",
+        "vllm-voter-deepseek-v4-flash",
+        "vllm-voter-qwen3.8-27b-fp8",
+    }
+    assert paused["vllm-planner"] == (
+        "waits until vllm-coder answers; it was loading beside the coder"
+    )
+    rows = h.rows()
+    assert rows["vllm-planner"]["state"] == "starting"
+    assert "waits its turn" in rows["vllm-planner"]["sentence"]
+    assert [e["instance"] for e in h.events("instance.paused")] == sorted(paused)
+
+    h.prober.healthy = {"vllm-coder"}
+    h.controller.reconcile()
+    assert len(h.api.specs) == 7
+
+    # An instance the manager saw healthy is never paused: it merely lost its health check.
+    steady = Harness(tmp_path, coder_first=True)
+    steady.prober.everything = True
+    steady.controller.reconcile()  # the coder, alone
+    steady.controller.reconcile()  # it answers: the rest start
+    steady.controller.reconcile()  # and answer too
+    assert len(steady.api.specs) == 7
+    assert all(row["state"] == "healthy" for row in steady.rows().values())
+    steady.prober.everything = False
+    steady.prober.healthy = set()
+    steady.api.crash("vllm-coder", exit_code=0)  # stopped by hand: started again, loading
+    steady.controller.reconcile()
+    assert len(steady.api.specs) == 7 and not steady.events("instance.paused")
+    assert steady.rows()["vllm-planner"]["state"] == "unhealthy"
+
+
+def test_a_container_the_runtime_keeps_restarting_is_a_crash_not_a_load(tmp_path: Path) -> None:
+    """vLLM containers run with `restart: unless-stopped`, so one that exits at start is
+    running again within seconds and its state reads "running" nearly all the time. The
+    restart count tells the manager it is crashing; the Models page and the install say so
+    with the log tail instead of "loading" for a quarter of an hour."""
+    h = Harness(tmp_path, coder_first=True)
+    h.controller.reconcile()
+    h.api.logs_text["vllm-coder"] = "RuntimeError: CUDA driver too old for this vLLM build"
+
+    h.api.restarting("vllm-coder", times=1, exit_code=1)
+    h.controller.reconcile()
+    row = h.rows()["vllm-coder"]
+    assert row["state"] == "starting"
+    assert "It exited once before and the runtime started it again." in row["sentence"]
+    assert sorted(h.api.specs) == ["vllm-coder"], "one restart still holds the gate"
+
+    h.api.restarting("vllm-coder", times=3, exit_code=1)
+    h.controller.reconcile()
+    row = h.rows()["vllm-coder"]
+    assert row["state"] == "failed"
+    assert row["sentence"] == (
+        "Qwen3.8-27B keeps crashing: the runtime started it 3 times and it exited each "
+        "time, so it never finishes loading. Last log lines:\n"
+        "RuntimeError: CUDA driver too old for this vLLM build"
+    )
+    assert h.api.states["vllm-coder"] == "running", "the restart policy owns the container"
+    assert len(h.api.specs) == 7, "a crashing coder holds nobody back"
+    assert h.status()["sentence"].startswith("0 of 7 model instances are healthy; ")
+
+    # Restarts after clean exits are not a crash loop (a host that rebooted, say).
+    h.api.restarting("vllm-planner", times=5, exit_code=0)
+    h.controller.reconcile()
+    assert h.rows()["vllm-planner"]["state"] == "starting"
+
+    # Once it answers, the count no longer matters.
+    h.prober.healthy = {"vllm-coder"}
+    h.controller.reconcile()
+    assert h.rows()["vllm-coder"]["state"] == "healthy"
+
+
 def test_a_loading_instance_says_for_how_long_and_what_vllm_last_logged(tmp_path: Path) -> None:
     h = Harness(tmp_path)
     h.controller.reconcile()
