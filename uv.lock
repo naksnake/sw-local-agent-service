@@ -12,6 +12,7 @@ members = [
     "slas-diff",
     "slas-eval",
     "slas-factory-executor",
+    "slas-fetch",
     "slas-git",
     "slas-git-broker",
     "slas-hal",
@@ -847,6 +848,11 @@ requires-dist = [
 ]
 
 [[package]]
+name = "slas-fetch"
+version = "0.0.1"
+source = { editable = "packages/slas-fetch" }
+
+[[package]]
 name = "slas-git"
 version = "0.0.1"
 source = { editable = "packages/slas-git" }
@@ -1220,6 +1226,7 @@ dependencies = [
     { name = "slas-diff" },
     { name = "slas-eval" },
     { name = "slas-factory-executor" },
+    { name = "slas-fetch" },
     { name = "slas-git" },
     { name = "slas-git-broker" },
     { name = "slas-hal" },
@@ -1260,6 +1267,7 @@ requires-dist = [
     { name = "slas-diff", editable = "packages/slas-diff" },
     { name = "slas-eval", editable = "packages/slas-eval" },
     { name = "slas-factory-executor", editable = "services/factory-executor" },
+    { name = "slas-fetch", editable = "packages/slas-fetch" },
     { name = "slas-git", editable = "packages/slas-git" },
     { name = "slas-git-broker", editable = "services/git-broker" },
     { name = "slas-hal", editable = "packages/slas-hal" },

@@ -15,6 +15,7 @@ dependencies = [
   "slas-diff",
   "slas-eval",
   "slas-factory-executor",
+  "slas-fetch",
   "slas-git",
   "slas-git-broker",
   "slas-hal",
@@ -73,6 +74,7 @@ slas-deploy = { workspace = true }
 slas-diff = { workspace = true }
 slas-eval = { workspace = true }
 slas-factory-executor = { workspace = true }
+slas-fetch = { workspace = true }
 slas-git = { workspace = true }
 slas-git-broker = { workspace = true }
 slas-hal = { workspace = true }
@@ -128,7 +130,7 @@ allowed-confusables = ["：", "（", "）", "；", "，", "。", "×"]
 
 [tool.ruff.lint.isort]
 known-first-party = [
-  "slas_api", "slas_authz", "slas_cli", "slas_container", "slas_deploy", "slas_diff", "slas_eval", "slas_factory_executor", "slas_git", "slas_git_broker", "slas_hal",
+  "slas_api", "slas_authz", "slas_cli", "slas_container", "slas_deploy", "slas_diff", "slas_eval", "slas_factory_executor", "slas_fetch", "slas_git", "slas_git_broker", "slas_hal",
   "slas_http", "slas_kernel", "slas_llm_gateway", "slas_model_manager", "slas_observability", "slas_orchestrator",
   "slas_rag",
   "slas_sandbox_manager", "slas_schemas", "slas_screen", "slas_screen_worker", "slas_skills",
@@ -172,6 +174,7 @@ addopts = [
   "--cov=slas_diff",
   "--cov=slas_eval",
   "--cov=slas_factory_executor",
+  "--cov=slas_fetch",
   "--cov=slas_hal",
   "--cov=slas_git",
   "--cov=slas_git_broker",
