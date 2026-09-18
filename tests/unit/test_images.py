@@ -4,6 +4,7 @@ Python service images are rendered from one template (ADR-0014)."""
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -149,6 +150,59 @@ def test_hand_written_images_serve_what_compose_and_the_edge_expect() -> None:
         check=True,
         timeout=30,
     )
+
+
+def _run_screen_entrypoint(
+    tmp_path: Path, *, lock_pid: str | None
+) -> subprocess.CompletedProcess[str]:
+    """Run the screen-worker entrypoint with stub Xvfb, x11vnc, websockify and python3 (no
+    display, no network), against a lock directory of the test's own."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True)
+    for name in ("Xvfb", "x11vnc", "websockify"):
+        (bin_dir / name).write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    (bin_dir / "python3").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    for stub in bin_dir.iterdir():
+        stub.chmod(0o755)
+    x_tmp = tmp_path / "xtmp"
+    (x_tmp / ".X11-unix").mkdir(parents=True)
+    if lock_pid is not None:
+        (x_tmp / ".X97-lock").write_text(f"{lock_pid:>10}\n", encoding="utf-8")
+        (x_tmp / ".X11-unix" / "X97").write_text("", encoding="utf-8")
+    return subprocess.run(
+        ["bash", str(REPO_ROOT / "services" / "screen-worker" / "entrypoint.sh")],
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "SLAS_DISPLAY": "97",
+            "SLAS_X_TMP": str(x_tmp),
+            "SLAS_SESSION_ID": "test",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def test_screen_worker_entrypoint_removes_a_stale_xvfb_lock_but_respects_a_live_one(
+    tmp_path: Path,
+) -> None:
+    """The first host: the screen-worker container restarted, /tmp kept the previous Xvfb's
+    lock, and Xvfb refused to start ("Server is already active for display 10") on every
+    restart. A lock whose pid is dead is removed; one whose pid lives stops the start."""
+    stale = _run_screen_entrypoint(tmp_path / "stale", lock_pid="2147483000")
+    assert stale.returncode == 0, stale.stderr
+    assert "Removing the stale lock" in stale.stdout
+    assert not (tmp_path / "stale" / "xtmp" / ".X97-lock").exists()
+    assert not (tmp_path / "stale" / "xtmp" / ".X11-unix" / "X97").exists()
+
+    live = _run_screen_entrypoint(tmp_path / "live", lock_pid=str(os.getpid()))
+    assert live.returncode == 1
+    assert "already served by process" in live.stdout
+    assert (tmp_path / "live" / "xtmp" / ".X97-lock").exists(), "a live server's lock is kept"
+
+    fresh = _run_screen_entrypoint(tmp_path / "fresh", lock_pid=None)
+    assert fresh.returncode == 0 and "stale lock" not in fresh.stdout
 
 
 def test_base_digests_are_documented_and_the_context_is_kept_small() -> None:

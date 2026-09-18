@@ -21,6 +21,23 @@ else
   echo "slas_observability is not on PYTHONPATH; /health and /metrics are not served."
 fi
 
+# A container restart keeps /tmp, and Xvfb refuses to start while its lock file from the
+# previous run exists ("Server is already active for display N"), so the service looped
+# on the first host. The lock holds the pid of the server that wrote it: a live one means a
+# second Xvfb must not start; a dead one leaves a stale lock and socket to remove.
+X_TMP="${SLAS_X_TMP:-/tmp}"  # where Xvfb keeps its lock and socket; a test points it elsewhere
+LOCK="${X_TMP}/.X${DISPLAY_NO}-lock"
+SOCKET="${X_TMP}/.X11-unix/X${DISPLAY_NO}"
+if [[ -e "${LOCK}" ]]; then
+  holder="$(tr -d '[:space:]' < "${LOCK}" 2>/dev/null || true)"
+  if [[ -n "${holder}" ]] && kill -0 "${holder}" 2>/dev/null; then
+    echo "Display :${DISPLAY_NO} is already served by process ${holder}; a second Xvfb is not started."
+    exit 1
+  fi
+  echo "Removing the stale lock ${LOCK} an earlier Xvfb left behind (the container was restarted)."
+  rm -f "${LOCK}" "${SOCKET}"
+fi
+
 Xvfb ":${DISPLAY_NO}" -screen 0 "${GEOMETRY}" -nolisten tcp -noreset &
 XVFB_PID=$!
 sleep 1
