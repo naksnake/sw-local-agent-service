@@ -54,6 +54,13 @@ def test_the_base_stack_follows_the_zone_model_and_adr_0003() -> None:
         assert service["security_opt"] == ["no-new-privileges:true"], name
         assert service["cap_drop"] == ["ALL"], name
         assert "healthcheck" in service, name
+        probe = service["healthcheck"]["test"]
+        first_party = "/slas/" in service["image"]
+        # slas-health exists only in first-party images; a third-party container probes with
+        # what its own image ships (wget, curl, bash's /dev/tcp) or its own binary.
+        assert ("slas-health" in probe) == first_party, (name, probe)
+        if probe[0] == "CMD":
+            assert not any("$(" in part for part in probe), (name, "CMD form runs no shell")
         assert not service["image"].endswith(":latest"), name
         assert "${SLAS_REGISTRY}/" in service["image"], name
         for key, value in service.get("environment", {}).items():

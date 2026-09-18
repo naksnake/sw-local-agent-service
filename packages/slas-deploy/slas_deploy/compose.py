@@ -165,6 +165,22 @@ def _health(*argv: str) -> dict[str, Any]:
     return {"test": ["CMD", *argv], **HEALTH_INTERVAL}
 
 
+def _health_shell(command: str) -> dict[str, Any]:
+    """A probe that needs a shell (`$(…)`, `/dev/tcp`); `CMD` form runs no shell at all."""
+    return {"test": ["CMD-SHELL", command], **HEALTH_INTERVAL}
+
+
+def _wget(url: str) -> dict[str, Any]:
+    """Busybox and Alpine images (Prometheus, Alertmanager, the exporters, Loki, Tempo) ship
+    `wget` and nothing else; `slas-health` is only in first-party images."""
+    return _health("wget", "-q", "--spider", "-T", "5", url)
+
+
+def _tcp(port: int) -> dict[str, Any]:
+    """Images with bash but neither curl nor wget (Qdrant, DCGM, Keycloak): a TCP connect."""
+    return _health_shell(f"bash -c ':> /dev/tcp/127.0.0.1/{port}' || exit 1")
+
+
 def _service(
     name: str,
     image: str,
@@ -349,7 +365,7 @@ def base_compose() -> dict[str, Any]:
         networks=["slas-knowledge", "slas-observability"],
         environment={"QDRANT__TELEMETRY_DISABLED": "true"},
         volumes=[f"{DATA}/qdrant:/qdrant/storage"],
-        healthcheck=_health("slas-health", "http://127.0.0.1:6333/readyz"),
+        healthcheck=_tcp(6333),
     )
     services["local-search-api"] = _slas(
         "local-search-api",
@@ -482,7 +498,9 @@ def base_compose() -> dict[str, Any]:
         command=["redis-server", "/run/secrets/redis.conf"],
         volumes=["redis_data:/data"],
         secrets=["redis.conf"],
-        healthcheck=_health("redis-cli", "-a", "$(cat /run/secrets/redis_password)", "ping"),
+        healthcheck=_health_shell(
+            'redis-cli --no-auth-warning -a "$(cat /run/secrets/redis_password)" ping | grep -q PONG'
+        ),
     )
     services["redis"]["secrets"] = ["redis.conf", "redis_password"]
     services["minio"] = _service(
@@ -516,7 +534,7 @@ def base_compose() -> dict[str, Any]:
             "../observability/prometheus/rules.yml:/etc/prometheus/rules.yml:ro",
             "prometheus_data:/prometheus",
         ],
-        healthcheck=_health("slas-health", "http://127.0.0.1:9090/-/ready"),
+        healthcheck=_wget("http://127.0.0.1:9090/-/ready"),
     )
     services["alertmanager"] = _service(
         "alertmanager",
@@ -531,7 +549,7 @@ def base_compose() -> dict[str, Any]:
             "../observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro",
             "alertmanager_data:/alertmanager",
         ],
-        healthcheck=_health("slas-health", "http://127.0.0.1:9093/-/ready"),
+        healthcheck=_wget("http://127.0.0.1:9093/-/ready"),
     )
     services["grafana"] = _service(
         "grafana",
@@ -554,7 +572,7 @@ def base_compose() -> dict[str, Any]:
             "grafana_data:/var/lib/grafana",
         ],
         secrets=["grafana_admin_password"],
-        healthcheck=_health("slas-health", "http://127.0.0.1:3000/api/health"),
+        healthcheck=_health("curl", "-fsS", "-m", "5", "http://127.0.0.1:3000/api/health"),
         depends_on=["prometheus"],
     )
     services["dcgm-exporter"] = _service(
@@ -572,7 +590,7 @@ def base_compose() -> dict[str, Any]:
                 }
             }
         },
-        healthcheck=_health("slas-health", "http://127.0.0.1:9400/metrics"),
+        healthcheck=_tcp(9400),
     )
     services["node-exporter"] = _service(
         "node-exporter",
@@ -591,7 +609,7 @@ def base_compose() -> dict[str, Any]:
         ],
         volumes=["/:/host:ro,rslave"],
         extra={"pid": "host"},
-        healthcheck=_health("slas-health", "http://127.0.0.1:9100/metrics"),
+        healthcheck=_wget("http://127.0.0.1:9100/metrics"),
     )
     services["postgres-exporter"] = _service(
         "postgres-exporter",
@@ -604,7 +622,7 @@ def base_compose() -> dict[str, Any]:
             "DATA_SOURCE_PASS_FILE": "/run/secrets/postgres_password",
         },
         secrets=["postgres_password"],
-        healthcheck=_health("slas-health", "http://127.0.0.1:9187/metrics"),
+        healthcheck=_wget("http://127.0.0.1:9187/metrics"),
         depends_on=["postgres"],
     )
 
@@ -684,7 +702,7 @@ def prod_override() -> dict[str, Any]:
         },
         volumes=["../config/keycloak/slas-realm.json:/opt/keycloak/data/import/slas-realm.json:ro"],
         secrets=["keycloak_admin_password", "keycloak_db_password"],
-        healthcheck=_health("slas-health", "http://127.0.0.1:9000/auth/health/ready"),
+        healthcheck=_tcp(9000),
         depends_on=["postgres"],
     )
     services["loki"] = _service(
@@ -694,7 +712,7 @@ def prod_override() -> dict[str, Any]:
         user="10001:10001",
         command=["-config.file=/etc/loki/loki.yml"],
         volumes=["../config/loki/loki.yml:/etc/loki/loki.yml:ro", "loki_data:/loki"],
-        healthcheck=_health("slas-health", "http://127.0.0.1:3100/ready"),
+        healthcheck=_wget("http://127.0.0.1:3100/ready"),
     )
     services["tempo"] = _service(
         "tempo",
@@ -703,7 +721,7 @@ def prod_override() -> dict[str, Any]:
         user="10001:10001",
         command=["-config.file=/etc/tempo/tempo.yml"],
         volumes=["../config/tempo/tempo.yml:/etc/tempo/tempo.yml:ro", "tempo_data:/var/tempo"],
-        healthcheck=_health("slas-health", "http://127.0.0.1:3200/ready"),
+        healthcheck=_wget("http://127.0.0.1:3200/ready"),
     )
     services["backup-runner"] = _service(
         "backup-runner",

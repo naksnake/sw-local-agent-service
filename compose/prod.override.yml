@@ -98,9 +98,8 @@ services:
       - ALL
     healthcheck:
       test:
-        - CMD
-        - slas-health
-        - http://127.0.0.1:9000/auth/health/ready
+        - CMD-SHELL
+        - "bash -c ':> /dev/tcp/127.0.0.1/9000' || exit 1"
       interval: 15s
       timeout: 5s
       retries: 8
@@ -140,7 +139,11 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - wget
+        - "-q"
+        - "--spider"
+        - "-T"
+        - "5"
         - http://127.0.0.1:3100/ready
       interval: 15s
       timeout: 5s
@@ -175,7 +178,11 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - wget
+        - "-q"
+        - "--spider"
+        - "-T"
+        - "5"
         - http://127.0.0.1:3200/ready
       interval: 15s
       timeout: 5s

@@ -657,7 +657,21 @@ fi
 if [[ -n "${COMPOSE_PROFILES:-}" ]]; then
   echo "Compose profiles: $COMPOSE_PROFILES (the executors of the agents you chose)."
 fi
-run_or_print "${COMPOSE[@]}" up -d --pull never --remove-orphans
+if ! run_or_print "${COMPOSE[@]}" up -d --pull never --remove-orphans; then
+  echo
+  echo "docker compose could not start every service."
+  echo "Likely cause: a container exited at start, or a dependency never became healthy; the state of every container and the last 40 log lines of each one that is not running follow."
+  echo "What to do: read the lines below, fix what they name, then run ./install.sh again; \`slas status\` and \`slas logs <service>\` show the same at any time."
+  echo
+  "${COMPOSE[@]}" ps --all 2>&1 || true
+  failing="$("${COMPOSE[@]}" ps --all --format json 2>/dev/null | "$PYTHON" -m slas_deploy.installer unhealthy 2>/dev/null || true)"
+  for svc in $failing; do
+    echo
+    echo "--- $svc: last 40 log lines"
+    "${COMPOSE[@]}" logs --tail 40 --no-color "$svc" 2>&1 || echo "(no logs: the container may not have been created)"
+  done
+  exit 1
+fi
 
 if [[ "$PROFILE" == "prod" ]]; then
   run_or_print "${COMPOSE[@]}" exec -T vault sh /vault/bootstrap.sh

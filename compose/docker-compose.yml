@@ -381,9 +381,8 @@ services:
       - ALL
     healthcheck:
       test:
-        - CMD
-        - slas-health
-        - http://127.0.0.1:6333/readyz
+        - CMD-SHELL
+        - "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"
       interval: 15s
       timeout: 5s
       retries: 8
@@ -684,11 +683,8 @@ services:
       - ALL
     healthcheck:
       test:
-        - CMD
-        - redis-cli
-        - "-a"
-        - "$(cat /run/secrets/redis_password)"
-        - ping
+        - CMD-SHELL
+        - "redis-cli --no-auth-warning -a \"$(cat /run/secrets/redis_password)\" ping | grep -q PONG"
       interval: 15s
       timeout: 5s
       retries: 8
@@ -770,7 +766,11 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - wget
+        - "-q"
+        - "--spider"
+        - "-T"
+        - "5"
         - http://127.0.0.1:9090/-/ready
       interval: 15s
       timeout: 5s
@@ -809,7 +809,11 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - wget
+        - "-q"
+        - "--spider"
+        - "-T"
+        - "5"
         - http://127.0.0.1:9093/-/ready
       interval: 15s
       timeout: 5s
@@ -853,7 +857,10 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - curl
+        - "-fsS"
+        - "-m"
+        - "5"
         - http://127.0.0.1:3000/api/health
       interval: 15s
       timeout: 5s
@@ -890,9 +897,8 @@ services:
       - ALL
     healthcheck:
       test:
-        - CMD
-        - slas-health
-        - http://127.0.0.1:9400/metrics
+        - CMD-SHELL
+        - "bash -c ':> /dev/tcp/127.0.0.1/9400' || exit 1"
       interval: 15s
       timeout: 5s
       retries: 8
@@ -930,7 +936,11 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - wget
+        - "-q"
+        - "--spider"
+        - "-T"
+        - "5"
         - http://127.0.0.1:9100/metrics
       interval: 15s
       timeout: 5s
@@ -975,7 +985,11 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - wget
+        - "-q"
+        - "--spider"
+        - "-T"
+        - "5"
         - http://127.0.0.1:9187/metrics
       interval: 15s
       timeout: 5s
