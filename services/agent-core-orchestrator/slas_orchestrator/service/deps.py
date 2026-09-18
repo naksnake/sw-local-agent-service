@@ -40,6 +40,8 @@ SEE_ALL_CAPABILITY: Final = "admin:people"
 
 #: A health probe: (check name, base URL) → "ok" or a short word saying what is wrong.
 Probe = Callable[[str, str], str]
+#: The gateway's `GET /v1/status` body (contract §2), or None when the gateway did not answer.
+GatewayStatus = Callable[[], dict[str, Any] | None]
 
 _UNSAFE = re.compile(r"[^a-z0-9._-]+")
 
@@ -66,6 +68,9 @@ class Deps:
     glossary: Glossary | None
     owner_routing: OwnerRouting | None
     probe: Probe
+    #: Asks the gateway which roles have a healthy instance, so a coding task is refused with
+    #: a sentence while the coder is still starting instead of failing minutes later.
+    gateway_status: GatewayStatus
 
     @property
     def data_root(self) -> Path:

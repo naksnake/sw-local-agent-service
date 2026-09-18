@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { asApiError } from "../api/http";
 import {
   type Breakdown,
   type CodingApi,
@@ -9,11 +10,15 @@ import {
   type LanguageChoice,
   type LanguageId,
   LANGUAGES,
+  type Readiness,
   type SkillSummary,
   type ToolchainResolution,
   labelOf,
   reviewSentence,
 } from "./api";
+
+/** How often the Review step asks again whether the coding model is ready. */
+const READINESS_POLL_MS = 5_000;
 
 // The three-step wizard from CLAUDE.md §9: Plan → Setup → Review, ending in a sentence
 // that says what will happen and one verb button. Copy: docs/ui/new-coding-task.md.
@@ -50,11 +55,46 @@ export function NewCodingTaskWizard({ api, onStarted, onCancel }: Props) {
   const [resolutions, setResolutions] = useState<ToolchainResolution[]>([]);
   const [starting, setStarting] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  /** The coding model's state, asked on the Review step and again every few seconds until ready. */
+  const [readiness, setReadiness] = useState<Readiness | null>(null);
 
   useEffect(() => {
     void api.listRemotes().then(setRemotes);
     void api.listSkills().then(setSkills);
   }, [api]);
+
+  useEffect(() => {
+    if (step !== 3) {
+      return;
+    }
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const ask = () => {
+      void api
+        .readiness()
+        .then((state) => {
+          if (!live) {
+            return;
+          }
+          setReadiness(state);
+          if (!state.ready) {
+            timer = setTimeout(ask, READINESS_POLL_MS);
+          }
+        })
+        .catch(() => {
+          if (live) {
+            timer = setTimeout(ask, READINESS_POLL_MS);
+          }
+        });
+    };
+    ask();
+    return () => {
+      live = false;
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
+    };
+  }, [api, step]);
 
   useEffect(() => {
     if (plan.trim() === "") {
@@ -127,11 +167,14 @@ export function NewCodingTaskWizard({ api, onStarted, onCancel }: Props) {
     try {
       onStarted(await api.start(breakdown, plan, filename));
     } catch (error: unknown) {
-      setProblem(
-        "The task didn't start. The api service didn't answer. Try again; if it repeats, run " +
-          "`slas logs api` on the host.",
-      );
-      console.error(error);
+      // The service's own three parts when it answered (the coder is not ready, the plan was
+      // refused); the "api not answering" sentences otherwise.
+      const parts = asApiError(error).describe({
+        whatHappened: "The task didn't start.",
+        likelyCause: "The api service didn't answer.",
+        whatToDo: "Try again; if it repeats, run `slas logs api` on the host.",
+      });
+      setProblem(`${parts.whatHappened} ${parts.likelyCause} ${parts.whatToDo}`.replace(/\s+/g, " ").trim());
     } finally {
       setStarting(false);
     }
@@ -432,6 +475,15 @@ export function NewCodingTaskWizard({ api, onStarted, onCancel }: Props) {
           {sentence !== "" && (
             <p className="rounded-md bg-slate-100 p-3 text-sm dark:bg-slate-800" data-testid="sentence">
               {sentence}
+            </p>
+          )}
+          {readiness !== null && (
+            <p
+              role="status"
+              data-testid="readiness"
+              className={readiness.ready ? "text-sm text-slate-700 dark:text-slate-300" : "text-sm text-amber-800 dark:text-amber-300"}
+            >
+              {readiness.sentence}
             </p>
           )}
           {problem !== null && (

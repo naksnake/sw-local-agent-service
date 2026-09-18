@@ -229,7 +229,8 @@ ticket with the executor's state.
 | `POST /v1/coding/toolchains/resolve` | `{"choices"}` → the sandbox manager's answer, passed through. |
 | `GET /v1/coding/remotes` | `{"remotes": [str]}` — the names of the person's remotes from the git broker (`GET /v1/remotes`). |
 | `GET /v1/coding/skills` | `{"skills": [{"id", "name"}]}` — skills enabled for `coding` (`SkillStateStore`). |
-| `POST /v1/coding/tasks` | `{"breakdown": Breakdown, "plan": str, "filename": str}` → `CodingTask` (below); starts the kernel run. |
+| `GET /v1/coding/readiness` | `{"ready": bool, "sentence": str}` — whether the gateway reports a healthy instance for the `coder` role (`GET /v1/status` on the gateway). The wizard shows the sentence above Start task. |
+| `POST /v1/coding/tasks` | `{"breakdown": Breakdown, "plan": str, "filename": str}` → `CodingTask` (below); starts the kernel run. 503 in three parts while the coder role has no healthy instance or the gateway does not answer: a task started then would fail at its first edit minutes later. |
 | `GET /v1/coding/tasks` | `[CodingTask]`, newest first, the person's own unless `admin:people`. |
 | `GET /v1/coding/tasks/{ticket_id}` | `CodingTask`. |
 | `DELETE /v1/coding/tasks/{ticket_id}` | Remove a finished task (Done, Failed or Needs review): the ticket and its journal, its SOP, its artifacts and any sandbox session still open for it → `{"sentence"}`. 409 while the task is running; 404 for a task the person may not see. The project directory under `Coding/<user>/Projects/<slug>` stays: it is the person's repository. |

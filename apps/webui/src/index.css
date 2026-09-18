@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+/* The app has one theme, the light bench below (`color-scheme: light`). Tailwind's `dark:`
+   utilities would otherwise follow the operating system's dark mode and paint light text on
+   this light background — on a dark-mode desktop the sentences on the Coding page vanished.
+   The variant is bound to an attribute the app itself sets, and the app never sets it. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 /* Design tokens and components ported from docs/ui-demo/slas-ui-demo.html, the intended
    UI. The demo is the reference: when the two disagree, fix this file, not the demo.
    Fonts fall back to the system stack; nothing is fetched (INV-1). */

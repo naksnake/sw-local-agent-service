@@ -42,7 +42,7 @@ from slas_orchestrator.factory.agent import FactoryAgent
 from slas_orchestrator.gateway import GatewayCrossChecker
 from slas_orchestrator.remote import ExecutorReader, HttpExecutor
 from slas_orchestrator.service import coding, factory, skills, tickets, validation
-from slas_orchestrator.service.deps import Deps, KernelFactory, Probe
+from slas_orchestrator.service.deps import Deps, GatewayStatus, KernelFactory, Probe
 from slas_orchestrator.service.runs import RunRegistry, RunStartError
 from slas_orchestrator.service.settings import MANDATORY_CHECKS, SERVICE_NAME, Settings
 from slas_orchestrator.service.validation import WatchedTicketStore
@@ -107,6 +107,20 @@ def connect_gateway(settings: Settings, log: EventLog) -> GatewayLike | None:
         log.warning("gateway.client_missing", module=GATEWAY_CLIENT_MODULE, attribute="HttpGateway")
         return None
     return cast(GatewayLike, factory(settings.gateway_url))
+
+
+def http_gateway_status(base_url: str, timeout_s: float) -> GatewayStatus:
+    """`GET /v1/status` on the gateway (contract §2); None when it did not answer."""
+    client = ServiceClient("llm-gateway", base_url, timeout_s=timeout_s)
+
+    def status() -> dict[str, Any] | None:
+        try:
+            payload = client.get("/v1/status")
+        except ServiceError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    return status
 
 
 def http_probe(timeout_s: float) -> Probe:
@@ -306,6 +320,7 @@ def create_app(
     kernel_factory: KernelFactory | None = None,
     registry: RunRegistry | None = None,
     probe: Probe | None = None,
+    gateway_status: GatewayStatus | None = None,
     validation_executor: ServiceClient | None = None,
     factory_executor: ServiceClient | None = None,
     mes: MesAdapter | _Auto | None = AUTO,
@@ -352,6 +367,8 @@ def create_app(
         glossary=load_glossary(settings.glossary_file, event_log),
         owner_routing=load_owner_routing(settings.owner_routing_file, event_log),
         probe=probe or http_probe(settings.probe_timeout_s),
+        gateway_status=gateway_status
+        or http_gateway_status(settings.gateway_url, settings.probe_timeout_s),
     )
     # The Validation and Factory kernels write through the registry's tracking store, wrapped
     # so a route can answer with the ticket id the moment the kernel saves it.

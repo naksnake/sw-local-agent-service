@@ -107,6 +107,14 @@ describe("HttpCodingApi (contract §5 Coding, §8)", () => {
     }
   });
 
+  it("asks whether the coding model is ready with a GET", async () => {
+    const fake = fetchWith(() => ({ ready: false, sentence: "The coding model is not ready yet." }));
+    const state = await new HttpCodingApi(fake.http).readiness();
+    expect(fake.only().method).toBe("GET");
+    expect(fake.only().url).toBe("/api/v1/coding/readiness");
+    expect(state).toEqual({ ready: false, sentence: "The coding model is not ready yet." });
+  });
+
   it("removes a finished task with a DELETE and returns the service's sentence", async () => {
     const fake = fetchWith(() => ({ sentence: "T-coding-0003 and its files were removed. The project's repository stays." }));
     const sentence = await new HttpCodingApi(fake.http).remove("T-coding-0003");

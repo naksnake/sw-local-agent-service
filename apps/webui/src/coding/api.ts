@@ -89,7 +89,14 @@ export interface SkillSummary {
   name: string;
 }
 
+/** Whether the coding model is ready, and the sentence the wizard shows above Start task. */
+export interface Readiness {
+  ready: boolean;
+  sentence: string;
+}
+
 export interface CodingApi {
+  readiness(): Promise<Readiness>;
   detectLanguages(plan: string): Promise<LanguageId[]>;
   propose(plan: string, filename: string): Promise<Breakdown>;
   resolveToolchains(choices: LanguageChoice[]): Promise<ToolchainResolution[]>;
@@ -206,7 +213,21 @@ export class FakeCodingApi implements CodingApi {
   remotes: string[] = [];
   skills: SkillSummary[] = [{ id: "lint-and-test", name: "Lint and test" }];
   readonly tasks: CodingTask[] = [];
+  /** Whether the fake's coder instance is healthy; tests flip it to see the refusal. */
+  coderReady = true;
   private counter = 0;
+
+  async readiness(): Promise<Readiness> {
+    return this.coderReady
+      ? { ready: true, sentence: "The coding model is ready: vllm-coder (qwen3.8-27b-fp8) serves the coder role." }
+      : {
+          ready: false,
+          sentence:
+            "The coding model is not ready yet. vllm-coder is still starting, or the model manager has not " +
+            "reported it healthy; the first start of a large model can take several minutes. Watch the Models " +
+            "page and start the task when the coder role shows healthy.",
+        };
+  }
 
   async detectLanguages(plan: string): Promise<LanguageId[]> {
     const scores = new Map<LanguageId, number>();

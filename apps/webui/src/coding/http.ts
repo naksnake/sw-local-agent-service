@@ -13,6 +13,7 @@ import {
   LANGUAGES,
   type LanguageChoice,
   type LanguageId,
+  type Readiness,
   type SkillSummary,
   type StepStatus,
   type TaskStep,
@@ -105,6 +106,11 @@ export function taskFromWire(value: unknown): CodingTask {
 
 export class HttpCodingApi implements CodingApi {
   constructor(private readonly http: HttpClient) {}
+
+  async readiness(): Promise<Readiness> {
+    const w = asRecord(await this.http.get<unknown>("/coding/readiness"));
+    return { ready: bool(w["ready"], false), sentence: str(w["sentence"]) };
+  }
 
   async detectLanguages(plan: string): Promise<LanguageId[]> {
     const answer = await this.http.post<unknown>("/coding/languages/detect", { plan });

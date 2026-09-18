@@ -359,8 +359,12 @@ class Harness:
         gateway: FakeGateway | None,
         remotes: list[dict[str, Any]] | None = None,
         statuses: dict[str, str] | None = None,
+        coder_ready: bool | None = True,
     ) -> None:
+        """`coder_ready`: what the gateway's status says of the coder role; None means the
+        gateway does not answer at all."""
         self.data_root = tmp_path
+        self.coder_ready = coder_ready
         self.sandbox_service = FakeSandboxService(tmp_path)
         self.sink = ListSink()
         self.settings = Settings.from_env(
@@ -392,8 +396,26 @@ class Harness:
                 "git-broker", "http://git-broker:8000", transport=broker_transport(remotes)
             ),
             probe=lambda name, _url: self.statuses[name],
+            gateway_status=self._gateway_status,
         )
         self.client = TestClient(self.app, raise_server_exceptions=False)
+
+    def _gateway_status(self) -> dict[str, Any] | None:
+        if self.coder_ready is None:
+            return None
+        return {
+            "sentence": "1 of 2 roles healthy.",
+            "roles": [
+                {
+                    "role": "coder",
+                    "instance": "vllm-coder",
+                    "model_id": "qwen3.8-27b-fp8",
+                    "healthy": self.coder_ready,
+                },
+                {"role": "planner", "instance": "vllm-planner", "model_id": None, "healthy": False},
+            ],
+            "budget": {"used_pct": 0.0, "limit_pct": 5.0},
+        }
 
     def get(self, path: str, identity: Identity = PAT) -> Any:
         return self.client.get(path, headers=identity.headers())
@@ -618,6 +640,47 @@ def test_a_task_runs_over_http_to_done_with_zip_votes_and_feed(tmp_path: Path) -
     ]
     assert any(e["event"] == "coding.task_removed" for e in harness.sink.records())
     (tmp_path / "Tickets" / "T-coding-0042").rename(tmp_path / "Tickets" / "gone-0042")
+
+
+def test_a_task_is_refused_with_a_sentence_while_the_coder_is_not_ready(tmp_path: Path) -> None:
+    """The first task on rex failed minutes in with "No instance serves the role coder yet":
+    the wizard now asks first, and Start task is refused in three parts until the coder's
+    instance is healthy or when the gateway does not answer."""
+    ready = Harness(tmp_path, gateway=FakeGateway())
+    assert ready.get("/v1/coding/readiness").json() == {
+        "ready": True,
+        "sentence": (
+            "The coding model is ready: vllm-coder (qwen3.8-27b-fp8) serves the coder role."
+        ),
+    }
+
+    loading = Harness(tmp_path / "loading", gateway=FakeGateway(), coder_ready=False)
+    state = loading.get("/v1/coding/readiness").json()
+    assert state["ready"] is False
+    assert state["sentence"].startswith(
+        "The coding model is not ready yet. vllm-coder is still starting, or the model manager "
+        "has not reported it healthy;"
+    )
+    assert "Watch the Models page" in state["sentence"]
+    refused = loading.post(
+        "/v1/coding/tasks",
+        {"breakdown": one_task_breakdown(loading), "plan": PLAN, "filename": "plan.md"},
+    )
+    assert refused.status_code == 503
+    body = refused.json()
+    assert body["what_happened"] == "The coding model is not ready yet."
+    assert body["what_to_do"].startswith("Watch the Models page")
+    assert loading.get("/v1/coding/tasks").json() == [], "nothing was created"
+
+    silent = Harness(tmp_path / "silent", gateway=FakeGateway(), coder_ready=None)
+    assert silent.get("/v1/coding/readiness").json()["ready"] is False
+    down = silent.post(
+        "/v1/coding/tasks",
+        {"breakdown": one_task_breakdown(silent), "plan": PLAN, "filename": "plan.md"},
+    )
+    assert down.status_code == 503
+    assert down.json()["what_happened"].startswith("The LLM gateway did not answer")
+    assert "slas logs llm-gateway" in down.json()["what_to_do"]
 
 
 @needs_git

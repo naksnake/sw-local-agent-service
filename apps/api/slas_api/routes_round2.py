@@ -69,6 +69,7 @@ ROUTES: Final[tuple[ProxyRoute, ...]] = (
     ),
     ProxyRoute("GET", "/coding/remotes", "orchestrator", "/v1/coding/remotes"),
     ProxyRoute("GET", "/coding/skills", "orchestrator", "/v1/coding/skills"),
+    ProxyRoute("GET", "/coding/readiness", "orchestrator", "/v1/coding/readiness"),
     ProxyRoute("POST", "/coding/tasks", "orchestrator", "/v1/coding/tasks"),
     ProxyRoute("GET", "/coding/tasks", "orchestrator", "/v1/coding/tasks"),
     ProxyRoute("GET", "/coding/tasks/{ticket_id}", "orchestrator", "/v1/coding/tasks/{ticket_id}"),

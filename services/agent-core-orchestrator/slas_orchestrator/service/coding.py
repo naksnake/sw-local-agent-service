@@ -2,7 +2,9 @@
 
     detect · propose · resolve        the wizard's three steps, nothing runs
     remotes · skills                  what the person may pick: saved remotes, enabled skills
-    tasks                             Start task → ticket → the kernel runs in a thread;
+    readiness                         is a healthy instance serving the coder role?
+    tasks                             Start task → ticket → the kernel runs in a thread
+                                      (refused with a sentence while the coder is not ready);
                                       DELETE removes a finished task and its files
 
 The wire spells the export choice `export_target`; the `Breakdown` model calls it `export`.
@@ -161,6 +163,50 @@ def coding_skills(request: Request) -> dict[str, Any]:
     return {"skills": [{"id": s.id, "name": s.name} for s in enabled]}
 
 
+# --- readiness ----------------------------------------------------------------------------
+
+CODER_ROLE: Final = "coder"
+
+
+def coder_readiness(deps: Deps) -> tuple[bool, str, ThreePartMessage | None]:
+    """Whether a healthy instance serves the coder role, as the gateway reports it.
+
+    Returns (ready, sentence, problem): the sentence is what the wizard shows before Start;
+    the problem is the three-part answer a refused start carries. A task started while the
+    coder is still loading would fail minutes later at its first edit, so it is refused now.
+    """
+    status = deps.gateway_status()
+    if status is None:
+        problem = ThreePartMessage(
+            "The LLM gateway did not answer, so the state of the coding model is unknown.",
+            "The llm-gateway container is starting or stopped.",
+            "Wait a moment and try again; if it repeats, run `slas logs llm-gateway` on the host.",
+        )
+        return False, f"{problem.what_happened} {problem.what_to_do}", problem
+    rows = status.get("roles") if isinstance(status, dict) else None
+    row = next((r for r in rows or [] if isinstance(r, dict) and r.get("role") == CODER_ROLE), None)
+    instance = str(row.get("instance") or f"vllm-{CODER_ROLE}") if row else f"vllm-{CODER_ROLE}"
+    model_id = str(row.get("model_id") or "") if row else ""
+    if row is not None and row.get("healthy") is True:
+        served = f"{instance} ({model_id})" if model_id else instance
+        return True, f"The coding model is ready: {served} serves the coder role.", None
+    problem = ThreePartMessage(
+        "The coding model is not ready yet.",
+        f"{instance} is still starting, or the model manager has not reported it healthy; "
+        "the first start of a large model can take several minutes.",
+        "Watch the Models page and start the task when the coder role shows healthy.",
+    )
+    return False, f"{problem.what_happened} {problem.likely_cause} {problem.what_to_do}", problem
+
+
+@router.get("/readiness")
+def readiness(request: Request) -> dict[str, Any]:
+    """What the wizard says above Start task: is the coding model ready?"""
+    identity_of(request)
+    ready, sentence, _ = coder_readiness(deps_of(request))
+    return {"ready": ready, "sentence": sentence}
+
+
 # --- tasks --------------------------------------------------------------------------------
 
 
@@ -177,6 +223,9 @@ def start_task(request: Request, body: TaskBody) -> dict[str, Any]:
     identity = identity_of(request)
     deps = deps_of(request)
     user = workspace_user(identity)
+    ready, _, not_ready = coder_readiness(deps)
+    if not ready and not_ready is not None:
+        raise ServiceError(503, not_ready)
     breakdown = breakdown_from_wire(body.breakdown)
     upload = Upload(filename=body.filename, uploaded_by=user, content=body.plan)
     try:

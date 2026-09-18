@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { ApiError } from "../api/http";
 import { FakeCodingApi, reviewSentence, toolchainSentence } from "./api";
 import { CodingPage } from "./CodingPage";
 
@@ -77,6 +78,33 @@ describe("New coding task wizard", () => {
     expect(within(card).getByText(/Task 2: Add a pytest test for the parser and the CLI\./)).toBeTruthy();
     expect(within(card).getByText(/Cross-check the final diff with 3 voters/)).toBeTruthy();
     expect(api.tasks[0]?.title).toBe("Fan controller");
+  });
+
+  it("says on the Review step whether the coding model is ready, and shows the service's refusal", async () => {
+    const api = new FakeCodingApi();
+    api.coderReady = false;
+    api.start = async () => {
+      throw new ApiError({
+        status: 503,
+        parts: {
+          whatHappened: "The coding model is not ready yet.",
+          likelyCause: "vllm-coder is still starting.",
+          whatToDo: "Watch the Models page.",
+        },
+      });
+    };
+    render(<CodingPage api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New coding task" }));
+    fireEvent.change(screen.getByLabelText("Plan"), { target: { value: PLAN } });
+    fireEvent.click(screen.getByRole("button", { name: "Next: Setup" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Next: Review" }));
+    const readiness = await screen.findByTestId("readiness");
+    expect(readiness.textContent).toMatch(/^The coding model is not ready yet\./);
+    fireEvent.click(await screen.findByRole("button", { name: "Start task" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The coding model is not ready yet. vllm-coder is still starting. Watch the Models page.",
+    );
+    expect(screen.queryByLabelText(/T-coding-/)).toBeNull();
   });
 
   it("removes finished tasks one at a time or all at once, never a running one", async () => {

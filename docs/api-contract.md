@@ -152,6 +152,7 @@ routes answer the 503 *"The model-fetcher did not answer."* there.
 | `GET /api/v1/coding/remotes` | orchestrator `/v1/coding/remotes` | signed in |
 | `GET /api/v1/coding/skills` | orchestrator `/v1/coding/skills` | signed in |
 | `POST /api/v1/coding/tasks` | orchestrator `/v1/coding/tasks` | signed in |
+| `GET /api/v1/coding/readiness` | orchestrator `/v1/coding/readiness` (is the coding model ready?) | signed in |
 | `GET /api/v1/coding/tasks` | orchestrator `/v1/coding/tasks` | signed in |
 | `GET /api/v1/coding/tasks/{ticket_id}` | orchestrator `/v1/coding/tasks/{ticket_id}` | signed in |
 | `DELETE /api/v1/coding/tasks/{ticket_id}` | orchestrator `/v1/coding/tasks/{ticket_id}` (remove a finished task) | signed in |
