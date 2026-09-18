@@ -194,14 +194,23 @@ DEFAULT_IMAGES: Final[tuple[LockedImage, ...]] = (
 )
 
 
-#: The agents an installation starts (ADR-0017). `coding` is always on; the other two bring
-#: their executor container and compose profile only when named in SLAS_AGENTS.
-AGENTS: Final[tuple[str, ...]] = ("coding", "validation", "factory")
+#: The optional parts an installation starts (ADR-0017). `coding` is always on; the other
+#: names bring their containers and compose profile only when listed in SLAS_AGENTS:
+#: `validation` and `factory` their executors, `knowledge` the knowledge base (Qdrant and the
+#: local search api, §8.3), which the Coding Agent does not need until the RCA round.
+AGENTS: Final[tuple[str, ...]] = ("coding", "validation", "factory", "knowledge")
 DEFAULT_AGENTS: Final[tuple[str, ...]] = ("coding",)
-#: The first-party images only one optional agent starts.
+#: The images only one optional part starts.
 AGENT_IMAGES: Final[dict[str, frozenset[str]]] = {
     "validation": frozenset({"validation-executor"}),
     "factory": frozenset({"factory-executor"}),
+    "knowledge": frozenset({"local-search-api", "qdrant"}),
+}
+#: How the installer names each optional part in a sentence.
+AGENT_NOUNS: Final[dict[str, str]] = {
+    "validation": "the validation executor",
+    "factory": "the factory executor",
+    "knowledge": "the knowledge base (Qdrant and local search)",
 }
 
 

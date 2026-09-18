@@ -40,6 +40,7 @@ from slas_deploy.compose import (
     RUNTIME_SOCKET_HOLDERS,
 )
 from slas_deploy.images import (
+    AGENT_NOUNS,
     AGENTS,
     DEFAULT_AGENTS,
     AgentsError,
@@ -427,17 +428,18 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
         return EXIT_PROBLEMS
     if args.command == "agents":
         profiles = compose_profiles(agents)
-        off = [name for name in ("validation", "factory") if name not in agents]
+        off = [name for name in AGENTS if name in AGENT_NOUNS and name not in agents]
         sentence = "Agents: " + ", ".join(agents) + "."
         if off:
-            plural = "s" if len(off) > 1 else ""
-            everything = ",".join(name for name in AGENTS if name in agents or name in off)
+            nouns = [AGENT_NOUNS[name] for name in off]
+            listed = nouns[0] if len(nouns) == 1 else ", ".join(nouns[:-1]) + " and " + nouns[-1]
+            verb = "stays" if len(off) == 1 else "stay"
             sentence += (
-                f" The {' and '.join(off)} executor{plural} stay off; enable them with "
-                f"--agents {everything}."
+                f" {listed[0].upper()}{listed[1:]} {verb} off; enable "
+                f"{'it' if len(off) == 1 else 'them'} with --agents {','.join(AGENTS)}."
             )
         else:
-            sentence += " Every executor starts."
+            sentence += " Every optional part starts."
         out.write(
             json.dumps({"agents": list(agents), "profiles": profiles, "sentence": sentence}) + "\n"
         )

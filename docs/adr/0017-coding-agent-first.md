@@ -20,7 +20,10 @@ kernel, the zone model or the invariants changes, and CLAUDE.md §0 says a confl
 a request and the file is surfaced and recorded, never resolved silently.
 
 ## Decision
-- **`SLAS_AGENTS` names the agents an installation starts; the default is `coding`.**
+- **`SLAS_AGENTS` names the agents and optional parts an installation starts; the default is
+  `coding`.** `knowledge` (Qdrant and the local search api, §8.3) is an optional part on the
+  same list: the Coding Agent does not read the knowledge base until the RCA round, so a
+  coding-only site does not start it.
   `./install.sh --agents coding,validation,factory` (or the variable, or the existing `.env`)
   turns the others on. The installer validates the list in three parts, writes it to `.env`,
   builds only the executor images of the chosen agents, and starts their compose profiles

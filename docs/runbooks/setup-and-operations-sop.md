@@ -112,10 +112,11 @@ The connected quickstart install (ADR-0014, ADR-0015; `docs/api-contract-round-2
 | R5 | places the weights, `docker compose up -d --pull never`, waits for health, prints the sign-in URL | "SW Local Agent Service is up." |
 
 **Which agents start (ADR-0017).** By default the install starts the **Coding Agent** only:
-`SLAS_AGENTS=coding` in `.env`, no `validation-executor` or `factory-executor` container, and
-the WebUI shows Coding, Runs, Models, Skills and Admin. Validation and Factory are built and
-tested but off; `./install.sh --build --agents coding,validation,factory` (or `SLAS_AGENTS`)
-builds their executor images, starts their compose profiles and adds their pages. Run it
+`SLAS_AGENTS=coding` in `.env`; no `validation-executor`, `factory-executor`, `vector-db` or
+`local-search-api` container; the WebUI shows Coding, Runs, Models, Skills and Admin.
+Validation, Factory and the knowledge base (Qdrant, local search) are built and tested but
+off; `./install.sh --build --agents coding,validation,factory,knowledge` (or `SLAS_AGENTS`)
+builds their images, starts their compose profiles and adds their pages. Run it
 again with a different list to change the choice; nothing else in the install moves.
 
 **The services.** Every service is one container serving HTTP on port 8000 inside the stack:

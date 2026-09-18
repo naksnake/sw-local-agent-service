@@ -183,17 +183,32 @@ def test_agents_choose_which_executor_images_start() -> None:
     assert parse_agents("validation") == ("coding", "validation")
     assert parse_agents("factory, coding,factory") == ("coding", "factory")
     assert parse_agents("coding,validation,factory") == ("coding", "validation", "factory")
+    assert parse_agents("knowledge") == ("coding", "knowledge")
     with pytest.raises(AgentsError) as raised:
         parse_agents("coding,screen")
     assert raised.value.message.what_happened == 'The agent "screen" is not known.'
-    assert images_off_for(("coding",)) == {"validation-executor", "factory-executor"}
-    assert images_off_for(("coding", "validation")) == {"factory-executor"}
+    assert images_off_for(("coding",)) == {
+        "validation-executor",
+        "factory-executor",
+        "local-search-api",
+        "qdrant",
+    }
+    assert images_off_for(("coding", "validation", "knowledge")) == {"factory-executor"}
     assert compose_profiles(("coding",)) == []
     assert compose_profiles(("coding", "factory")) == ["factory"]
-    assert compose_profiles(("coding", "validation", "factory")) == ["validation", "factory"]
+    assert compose_profiles(("coding", "validation", "factory", "knowledge")) == [
+        "validation",
+        "factory",
+        "knowledge",
+    ]
 
     lock = default_lock()
     everything = {image.name for image in lock.for_profile("quickstart")}
     coding_only = {image.name for image in lock.for_profile("quickstart", ("coding",))}
-    assert everything - coding_only == {"validation-executor", "factory-executor"}
+    assert everything - coding_only == {
+        "validation-executor",
+        "factory-executor",
+        "local-search-api",
+        "qdrant",
+    }
     assert "agent-core-orchestrator" in coding_only and "sandbox-manager" in coding_only

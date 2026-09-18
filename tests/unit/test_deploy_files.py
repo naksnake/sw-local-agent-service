@@ -92,6 +92,8 @@ def test_the_base_stack_follows_the_zone_model_and_adr_0003() -> None:
     assert services["api"]["environment"]["SLAS_AGENTS"] == "${SLAS_AGENTS:-coding}"
     assert services["validation-executor"]["profiles"] == ["validation"]
     assert services["factory-executor"]["profiles"] == ["factory"]
+    assert services["vector-db"]["profiles"] == ["knowledge"]
+    assert services["local-search-api"]["profiles"] == ["knowledge"]
     assert "profiles" not in services["agent-core-orchestrator"]
     assert "profiles" not in services["sandbox-manager"]
     assert set(services) >= {

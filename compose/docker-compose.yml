@@ -389,6 +389,8 @@ services:
       start_period: 30s
     volumes:
       - "${SLAS_DATA_ROOT}/qdrant:/qdrant/storage"
+    profiles:
+      - knowledge
   local-search-api:
     image: "${SLAS_REGISTRY}/slas/local-search-api:${SLAS_VERSION}"
     restart: unless-stopped
@@ -425,6 +427,8 @@ services:
     depends_on:
       vector-db:
         condition: service_healthy
+    profiles:
+      - knowledge
   sandbox-manager:
     image: "${SLAS_REGISTRY}/slas/sandbox-manager:${SLAS_VERSION}"
     restart: unless-stopped

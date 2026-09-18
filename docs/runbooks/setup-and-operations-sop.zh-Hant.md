@@ -105,9 +105,9 @@ B300 的 GPU 配置（8 顆 GPU，每顆約 288 GB）：
 | R5 | 放置權重、`docker compose up -d --pull never`、等待健康檢查、印出登入網址 | 「SW Local Agent Service is up.」 |
 
 **啟動哪些代理程式（ADR-0017）。** 預設只啟動 **Coding Agent**：`.env` 中 `SLAS_AGENTS=coding`，不建立
-`validation-executor` 與 `factory-executor` 容器，WebUI 顯示 Coding、Runs、Models、Skills 與 Admin。
-Validation 與 Factory 已建置並測試但保持關閉；`./install.sh --build --agents coding,validation,factory`
-（或 `SLAS_AGENTS`）會建置它們的執行器映像、啟動其 compose profile 並加入其頁面。以不同的清單再執行一次
+`validation-executor`、`factory-executor`、`vector-db` 與 `local-search-api` 容器，WebUI 顯示 Coding、Runs、Models、Skills 與 Admin。
+Validation、Factory 與知識庫（Qdrant、本地搜尋）已建置並測試但保持關閉；`./install.sh --build --agents coding,validation,factory,knowledge`
+（或 `SLAS_AGENTS`）會建置它們的映像、啟動其 compose profile 並加入其頁面。以不同的清單再執行一次
 即可更改選擇；安裝的其他部分不變。
 
 **服務。** 每個服務都是一個容器，在平台內部以 8000 埠提供 HTTP：`api`（唯一位於邊緣後方者）、

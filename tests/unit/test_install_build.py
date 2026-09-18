@@ -196,6 +196,8 @@ def test_build_dry_run_describes_every_pull_and_build_and_touches_nothing(tmp_pa
     )
     assert "Would build local/slas/validation-executor" not in out, "off by default (ADR-0017)"
     assert "Would build local/slas/factory-executor" not in out
+    assert "Would build local/slas/local-search-api" not in out, "the knowledge base is off too"
+    assert "Would pull docker.io/qdrant/qdrant" not in out, "the knowledge base's image too"
     assert "Compose profiles:" not in out
     assert "hashicorp/vault" not in out
     assert (
@@ -208,7 +210,7 @@ def test_build_dry_run_describes_every_pull_and_build_and_touches_nothing(tmp_pa
     docker_sock = fake_docker_socket(tmp_path)
     order = [
         "Verifying what will be installed (quickstart profile).",
-        "Agents: coding. The validation and factory executors stay off; enable them with --agents coding,validation,factory.",
+        "Agents: coding. The validation executor, the factory executor and the knowledge base (Qdrant and local search) stay off; enable them with --agents coding,validation,factory,knowledge.",
         "Images are built from this checkout and pulled by their pinned tags after the read-only checks (ADR-0014)",
         "Building the first-party images from",
         "the running platform still has no egress (ADR-0014)",
@@ -245,7 +247,10 @@ def test_agents_flag_adds_the_executors_and_their_compose_profiles(tmp_path: Pat
     )
     assert result.returncode == 0, result.stdout + result.stderr
     out = result.stdout
-    assert "Agents: coding, validation, factory. Every executor starts." in out
+    assert (
+        "Agents: coding, validation, factory. The knowledge base (Qdrant and local search) "
+        "stays off; enable it with --agents coding,validation,factory,knowledge." in out
+    )
     assert f"Would build local/slas/validation-executor:{VERSION}" in out
     assert f"Would build local/slas/factory-executor:{VERSION}" in out
     assert "Compose profiles: validation,factory (the executors of the agents you chose)." in out
@@ -325,10 +330,14 @@ def test_build_pulls_tags_builds_writes_a_pinned_lock_and_starts_the_stack(tmp_p
     assert {i.name for i in lock.unpinned("quickstart")} == {
         "validation-executor",
         "factory-executor",
-    }, "the executors of the agents that are off were not built (ADR-0017)"
+        "local-search-api",
+        "qdrant",
+    }, "the parts that are off were not built or pulled (ADR-0017)"
     assert {i.name for i in lock.unpinned("prod")} == {
         "validation-executor",
         "factory-executor",
+        "local-search-api",
+        "qdrant",
         "mc",
         "vault",
         "keycloak",

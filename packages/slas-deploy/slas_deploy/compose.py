@@ -366,6 +366,8 @@ def base_compose() -> dict[str, Any]:
         environment={"QDRANT__TELEMETRY_DISABLED": "true"},
         volumes=[f"{DATA}/qdrant:/qdrant/storage"],
         healthcheck=_tcp(6333),
+        # The knowledge base starts only when SLAS_AGENTS names knowledge (ADR-0017).
+        extra={"profiles": ["knowledge"]},
     )
     services["local-search-api"] = _slas(
         "local-search-api",
@@ -373,6 +375,7 @@ def base_compose() -> dict[str, Any]:
         environment={"SEARCH_MODE": "internal_corpus"},
         volumes=[f"{DATA}/Knowledge:/data/Knowledge:ro"],
         depends_on=["vector-db"],
+        extra={"profiles": ["knowledge"]},
     )
     # Opens sandboxes over the runtime socket (contract round 2 §4): the host data root is
     # what it names in bind mounts, the toolchain manifest is what install.sh --build wrote

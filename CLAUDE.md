@@ -101,11 +101,12 @@ PASS or merges code without a human · a replacement for engineering judgement.
 ### 1.4 Delivery focus: the Coding Agent (ADR-0017)
 The owner's decision of 2026-09-17: **the Coding Agent comes first.** An installation starts
 the agents named in `SLAS_AGENTS` (`./install.sh --agents …`); the default is `coding`. With
-that default the Validation and Factory executors are not built or started, their compose
-profiles stay off, and the WebUI shows Coding, Runs, Models, Skills and Admin without the
-Validation, Factory and Stations pages. Both agents stay in the repository, built on the same
-kernel and tested against fakes, and `--agents coding,validation,factory` turns them on when a
-lab or a production line is connected. Work after round 2 improves the Coding Agent first:
+that default the Validation and Factory executors and the knowledge base (Qdrant, local
+search; the Coding Agent reads it only from the RCA round on) are not built or started, their
+compose profiles stay off, and the WebUI shows Coding, Runs, Models, Skills and Admin without
+the Validation, Factory and Stations pages. Both agents stay in the repository, built on the same
+kernel and tested against fakes, and `--agents coding,validation,factory,knowledge` turns them
+on when a lab or a production line is connected. Work after round 2 improves the Coding Agent first:
 the model loop on real weights, the Git panel and terminal, the walkthrough, the virtual
 desktop. Nothing in §1.1, §2 or §4 changes; this is scope, not architecture.
 
