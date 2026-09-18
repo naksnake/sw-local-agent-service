@@ -12,7 +12,7 @@ tests run against `FakeRuntime`.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final, Literal, Protocol
 
 from pydantic import Field, model_validator
@@ -69,10 +69,6 @@ KV_CACHE_ESTIMATE: Final = re.compile(r"estimated maximum model length is (\d+)"
 #: vLLM's flag for eager execution: no torch.compile, no CUDA graph capture. Slower, but it
 #: sidesteps a compiler or graph-capture crash on a GPU the build does not know well.
 EAGER_FLAG: Final = "--enforce-eager"
-
-
-def is_eager(argv: Sequence[str]) -> bool:
-    return EAGER_FLAG in argv
 
 
 def context_of(argv: Sequence[str]) -> int | None:
@@ -157,7 +153,8 @@ def vllm_spec(
     generate: bool = True,
     task: VllmTask = "generate",
     max_model_len: int | None = None,
-    enforce_eager: bool = False,
+    extra_args: Sequence[str] = (),
+    extra_env: Mapping[str, str] | None = None,
 ) -> ContainerSpec:
     """The vLLM container for `entry` as `name` on `gpu_ids`.
 
@@ -167,8 +164,8 @@ def vllm_spec(
     callers that have no task to name. `max_model_len` lowers the registry's context when
     the GPU's KV cache could not hold it (the registry's value stays the cap).
     """
-    # `enforce_eager` (generate only) skips torch.compile and CUDA graph capture: the manager's
-    # one retry when an engine died during warm-up without an error of its own.
+    # `extra_args` and `extra_env` are the remedies the manager learnt from this instance's
+    # crashes (controller.REMEDIES): appended last, so they win over the defaults.
     context = entry.context if max_model_len is None else min(entry.context, max_model_len)
     # The model is `vllm serve`'s positional argument; `--model` is deprecated there.
     argv = [
@@ -192,13 +189,16 @@ def vllm_spec(
             "--structured-outputs-config",
             STRUCTURED_OUTPUTS_CONFIG,
         ]
-    if enforce_eager and task == "generate":
-        argv.append(EAGER_FLAG)
+    argv += list(extra_args)
     return ContainerSpec(
         name=name,
         image=image,
         argv=argv,
-        env={**AIRGAP_ENV, "CUDA_VISIBLE_DEVICES": ",".join(str(i) for i in gpu_ids)},
+        env={
+            **AIRGAP_ENV,
+            "CUDA_VISIBLE_DEVICES": ",".join(str(i) for i in gpu_ids),
+            **dict(extra_env or {}),
+        },
         gpu_ids=list(gpu_ids),
         model_id=entry.id,
     )

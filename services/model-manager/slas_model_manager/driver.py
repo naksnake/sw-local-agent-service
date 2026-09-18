@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Final, Protocol
 
 import httpx
@@ -29,6 +29,8 @@ INSTANCE_LABEL: Final = "slas.instance"
 MODEL_LABEL: Final = "slas.model"
 GPU_LABEL: Final = "slas.gpu_ids"
 ARGV_LABEL: Final = "slas.argv"
+#: The environment a remedy added (JSON object), so a restarted manager knows what it applied.
+ENV_LABEL: Final = "slas.env"
 VLLM_KIND: Final = "vllm"
 VLLM_LABEL_FILTER: Final = f"{KIND_LABEL}={VLLM_KIND}"
 
@@ -98,6 +100,11 @@ class HttpProber:
         self._client.close()
 
 
+def extra_env(env: Mapping[str, str]) -> dict[str, str]:
+    """The environment beyond the airgap flags and the device list: what a remedy added."""
+    return {k: v for k, v in env.items() if k not in AIRGAP_ENV and k != "CUDA_VISIBLE_DEVICES"}
+
+
 def vllm_labels(spec: ContainerSpec) -> dict[str, str]:
     return {
         KIND_LABEL: VLLM_KIND,
@@ -105,6 +112,7 @@ def vllm_labels(spec: ContainerSpec) -> dict[str, str]:
         MODEL_LABEL: spec.model_id,
         GPU_LABEL: ",".join(str(i) for i in spec.gpu_ids),
         ARGV_LABEL: json.dumps(spec.argv),
+        ENV_LABEL: json.dumps(extra_env(spec.env), sort_keys=True),
     }
 
 
@@ -161,9 +169,10 @@ class ContainerApiRuntime:
         try:
             gpu_ids = [int(part) for part in labels.get(GPU_LABEL, "").split(",") if part]
             argv = json.loads(labels.get(ARGV_LABEL, "[]"))
+            added = json.loads(labels.get(ENV_LABEL, "{}"))
         except ValueError:
             return None
-        if not gpu_ids or not isinstance(argv, list) or not argv:
+        if not gpu_ids or not isinstance(argv, list) or not argv or not isinstance(added, dict):
             return None
         # A listing may name the image by its id; the spec insists on a pinned reference.
         image = info.image if ":" in info.image else self.image
@@ -172,7 +181,7 @@ class ContainerApiRuntime:
                 name=labels.get(INSTANCE_LABEL) or info.name,
                 image=image,
                 argv=[str(part) for part in argv],
-                env=self._airgap_env(gpu_ids),
+                env={**self._airgap_env(gpu_ids), **{str(k): str(v) for k, v in added.items()}},
                 gpu_ids=gpu_ids,
                 model_id=labels[MODEL_LABEL],
             )

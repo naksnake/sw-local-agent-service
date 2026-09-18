@@ -118,9 +118,13 @@ the `--max-model-len` (never below 8192), says so on the row, and keeps the smal
 across its own restarts by reading it from the container's argv; `context` in
 `models.yaml` is the cap, not a promise. The evidence is the last failed attempt (from the
 API server's first line) minus traceback frames, with the engine process's last lines and
-the start-up stage it died in ("It died while loading its weights"); an engine that died
-during warm-up without an exception of its own is started again once with `--enforce-eager`,
-kept across manager restarts the same way, never for a pooling instance.
+the start-up stage it died in ("It died while loading its weights"). Crash signatures with a
+known fix are remedies (`controller.REMEDIES`): DeepSeek's FP8 MLA layout wanting an FP8 KV
+cache gets `--kv-cache-dtype fp8_ds_mla`; a failure inside the CUTLASS FP8 GEMM kernel (built
+for another Blackwell variant) gets `VLLM_TEST_FORCE_FP8_MARLIN=1`; an engine that died
+during warm-up without an exception of its own gets `--enforce-eager` (generate only). Each is
+applied once, said on the row, and kept across manager restarts from the container's argv and
+its `slas.env` label.
 
 | Route | Body → Answer |
 |---|---|

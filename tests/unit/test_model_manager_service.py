@@ -998,7 +998,7 @@ def test_a_silent_engine_death_shows_the_engine_last_lines_and_the_stage(tmp_pat
     assert not any(a.kind == "stop" for a in h.controller.reconcile().actions), (
         "a death while loading weights is not what eager execution fixes"
     )
-    assert "vllm-coder" not in h.controller._eager
+    assert "eager" not in h.controller._applied.get("vllm-coder", set())
 
     # A loading instance that restarted names the stage when the engine gave no error.
     h.api.restarting("vllm-coder", times=1)
@@ -1033,7 +1033,9 @@ def test_a_death_during_warm_up_earns_one_retry_with_eager_execution(tmp_path: P
     row = h.rows()["vllm-coder"]
     assert row["state"] == "starting"
     assert "It runs with eager execution" in row["sentence"]
-    assert [e["stage"] for e in h.events("instance.eager_fallback")] == ["capturing CUDA graphs"]
+    assert [(e["remedy"], e["stage"]) for e in h.events("instance.remedy")] == [
+        ("eager", "capturing CUDA graphs")
+    ]
 
     # A manager restart reads the flag from the container and keeps it: no replacement.
     again = Harness(tmp_path, api=h.api, coder_first=True)
@@ -1074,7 +1076,124 @@ def test_a_death_during_warm_up_earns_one_retry_with_eager_execution(tmp_path: P
     spoken.api.restarting("vllm-coder", times=3)
     report = spoken.controller.reconcile()
     assert not [a for a in report.actions if a.kind == "stop"]
-    assert not spoken.events("instance.eager_fallback")
+    assert not spoken.events("instance.remedy")
+
+
+def _engine_exception(message: str) -> str:
+    """The real host's third log shape: the engine raises, the server points at it, a fresh
+    attempt follows."""
+    engine = "(EngineCore pid=823) "
+    return "\n".join(
+        [
+            AP + "INFO 09-18 09:39:20 [model.py:2021] Using max model len 131072",
+            engine + "INFO 09-18 09:39:25 [core.py:123] Initializing a V1 LLM engine (v0.29.0)",
+            engine + "INFO 09-18 09:39:30 [gpu_model_runner.py:2653] Starting to load model x",
+            engine + "ERROR 09-18 09:39:33 [core.py:1374] EngineCore failed to start.",
+            engine + "ERROR 09-18 09:39:33 [core.py:1374] Traceback (most recent call last):",
+            engine + 'ERROR 09-18 09:39:33 [core.py:1374]   File "/x/model.py", line 9, in f',
+            engine + "ERROR 09-18 09:39:33 [core.py:1374]     model = model_class(vllm_config)",
+            engine + f"ERROR 09-18 09:39:33 [core.py:1374] {message}",
+            AP + "RuntimeError: Engine core initialization failed. See root cause above. "
+            "Failed core proc(s): {}",
+            AP + "INFO 09-18 09:39:43 [model.py:2021] Using max model len 131072",
+        ]
+    )
+
+
+DS_KV_CACHE = "AssertionError: DeepseekV4 fp8_ds_mla layout only supports fp8 kv-cache, got auto"
+CUTLASS_FP8 = (
+    "RuntimeError: cutlass_gemm_caller, /workspace/csrc/libtorch_stable/quantization/w8a8/"
+    "cutlass/c3x/cutlass_gemm_caller.cuh:62, Error Internal"
+)
+
+
+def test_a_known_crash_with_a_remedy_is_started_again_with_the_fix_and_keeps_it(
+    tmp_path: Path,
+) -> None:
+    """The first host, round five: DeepSeek-V4 Flash refused to start without an FP8 KV
+    cache, and Qwen3.8-27B FP8 died inside vLLM's CUTLASS FP8 GEMM kernel, compiled for
+    another Blackwell variant than the B300. Both have a flag or an environment variable that
+    makes them start; the manager applies it once, says so, and keeps it across restarts."""
+    h = Harness(tmp_path, coder_first=True)
+    h.controller.reconcile()
+    # The coder crashes in the CUTLASS FP8 kernel: Marlin FP8 kernels instead, via the env.
+    h.api.logs_text["vllm-coder"] = _engine_exception(CUTLASS_FP8)
+    h.api.restarting("vllm-coder", times=56)
+    report = h.controller.reconcile()
+    stop = next(a for a in report.actions if a.kind == "stop" and a.name == "vllm-coder")
+    assert stop.reason.startswith("crashed inside the CUTLASS FP8 GEMM kernel")
+    assert stop.reason.endswith("(VLLM_TEST_FORCE_FP8_MARLIN=1)")
+    created = h.api.bodies["vllm-coder"]
+    assert "VLLM_TEST_FORCE_FP8_MARLIN=1" in created["Env"]
+    assert "--enforce-eager" not in created["Cmd"], "a crash with a reason gets its fix, not eager"
+    assert created["Labels"]["slas.env"] == '{"VLLM_TEST_FORCE_FP8_MARLIN": "1"}'
+    row = h.rows()["vllm-coder"]
+    assert row["state"] == "starting"
+    assert "It runs its FP8 layers on the Marlin kernels" in row["sentence"]
+    assert [(e["instance"], e["remedy"]) for e in h.events("instance.remedy")] == [
+        ("vllm-coder", "fp8-marlin")
+    ]
+
+    # A manager restart reads the remedy back from the label: the container is kept.
+    again = Harness(tmp_path, api=h.api, coder_first=True)
+    report = again.controller.reconcile()
+    assert all(a.kind == "keep" for a in report.actions if a.name == "vllm-coder")
+    again.prober.healthy = {"vllm-coder"}
+    again.controller.reconcile()  # the coder answers; the others start
+    row = again.rows()["vllm-coder"]
+    assert row["state"] == "healthy" and "Marlin kernels" in row["sentence"]
+    assert len(again.api.specs) == 7
+
+    # The triage instance (DeepSeek-V4 Flash) needs the FP8 KV cache flag.
+    again.api.logs_text["vllm-triage"] = _engine_exception(DS_KV_CACHE)
+    again.api.restarting("vllm-triage", times=119)
+    report = again.controller.reconcile()
+    stop = next(a for a in report.actions if a.kind == "stop" and a.name == "vllm-triage")
+    assert stop.reason == (
+        "crashed because its FP8 MLA attention layout needs an FP8 KV cache; started again "
+        "with --kv-cache-dtype fp8_ds_mla"
+    )
+    cmd = again.api.bodies["vllm-triage"]["Cmd"]
+    assert cmd[-2:] == ["--kv-cache-dtype", "fp8_ds_mla"]
+    assert "--structured-outputs-config" in cmd
+    assert "It runs with an FP8 KV cache (fp8_ds_mla)" in again.rows()["vllm-triage"]["sentence"]
+
+    # The same crash again with the remedy in force: no second application, the row explains.
+    again.api.logs_text["vllm-triage"] = _engine_exception(DS_KV_CACHE)
+    again.api.restarting("vllm-triage", times=3)
+    report = again.controller.reconcile()
+    assert not [a for a in report.actions if a.kind == "stop"]
+    row = again.rows()["vllm-triage"]
+    assert row["state"] == "failed" and "fp8_ds_mla layout only supports" in row["sentence"]
+
+    # The CUTLASS crash again with Marlin already in force: a known cause, said in words.
+    again.api.logs_text["vllm-coder"] = _engine_exception(CUTLASS_FP8)
+    again.api.restarting("vllm-coder", times=3)
+    again.prober.healthy = set()
+    report = again.controller.reconcile()
+    assert not [a for a in report.actions if a.kind == "stop" and a.name == "vllm-coder"]
+    row = again.rows()["vllm-coder"]
+    assert row["state"] == "failed"
+    assert "Likely cause: This vLLM build's CUTLASS FP8 GEMM kernels" in row["sentence"]
+    assert "pin a vLLM image built for this GPU's architecture" in row["sentence"]
+
+    # Two remedies at once are both carried, in table order, and both adopted after a restart.
+    both = Harness(tmp_path, coder_first=True)
+    both.controller.reconcile()
+    both.api.logs_text["vllm-coder"] = _engine_exception(DS_KV_CACHE)
+    both.api.restarting("vllm-coder", times=3)
+    both.controller.reconcile()
+    both.api.logs_text["vllm-coder"] = _engine_exception(CUTLASS_FP8)
+    both.api.restarting("vllm-coder", times=3)
+    both.controller.reconcile()
+    body = both.api.bodies["vllm-coder"]
+    assert body["Cmd"][-2:] == ["--kv-cache-dtype", "fp8_ds_mla"]
+    assert "VLLM_TEST_FORCE_FP8_MARLIN=1" in body["Env"]
+    later = Harness(tmp_path, api=both.api, coder_first=True)
+    assert all(
+        a.kind == "keep" for a in later.controller.reconcile().actions if a.name == "vllm-coder"
+    )
+    assert later.controller._applied["vllm-coder"] == {"fp8-kv-cache", "fp8-marlin"}
 
 
 def test_a_fatal_signal_line_is_the_error_cluster(tmp_path: Path) -> None:

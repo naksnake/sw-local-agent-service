@@ -44,11 +44,11 @@ from slas_model_manager.registry import (
     write_registry_file,
 )
 from slas_model_manager.runtime import (
+    EAGER_FLAG,
     MIN_CONTEXT,
     ContainerRef,
     ContainerRuntime,
     context_of,
-    is_eager,
     kv_cache_estimate,
     kv_cache_too_small,
     task_for_role,
@@ -143,6 +143,75 @@ EAGER_NOTE: Final = (
     "It runs with eager execution: its engine died during warm-up on this GPU with compiled "
     "kernels and CUDA graphs."
 )
+
+
+@dataclass(frozen=True, slots=True)
+class Remedy:
+    """A start-up crash the manager can fix itself: the signature vLLM logs, and the flags or
+    environment that make the instance start. Applied once per instance, kept across manager
+    restarts (the container's argv and its `slas.env` label carry it), said on the row.
+    Deterministic text and flags, never a model's guess (CLAUDE.md §1.2 value 7)."""
+
+    id: str
+    #: The substring of the crash evidence that names this crash; None for the eager retry,
+    #: which the stage rule decides.
+    marker: str | None
+    args: tuple[str, ...]
+    env: tuple[tuple[str, str], ...]
+    #: On the row while the remedy is in force.
+    note: str
+    #: The stop reason when it is applied.
+    reason: str
+
+    def applied_in(self, argv: Sequence[str], env: Mapping[str, str]) -> bool:
+        if self.args and all(arg in argv for arg in self.args):
+            return True
+        return bool(self.env) and all(env.get(key) == value for key, value in self.env)
+
+
+REMEDIES: Final[tuple[Remedy, ...]] = (
+    Remedy(
+        id="fp8-kv-cache",
+        marker="fp8_ds_mla layout only supports fp8 kv-cache",
+        args=("--kv-cache-dtype", "fp8_ds_mla"),
+        env=(),
+        note=(
+            "It runs with an FP8 KV cache (fp8_ds_mla): this model's FP8 MLA attention layout "
+            "requires one."
+        ),
+        reason=(
+            "crashed because its FP8 MLA attention layout needs an FP8 KV cache; started again "
+            "with --kv-cache-dtype fp8_ds_mla"
+        ),
+    ),
+    Remedy(
+        id="fp8-marlin",
+        marker="cutlass_gemm_caller",
+        args=(),
+        env=(("VLLM_TEST_FORCE_FP8_MARLIN", "1"),),
+        note=(
+            "It runs its FP8 layers on the Marlin kernels: this vLLM build's CUTLASS FP8 kernels "
+            "fail on this GPU."
+        ),
+        reason=(
+            "crashed inside the CUTLASS FP8 GEMM kernel, which this vLLM build compiled for "
+            "another Blackwell variant than this GPU; started again on the Marlin FP8 kernels "
+            "(VLLM_TEST_FORCE_FP8_MARLIN=1)"
+        ),
+    ),
+    Remedy(
+        id="eager",
+        marker=None,
+        args=(EAGER_FLAG,),
+        env=(),
+        note=EAGER_NOTE,
+        reason=(
+            "crashed while {stage} without an error of its own; started again with eager "
+            "execution (no torch.compile, no CUDA graphs; slower)"
+        ),
+    ),
+)
+REMEDY_BY_ID: Final[dict[str, Remedy]] = {remedy.id: remedy for remedy in REMEDIES}
 ENGINE_HEADING: Final = "The engine's last lines before it died:"
 ERRORS_HEADING: Final = "The errors that followed:"
 #: What a log line carries before its message: vLLM's process prefix and the logger's
@@ -186,6 +255,14 @@ KNOWN_CRASHES: Final[tuple[tuple[str, str, str], ...]] = (
         "The GPU ran out of memory while loading: another instance or process holds it.",
         "Check nvidia-smi for other processes on that GPU; SLAS_GPU_IDS in .env keeps GPUs "
         "for other work.",
+    ),
+    (
+        "cutlass_gemm_caller",
+        "This vLLM build's CUTLASS FP8 GEMM kernels were compiled for another Blackwell variant "
+        "than this GPU (arch-specific kernels do not run across variants), so every FP8 layer "
+        "fails.",
+        "The manager retries once on the Marlin FP8 kernels; if this row still says so, pin a "
+        "vLLM image built for this GPU's architecture or use a BF16 or AWQ checkpoint.",
     ),
 )
 FRAME_LINE: Final = re.compile(r'^\s*File ".*", line \d+')
@@ -310,9 +387,9 @@ class Controller:
         #: learnt from a crash loop and kept across manager restarts from the container's argv.
         self._context_cap: dict[str, int] = {}
         self._context_note: dict[str, str] = {}
-        #: Instances running with eager execution after a silent warm-up crash (kept across
-        #: manager restarts from the container's argv), one retry each.
-        self._eager: set[str] = set()
+        #: Remedies (REMEDIES ids) in force per instance, learnt from crash loops and read back
+        #: from a running container's argv and `slas.env` label after a manager restart.
+        self._applied: dict[str, set[str]] = {}
         self.registry_path = registry_path
         self.gateway = gateway
         self.gpu_ids = list(gpu_ids)
@@ -709,7 +786,8 @@ class Controller:
                 image=self.image,
                 task=task_for_role(role),
                 max_model_len=self._context_cap.get(action.name),
-                enforce_eager=action.name in self._eager,
+                extra_args=self._extras(action.name)[0],
+                extra_env=self._extras(action.name)[1],
             )
             try:
                 refs[action.name] = self.runtime.start(spec)
@@ -786,18 +864,19 @@ class Controller:
         if current < entry.context and name not in self._context_cap:
             self._context_cap[name] = current
             self._context_note[name] = self._context_sentence(current, entry.context)
-        # The same for eager execution: a container already running with the flag keeps it.
-        if is_eager(ref.spec.argv):
-            self._eager.add(name)
+        # The same for remedies: a container already running with one keeps it.
+        applied = self._applied.setdefault(name, set())
+        applied.update(r.id for r in REMEDIES if r.applied_in(ref.spec.argv, ref.spec.env))
         crash_looping = status == "failed" and self._restarts.get(name, 0) >= CRASH_LOOP_RESTARTS
         report = self._crash_report(name) if crash_looping else None
         if report is not None:
             shrunk = self._shrink_context_after_crash(entry, ref, report)
             if shrunk is not None:
                 return shrunk
-            eager = self._eager_after_silent_crash(ref, role, report)
-            if eager is not None:
-                return eager
+            remedied = self._remedy_after_crash(ref, role, report)
+            if remedied is not None:
+                return remedied
+        extra_args, extra_env = self._extras(name)
         expected = vllm_spec(
             entry,
             name=name,
@@ -805,16 +884,57 @@ class Controller:
             image=self.image,
             task=task_for_role(role),
             max_model_len=self._context_cap.get(name),
-            enforce_eager=name in self._eager,
+            extra_args=extra_args,
+            extra_env=extra_env,
         )
         if ref.spec.image != self.image:
             return f"runs {ref.spec.image}, but the image lock names {self.image}"
-        if list(ref.spec.argv) != list(expected.argv):
+        if list(ref.spec.argv) != list(expected.argv) or dict(ref.spec.env) != dict(expected.env):
             return (
                 "was created with other vLLM flags than the model manager now uses; a "
                 "container's command is fixed at creation"
             )
         return None
+
+    def _extras(self, name: str) -> tuple[list[str], dict[str, str]]:
+        """The flags and environment of the remedies in force for `name`, in REMEDIES order."""
+        args: list[str] = []
+        env: dict[str, str] = {}
+        for remedy in REMEDIES:
+            if remedy.id in self._applied.get(name, set()):
+                args.extend(remedy.args)
+                env.update(dict(remedy.env))
+        return args, env
+
+    def _notes(self, name: str) -> list[str]:
+        return [r.note for r in REMEDIES if r.id in self._applied.get(name, set())]
+
+    def _remedy_after_crash(
+        self, ref: ContainerRef, role: str | None, report: CrashReport
+    ) -> str | None:
+        """The one remedy a crash loop earns this tick: the first unapplied signature the
+        evidence carries, else the eager retry for a generate engine that died during warm-up
+        without an exception of its own (a fault inside a compiled kernel or CUDA graph
+        capture, typically on a GPU the build knows badly). The reason to replace it, or None."""
+        name = ref.name
+        applied = self._applied.setdefault(name, set())
+        for remedy in REMEDIES:
+            if remedy.marker is None or remedy.id in applied:
+                continue
+            if any(remedy.marker in line for line in report.attempt):
+                applied.add(remedy.id)
+                self.log.warning("instance.remedy", instance=name, remedy=remedy.id)
+                return remedy.reason
+        eager = REMEDY_BY_ID["eager"]
+        if not EAGER_FALLBACK or eager.id in applied or task_for_role(role) != "generate":
+            return None
+        if report.stage not in EAGER_STAGES or report.engine_exception:
+            return None
+        if _known_crash(report.attempt) is not None:
+            return None  # a known cause has its own fix; eager execution is not it
+        applied.add(eager.id)
+        self.log.warning("instance.remedy", instance=name, remedy=eager.id, stage=report.stage)
+        return eager.reason.format(stage=report.stage)
 
     def _shrink_context_after_crash(
         self, entry: ModelEntry, ref: ContainerRef, report: CrashReport
@@ -842,26 +962,6 @@ class Controller:
         return (
             f"crashed because a context of {current} tokens does not fit in the GPU's KV "
             f"cache next to the weights; started again with {smaller}"
-        )
-
-    def _eager_after_silent_crash(
-        self, ref: ContainerRef, role: str | None, report: CrashReport
-    ) -> str | None:
-        """A generate engine that died during warm-up without an exception of its own (a
-        fault inside a compiled kernel or CUDA graph capture, typically on a GPU the build
-        knows badly) is started again once with eager execution; the reason, or None."""
-        name = ref.name
-        if not EAGER_FALLBACK or name in self._eager or task_for_role(role) != "generate":
-            return None
-        if report.stage not in EAGER_STAGES or report.engine_exception:
-            return None
-        if _known_crash(report.attempt) is not None:
-            return None  # a known cause has its own fix; eager execution is not it
-        self._eager.add(name)
-        self.log.warning("instance.eager_fallback", instance=name, stage=report.stage)
-        return (
-            f"crashed while {report.stage} without an error of its own; started again with "
-            "eager execution (no torch.compile, no CUDA graphs; slower)"
         )
 
     @staticmethod
@@ -958,8 +1058,8 @@ class Controller:
             sentence = f"{display} is serving {served} at {instance_url(name)}."
             if name in self._context_note:
                 sentence += " " + self._context_note[name]
-            if name in self._eager:
-                sentence += " " + EAGER_NOTE
+            for note in self._notes(name):
+                sentence += " " + note
             if role is not None and entry is not None:
                 self.swaps.register_serving(role, entry, ref)
         elif status == "starting" and name in self._ever_healthy:
@@ -992,8 +1092,8 @@ class Controller:
                 sentence = f"{display} crashed."
             if report is not None and report.stage is not None:
                 sentence += f" It died while {report.stage} (the last stage its engine logged)."
-            if name in self._eager:
-                sentence += " " + EAGER_NOTE
+            for note in self._notes(name):
+                sentence += " " + note
             known = _known_crash(lines)
             if known is None and report is not None and not report.engine_exception:
                 # No error in words: the stage is the only clue, and it has a reading.
@@ -1031,8 +1131,8 @@ class Controller:
         text += "; not answering yet."
         if name in self._context_note:
             text += " " + self._context_note[name]
-        if name in self._eager:
-            text += " " + EAGER_NOTE
+        for note in self._notes(name):
+            text += " " + note
         restarts = self._restarts.get(name, 0)
         if restarts:
             times = "once" if restarts == 1 else f"{restarts} times"
