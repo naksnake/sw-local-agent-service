@@ -730,28 +730,147 @@ def test_a_container_the_runtime_keeps_restarting_is_a_crash_not_a_load(tmp_path
     assert "It exited once before and the runtime started it again." in row["sentence"]
     assert sorted(h.api.specs) == ["vllm-coder"], "one restart still holds the gate"
 
-    h.api.restarting("vllm-coder", times=3, exit_code=1)
+    # Docker resets the exit code to 0 once the container runs again: the count decides.
+    h.api.restarting("vllm-coder", times=3, exit_code=0)
     h.controller.reconcile()
     row = h.rows()["vllm-coder"]
     assert row["state"] == "failed"
     assert row["sentence"] == (
         "Qwen3.8-27B keeps crashing: the runtime started it 3 times and it exited each "
-        "time, so it never finishes loading. Last log lines:\n"
+        "time, so it never finishes loading. What it logged before it last exited:\n"
         "RuntimeError: CUDA driver too old for this vLLM build"
     )
     assert h.api.states["vllm-coder"] == "running", "the restart policy owns the container"
     assert len(h.api.specs) == 7, "a crashing coder holds nobody back"
     assert h.status()["sentence"].startswith("0 of 7 model instances are healthy; ")
 
-    # Restarts after clean exits are not a crash loop (a host that rebooted, say).
-    h.api.restarting("vllm-planner", times=5, exit_code=0)
-    h.controller.reconcile()
-    assert h.rows()["vllm-planner"]["state"] == "starting"
-
     # Once it answers, the count no longer matters.
     h.prober.healthy = {"vllm-coder"}
     h.controller.reconcile()
     assert h.rows()["vllm-coder"]["state"] == "healthy"
+
+
+VLLM_RESTART_LOG = "\n".join(
+    [
+        "(APIServer pid=1) INFO 09-18 07:56:28 [model.py:2021] Using max model len 131072",
+        "(EngineCore_DP0 pid=71) INFO Loading weights took 95.2 seconds",
+        "(EngineCore_DP0 pid=71) ERROR EngineCore failed to start.",
+        "(EngineCore_DP0 pid=71) ERROR Traceback (most recent call last):",
+        '(EngineCore_DP0 pid=71) ERROR   File "/vllm/v1/core/kv_cache_utils.py", line 900',
+        "(EngineCore_DP0 pid=71) ERROR ValueError: To serve at least one request with the "
+        "models's max seq len (131072), (34.00 GiB KV cache is needed, which is larger than "
+        "the available KV cache memory (21.50 GiB). Based on the available memory, the "
+        "estimated maximum model length is 82944. Try increasing `gpu_memory_utilization` or "
+        "decreasing `max_model_len` when initializing the engine.",
+        "(APIServer pid=1) RuntimeError: Engine core initialization failed. See root cause above.",
+        "(APIServer pid=1) INFO 09-18 07:57:53 [model.py:2021] Using max model len 131072",
+        "(APIServer pid=1) [transformers] The `use_fast` parameter is deprecated.",
+    ]
+)
+
+
+def test_a_crash_loop_shows_the_error_before_the_last_exit_not_the_fresh_start(
+    tmp_path: Path,
+) -> None:
+    """The first host: the install's progress line showed "Using max model len" three times
+    in seven minutes, then deprecation warnings, because the runtime keeps one log across
+    restarts and the tail is always the newest attempt's start-up. The evidence is the
+    window around the last error line before it."""
+    h = Harness(tmp_path, coder_first=True)
+    h.controller.reconcile()
+    # The same shape of log, but not the KV-cache error: the context must stay as it is.
+    unrelated = VLLM_RESTART_LOG.replace("larger than the", "bigger than the").replace(
+        "decreasing `max_model_len`", "another engine"
+    )
+    h.api.logs_text["vllm-coder"] = unrelated
+    h.api.restarting("vllm-coder", times=2)
+    h.controller.reconcile()
+    sentence = h.rows()["vllm-coder"]["sentence"]
+    assert "It exited 2 times before and the runtime started it again." in sentence
+    assert (
+        "Before it last exited it logged: (APIServer pid=1) RuntimeError: Engine core" in sentence
+    )
+    assert sentence.endswith(
+        "Last log line: (APIServer pid=1) [transformers] The `use_fast` parameter is deprecated."
+    )
+
+    h.api.restarting("vllm-coder", times=3)
+    h.controller.reconcile()
+    row = h.rows()["vllm-coder"]
+    assert row["state"] == "failed"
+    lines = row["sentence"].split("\n")
+    assert lines[0].endswith("What it logged before it last exited:")
+    assert lines[1].endswith("Using max model len 131072"), "the failed attempt, from its start"
+    assert any("ValueError" in line for line in lines)
+    assert lines[-1].endswith("Using max model len 131072"), "one line after the error, no more"
+    assert not any("use_fast" in line for line in lines), "the fresh attempt's warnings are noise"
+    assert not h.events("instance.context_reduced")
+
+
+def test_a_context_that_does_not_fit_the_kv_cache_is_halved_and_kept(tmp_path: Path) -> None:
+    """vLLM refuses to start when `--max-model-len` needs more KV cache than the GPU has left
+    beside the weights, and exits within a minute or two; with `restart: unless-stopped`
+    that loops forever and reads as "loading". The manager halves the context (never below
+    8192), starts the instance again, says so, and keeps the value across its own restarts."""
+    h = Harness(tmp_path, coder_first=True)
+    h.controller.reconcile()
+    h.api.logs_text["vllm-coder"] = VLLM_RESTART_LOG
+    h.api.restarting("vllm-coder", times=3)
+    report = h.controller.reconcile()
+    stop = next(a for a in report.actions if a.kind == "stop" and a.name == "vllm-coder")
+    assert stop.reason == (
+        "crashed because a context of 131072 tokens does not fit in the GPU's KV cache next "
+        "to the weights; started again with 65536"
+    )
+    cmd = h.api.bodies["vllm-coder"]["Cmd"]
+    assert cmd[cmd.index("--max-model-len") + 1] == "65536"
+    assert "--structured-outputs-config" in cmd, "every other flag is unchanged"
+    row = h.rows()["vllm-coder"]
+    assert row["state"] == "starting"
+    assert (
+        "It runs with a context of 65536 tokens: the registry's 131072 did not fit in the "
+        "GPU's KV cache next to the weights."
+    ) in row["sentence"]
+    reduced = h.events("instance.context_reduced")
+    assert [(e["was"], e["now"], e["cap"]) for e in reduced] == [(131072, 65536, 131072)]
+    assert sorted(h.api.specs) == ["vllm-coder"], "the gate still holds: the coder is loading"
+
+    # A manager restart reads the smaller context from the container and keeps it.
+    again = Harness(tmp_path, api=h.api, coder_first=True)
+    report = again.controller.reconcile()
+    assert all(a.kind == "keep" for a in report.actions if a.name == "vllm-coder")
+    assert "context of 65536 tokens" in again.rows()["vllm-coder"]["sentence"]
+
+    # It answers: the sentence carries the context, and the others start.
+    again.prober.healthy = {"vllm-coder"}
+    again.controller.reconcile()
+    row = again.rows()["vllm-coder"]
+    assert row["state"] == "healthy" and "context of 65536 tokens" in row["sentence"]
+    assert len(again.api.specs) == 7
+
+    # Still too big: halve again, down to the floor, then stop shrinking and report.
+    floor = Harness(tmp_path, coder_first=True)
+    floor.controller.reconcile()
+    for expected in ("65536", "32768", "16384", "8192"):
+        floor.api.logs_text["vllm-coder"] = VLLM_RESTART_LOG
+        floor.api.restarting("vllm-coder", times=3)
+        floor.controller.reconcile()
+        cmd = floor.api.bodies["vllm-coder"]["Cmd"]
+        assert cmd[cmd.index("--max-model-len") + 1] == expected
+    floor.api.logs_text["vllm-coder"] = VLLM_RESTART_LOG
+    floor.api.restarting("vllm-coder", times=3)
+    report = floor.controller.reconcile()
+    assert not [a for a in report.actions if a.kind == "stop"], "8192 is the floor"
+    assert floor.rows()["vllm-coder"]["state"] == "failed"
+
+    # An unrelated crash never touches the context.
+    other = Harness(tmp_path, coder_first=True)
+    other.controller.reconcile()
+    other.api.logs_text["vllm-coder"] = "RuntimeError: CUDA driver too old for this vLLM build"
+    other.api.restarting("vllm-coder", times=3)
+    report = other.controller.reconcile()
+    assert not [a for a in report.actions if a.kind == "stop"]
+    assert not other.events("instance.context_reduced")
 
 
 def test_a_loading_instance_says_for_how_long_and_what_vllm_last_logged(tmp_path: Path) -> None:

@@ -59,9 +59,14 @@ class ContainerInfo(SlasModel):
         return self.state == "running"
 
     @property
-    def restarted_after_failure(self) -> bool:
-        """Running now, but the restart policy has started it again after a failed exit."""
-        return self.running and self.restart_count > 0 and (self.exit_code or 0) != 0
+    def restarted(self) -> bool:
+        """Running now, but only because the restart policy started it again after it exited.
+
+        The exit code says nothing here: Docker resets `State.ExitCode` to 0 the moment the
+        container runs again, so a crash loop reads as running with exit 0 and a growing
+        `RestartCount`. The count is the evidence.
+        """
+        return self.running and self.restart_count > 0
 
 
 class ExecResult(SlasModel):

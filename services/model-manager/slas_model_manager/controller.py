@@ -14,6 +14,7 @@ restarts, when reconciliation restores the registry's assignment.
 
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -41,7 +42,16 @@ from slas_model_manager.registry import (
     registry_from_mapping,
     write_registry_file,
 )
-from slas_model_manager.runtime import ContainerRef, ContainerRuntime, task_for_role, vllm_spec
+from slas_model_manager.runtime import (
+    MIN_CONTEXT,
+    ContainerRef,
+    ContainerRuntime,
+    context_of,
+    kv_cache_estimate,
+    kv_cache_too_small,
+    task_for_role,
+    vllm_spec,
+)
 from slas_model_manager.swap import Clock, SmokeTester, SwapError, SwapManager, SwapRecord
 from slas_observability.events import EventLog
 from slas_schemas.common import SlasModel
@@ -59,6 +69,13 @@ CRASH_LOOP_RESTARTS: Final = 3
 #: A vLLM instance that is still loading ignores SIGTERM until the runtime kills it, and it
 #: has nothing to lose; pausing one waits this long, not the 30 s a serving instance gets.
 PAUSE_STOP_TIMEOUT_S: Final = 2
+#: How far back the manager reads a restarted container's log for the reason it exited,
+#: and what an error line looks like there (Python tracebacks, vLLM errors, the OOM killer).
+CRASH_EVIDENCE_LINES: Final = 400
+ERROR_LINE: Final = re.compile(
+    r"Traceback|Error|ERROR|CRITICAL|Killed|out of memory|OutOfMemory|No available memory|"
+    r"not enough memory|Not enough memory"
+)
 
 
 class SystemClock:
@@ -112,8 +129,12 @@ class Controller:
         #: loading for a quarter of an hour; the Coding Agent needs that one instance first.
         self.coder_first = coder_first
         self._starting_since: dict[str, datetime] = {}
-        #: Restarts after failed exits, per container (0 when the last exit was clean).
+        #: Restart-policy restarts per running container (0 for one that never exited).
         self._restarts: dict[str, int] = {}
+        #: Per instance, a context below the registry's that the GPU's KV cache can hold,
+        #: learnt from a crash loop and kept across manager restarts from the container's argv.
+        self._context_cap: dict[str, int] = {}
+        self._context_note: dict[str, str] = {}
         self.registry_path = registry_path
         self.gateway = gateway
         self.gpu_ids = list(gpu_ids)
@@ -396,7 +417,7 @@ class Controller:
         # the new manager carries never reaches it and it keeps crashing with the old flags.
         outdated: dict[str, str] = {}
         for candidate in visible:
-            reason = self._outdated_reason(registry, candidate)
+            reason = self._outdated_reason(registry, candidate, statuses[candidate.name])
             if reason is not None:
                 outdated[candidate.name] = reason
         actions = self._respect_swaps(
@@ -504,7 +525,12 @@ class Controller:
                 self.log.warning("instance.no_room", instance=action.name, model=model_id)
                 continue
             spec = vllm_spec(
-                entry, name=action.name, gpu_ids=gpu_ids, image=self.image, task=task_for_role(role)
+                entry,
+                name=action.name,
+                gpu_ids=gpu_ids,
+                image=self.image,
+                task=task_for_role(role),
+                max_model_len=self._context_cap.get(action.name),
             )
             try:
                 refs[action.name] = self.runtime.start(spec)
@@ -564,19 +590,33 @@ class Controller:
         )
         return coder_starts_now or coder_loading
 
-    def _outdated_reason(self, registry: Registry, ref: ContainerRef) -> str | None:
+    def _outdated_reason(
+        self, registry: Registry, ref: ContainerRef, status: InstanceStatus | None
+    ) -> str | None:
         """Why a container serving the right model must still be replaced, or None."""
         try:
             entry = registry.model(ref.spec.model_id)
         except KeyError:
             return None  # the plan stops it for the model mismatch
-        _, role = self._kind_and_role(ref.name)
+        name = ref.name
+        _, role = self._kind_and_role(name)
+        current = context_of(ref.spec.argv) or entry.context
+        # A context below the registry's was learnt from an earlier crash loop (by this
+        # manager or the one before it): keep it rather than replace the container with
+        # the registry's value and crash the same way again.
+        if current < entry.context and name not in self._context_cap:
+            self._context_cap[name] = current
+            self._context_note[name] = self._context_sentence(current, entry.context)
+        shrunk = self._shrink_context_after_crash(entry, ref, status)
+        if shrunk is not None:
+            return shrunk
         expected = vllm_spec(
             entry,
-            name=ref.name,
+            name=name,
             gpu_ids=list(ref.spec.gpu_ids),
             image=self.image,
             task=task_for_role(role),
+            max_model_len=self._context_cap.get(name),
         )
         if ref.spec.image != self.image:
             return f"runs {ref.spec.image}, but the image lock names {self.image}"
@@ -586,6 +626,44 @@ class Controller:
                 "container's command is fixed at creation"
             )
         return None
+
+    def _shrink_context_after_crash(
+        self, entry: ModelEntry, ref: ContainerRef, status: InstanceStatus | None
+    ) -> str | None:
+        """A crash loop whose log says the context does not fit the KV cache is started
+        again with half the context (never below MIN_CONTEXT); the reason to replace it,
+        or None when this is not that crash or the floor is reached."""
+        name = ref.name
+        if status != "failed" or self._restarts.get(name, 0) < CRASH_LOOP_RESTARTS:
+            return None
+        evidence = self._crash_evidence(name)
+        if not kv_cache_too_small(evidence):
+            return None
+        current = context_of(ref.spec.argv) or entry.context
+        if current <= MIN_CONTEXT:
+            return None
+        # Half the context, and never above what vLLM itself estimated would fit.
+        smaller = current // 2
+        estimate = kv_cache_estimate(evidence)
+        if estimate is not None:
+            smaller = min(smaller, estimate)
+        smaller = max(MIN_CONTEXT, smaller)
+        self._context_cap[name] = smaller
+        self._context_note[name] = self._context_sentence(smaller, entry.context)
+        self.log.warning(
+            "instance.context_reduced", instance=name, was=current, now=smaller, cap=entry.context
+        )
+        return (
+            f"crashed because a context of {current} tokens does not fit in the GPU's KV "
+            f"cache next to the weights; started again with {smaller}"
+        )
+
+    @staticmethod
+    def _context_sentence(context: int, cap: int) -> str:
+        return (
+            f"It runs with a context of {context} tokens: the registry's {cap} did not fit "
+            "in the GPU's KV cache next to the weights."
+        )
 
     def _respect_swaps(
         self, actions: list[Action], registry: Registry, refs: Mapping[str, ContainerRef]
@@ -642,7 +720,7 @@ class Controller:
         if info is None:
             self._restarts.pop(ref.name, None)
             return None
-        self._restarts[ref.name] = info.restart_count if info.restarted_after_failure else 0
+        self._restarts[ref.name] = info.restart_count if info.restarted else 0
         if info.running:
             if self.runtime.is_healthy(ref):
                 return "healthy"
@@ -672,6 +750,8 @@ class Controller:
             self._ever_healthy.add(name)
             served = f"the {role} role" if role else "cross-checks as a voter"
             sentence = f"{display} is serving {served} at {instance_url(name)}."
+            if name in self._context_note:
+                sentence += " " + self._context_note[name]
             if role is not None and entry is not None:
                 self.swaps.register_serving(role, entry, ref)
         elif status == "starting" and name in self._ever_healthy:
@@ -688,13 +768,14 @@ class Controller:
             sentence = f"{display} was stopped outside the platform; it is started again next tick."
         else:
             state = "failed"
-            lines = self.runtime.last_log_lines(name)
-            tail = "\n".join(lines) if lines else "the runtime kept no log lines"
             restarts = self._restarts.get(name, 0)
+            lines = self._crash_evidence(name) if restarts else self.runtime.last_log_lines(name)
+            tail = "\n".join(lines) if lines else "the runtime kept no log lines"
             if restarts >= CRASH_LOOP_RESTARTS:
                 sentence = (
                     f"{display} keeps crashing: the runtime started it {restarts} times and it "
-                    f"exited each time, so it never finishes loading. Last log lines:\n{tail}"
+                    f"exited each time, so it never finishes loading. What it logged before "
+                    f"it last exited:\n{tail}"
                 )
             else:
                 sentence = f"{display} crashed. Last log lines:\n{tail}"
@@ -721,14 +802,34 @@ class Controller:
         if minutes >= 1:
             text += f" for {minutes} min"
         text += "; not answering yet."
+        if name in self._context_note:
+            text += " " + self._context_note[name]
         restarts = self._restarts.get(name, 0)
         if restarts:
             times = "once" if restarts == 1 else f"{restarts} times"
             text += f" It exited {times} before and the runtime started it again."
+            errors = [line for line in self._crash_evidence(name) if ERROR_LINE.search(line)]
+            if errors:
+                text += f" Before it last exited it logged: {errors[-1].strip()[:200]}"
         lines = [line for line in self.runtime.last_log_lines(name, 5) if line.strip()]
         if lines:
             text += f" Last log line: {lines[-1].strip()[:200]}"
         return text
+
+    def _crash_evidence(self, name: str, *, before: int = 12, after: int = 1) -> list[str]:
+        """The log lines around the last error a restarted container logged.
+
+        The runtime keeps one log across restarts, so the tail of a crash-looping container
+        is the fresh attempt's start-up lines, not the reason it died. The reason is the
+        last error-like line before that; a window around it is what a person needs.
+        Falls back to the last 40 lines when nothing looks like an error.
+        """
+        lines = self.runtime.last_log_lines(name, CRASH_EVIDENCE_LINES)
+        hits = [i for i, line in enumerate(lines) if ERROR_LINE.search(line)]
+        if not hits:
+            return lines[-40:]
+        last = hits[-1]
+        return lines[max(0, last - before) : last + after + 1]
 
     @staticmethod
     def _entry_for(registry: Registry, model_id: str) -> ModelEntry | None:

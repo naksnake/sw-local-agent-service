@@ -320,8 +320,11 @@ def test_inspect_carries_the_restart_count_and_the_last_exit_code() -> None:
     }
     info = ContainerApi._info_from_inspect(item)
     assert info.running and info.restart_count == 4 and info.exit_code == 1
-    assert info.restarted_after_failure
-    clean = ContainerApi._info_from_inspect({**item, "State": {"Status": "running", "ExitCode": 0}})
-    assert clean.restart_count == 4 and not clean.restarted_after_failure
+    assert info.restarted
+    # Docker resets ExitCode to 0 once the container runs again; the count still says it.
+    reset = ContainerApi._info_from_inspect({**item, "State": {"Status": "running", "ExitCode": 0}})
+    assert reset.restart_count == 4 and reset.restarted
     fresh = ContainerApi._info_from_inspect({**item, "RestartCount": None})
-    assert fresh.restart_count == 0 and not fresh.restarted_after_failure
+    assert fresh.restart_count == 0 and not fresh.restarted
+    exited = ContainerApi._info_from_inspect({**item, "State": {"Status": "exited", "ExitCode": 1}})
+    assert not exited.restarted, "an exited container is judged by its state, not the count"

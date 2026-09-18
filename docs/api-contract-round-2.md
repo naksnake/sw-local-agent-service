@@ -110,8 +110,13 @@ start waits, reported `starting` with "waits its turn", until the coder answers 
 check or fails; an instance found already loading beside the coder (a container from before
 the manager started) is stopped and waits the same way. A `starting` instance's sentence
 carries how long it has loaded and vLLM's last log line. A running container whose
-`RestartCount` reached 3 after failed exits (the restart policy hides a crash loop as
-"running") is reported `failed` as "keeps crashing" with its log tail, never as loading.
+`RestartCount` reached 3 (the restart policy hides a crash loop as "running", and Docker
+resets the exit code to 0 once it runs again) is reported `failed` as "keeps crashing" with
+the log lines around the last error before its last exit, never as loading. When that error
+says the context does not fit the KV cache, the manager replaces the container with half
+the `--max-model-len` (never below 8192), says so on the row, and keeps the smaller value
+across its own restarts by reading it from the container's argv; `context` in
+`models.yaml` is the cap, not a promise.
 
 | Route | Body → Answer |
 |---|---|

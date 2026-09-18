@@ -11,6 +11,8 @@ tests run against `FakeRuntime`.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from typing import Final, Literal, Protocol
 
 from pydantic import Field, model_validator
@@ -46,6 +48,46 @@ POOLING_FLAGS: Final[dict[VllmTask, tuple[str, ...]]] = {
     "embed": ("--runner", "pooling", "--convert", "embed"),
     "score": ("--runner", "pooling"),
 }
+
+
+#: The smallest context the manager falls back to when a model's stated context does not fit
+#: the GPU's KV cache; below this a coding task cannot hold a plan and a diff.
+MIN_CONTEXT: Final = 8192
+#: What vLLM logs before exiting when `--max-model-len` exceeds what the KV cache can hold
+#: after the weights are loaded. It exits within a minute or two of starting; with
+#: `restart: unless-stopped` that is an endless loop unless the context shrinks.
+KV_CACHE_TOO_SMALL: Final[tuple[str, ...]] = (
+    # Every vLLM version's wording ends with this advice; the two before it are the
+    # older and the newer statement of the problem, the last the cache-block variant.
+    "decreasing `max_model_len`",
+    "larger than the maximum number of tokens that can be stored in KV cache",
+    "larger than the available KV cache memory",
+    "No available memory for the cache blocks",
+)
+#: Newer vLLM says how long a context would fit; the manager never goes above that.
+KV_CACHE_ESTIMATE: Final = re.compile(r"estimated maximum model length is (\d+)")
+
+
+def context_of(argv: Sequence[str]) -> int | None:
+    """The `--max-model-len` a container was created with, or None."""
+    for i, flag in enumerate(argv[:-1]):
+        value = str(argv[i + 1])
+        if flag == "--max-model-len" and value.isdigit():
+            return int(value)
+    return None
+
+
+def kv_cache_too_small(lines: Sequence[str]) -> bool:
+    return any(marker in line for line in lines for marker in KV_CACHE_TOO_SMALL)
+
+
+def kv_cache_estimate(lines: Sequence[str]) -> int | None:
+    """The context vLLM itself estimated would fit, rounded down to 1024 tokens, or None."""
+    for line in reversed(lines):
+        found = KV_CACHE_ESTIMATE.search(line)
+        if found:
+            return int(found.group(1)) // 1024 * 1024
+    return None
 
 
 def task_for_role(role: str | None) -> VllmTask:
@@ -107,21 +149,24 @@ def vllm_spec(
     models_dir: str = "/data/Models",
     generate: bool = True,
     task: VllmTask = "generate",
+    max_model_len: int | None = None,
 ) -> ContainerSpec:
     """The vLLM container for `entry` as `name` on `gpu_ids`.
 
     `task` decides the flags: a generate instance carries the mandatory prefix-caching and
     xgrammar flags (CLAUDE.md §7); an embed or score instance carries the pooling runner
     flags and none of them. `generate=False` keeps the older meaning "no generate flags" for
-    callers that have no task to name.
+    callers that have no task to name. `max_model_len` lowers the registry's context when
+    the GPU's KV cache could not hold it (the registry's value stays the cap).
     """
+    context = entry.context if max_model_len is None else min(entry.context, max_model_len)
     # The model is `vllm serve`'s positional argument; `--model` is deprecated there.
     argv = [
         f"{models_dir}/{entry.path}",
         "--served-model-name",
         entry.id,
         "--max-model-len",
-        str(entry.context),
+        str(context),
         "--tensor-parallel-size",
         str(len(gpu_ids)),
     ]

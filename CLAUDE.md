@@ -587,7 +587,9 @@ vs. free in a sentence before any load. Quantisation: FP8 on Hopper/Blackwell, A
 Ada/Ampere, one BF16 reference kept for eval regression. `--enable-prefix-caching` and
 `--structured-outputs-config {"backend": "xgrammar"}` are mandatory on every generate instance
 (the latter replaced vLLM's removed `--guided-decoding-backend xgrammar`; an instance given the
-old flag exits at start).
+old flag exits at start). `context` in the registry is a cap: when vLLM exits because that
+length does not fit the GPU's KV cache beside the weights, the Model Manager starts the instance
+again with half the context (never below 8192), says so on the Models page, and keeps the value.
 
 ## §8 LLMOps
 **8.1 Eval** — Ragas/TruLens configured against local vLLM only (`slas_eval/judges.py` is
