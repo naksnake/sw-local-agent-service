@@ -71,6 +71,7 @@ from slas_sandbox_manager.manager import SandboxManager
 from slas_sandbox_manager.runtime import ExecResult, FakeSandboxRuntime
 from slas_sandbox_manager.spec import WORKSPACE
 from slas_sandbox_manager.toolchains import default_manifest, detect_languages, resolve_all
+from slas_schemas.errors import ThreePartMessage
 from slas_schemas.job import Job
 from slas_schemas.journal import JournalEntry
 from slas_schemas.plan import Plan, Step
@@ -596,7 +597,10 @@ def test_a_failing_coder_ends_the_ticket_failed_with_the_sentence(tmp_path: Path
     ticket_id = started["ticket_id"]
     view = harness.wait(ticket_id)
     assert view["state"] == "Failed"
-    sentence = "vllm-coder did not produce a valid answer in 3 attempts."
+    sentence = (
+        "vllm-coder did not produce a valid answer in 3 attempts. "
+        "Its last answer did not match the required schema: files: not a mapping"
+    )
     assert view["sentence"] == f"{ticket_id} failed: {sentence}"
     assert view["feed"][-1] == sentence
     statuses = [s["status"] for s in view["steps"]]
@@ -873,6 +877,24 @@ def test_failure_sentences_and_the_no_gateway_coder() -> None:
             EditRequest(task=TaskItem(n=1, title="t"), iteration=1, languages=[], files={})
         )
     assert failure_sentence(raised.value).startswith("The Coding Agent cannot propose edits")
+    # A three-part message keeps its cause: for a runtime refusal it is the only part that
+    # names the problem, and the person reads it on the task card, not in a service log.
+    refused = ServiceError(
+        502,
+        ThreePartMessage(
+            "The container runtime refused to create slas-sbx-x from local/slas/sandbox-python.",
+            "It answered 400: unknown or invalid runtime name: runsc.",
+            "Read the message above; `slas logs sandbox-manager` on the host has it all.",
+        ),
+    )
+    assert failure_sentence(refused) == (
+        "The container runtime refused to create slas-sbx-x from local/slas/sandbox-python. "
+        "It answered 400: unknown or invalid runtime name: runsc."
+    )
+    repeated = ServiceError(500, ThreePartMessage("It broke. Because so.", "Because so.", "Fix."))
+    assert failure_sentence(repeated) == "It broke. Because so.", (
+        "a cause already said is not repeated"
+    )
 
 
 def test_http_sandbox_manager_paths_bodies_and_the_ticket_binding(tmp_path: Path) -> None:

@@ -34,10 +34,16 @@ MAX_SENTENCE_CHARS: Final = 500
 
 
 def failure_sentence(exc: BaseException) -> str:
-    """One plain sentence for a run that raised, from the three-part message when there is one."""
+    """What happened and why, for a run that raised, from the three-part message when there is
+    one. The cause rides along because for a refusal from the container runtime it is the only
+    part that names the problem ("It answered 400: no such runtime runsc")."""
     message = getattr(exc, "message", None)
     if isinstance(message, ThreePartMessage):
-        return message.what_happened[:MAX_SENTENCE_CHARS]
+        cause = message.likely_cause.strip()
+        text = message.what_happened.strip()
+        if cause and cause not in text:
+            text = f"{text} {cause}"
+        return text[:MAX_SENTENCE_CHARS]
     text = str(exc).strip()
     if text:
         return f"The run stopped: {text}"[:MAX_SENTENCE_CHARS]
