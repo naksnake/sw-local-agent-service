@@ -107,7 +107,7 @@ The connected quickstart install (ADR-0014, ADR-0015; `docs/api-contract-round-2
 |---|---|---|
 | R1 | pulls every third-party image by its pinned tag — the vLLM image `vllm/vllm-openai:v0.29.0-x86_64-cu129` by the digest the lock records — and retags them `local/…`; builds every first-party image from `images/<name>/Dockerfile` | one "Pulled …" or "Built …" sentence per image; the filled lock at `/AI/Agent/images.lock.json` |
 | R2 | asks the sandbox manager for its image list (`python -m slas_sandbox_manager.images list`), builds each `images/sandbox-<language>/Dockerfile` from the repository root, records their IDs in `/AI/Agent/sandbox-images.lock.json` and writes `/AI/Agent/Toolchains/manifest.json`, the languages and versions those images carry | "Built local/slas/sandbox-python:… ", "Wrote the toolchain manifest to …" |
-| R3 | chooses the runtime socket: Podman's `/run/podman/podman.sock` when it exists, else Docker's `/var/run/docker.sock`, written to `.env` as `SLAS_RUNTIME_SOCKET` | "No Podman socket at …, so SLAS_RUNTIME_SOCKET=/var/run/docker.sock in .env points model-manager and sandbox-manager at Docker's socket; nothing else sees it (INV-4)." |
+| R3 | chooses the runtime socket: Docker's `/var/run/docker.sock` when it exists (the images live in Docker's store), else Podman's `/run/podman/podman.sock`, written to `.env` as `SLAS_RUNTIME_SOCKET` | "Docker's socket /var/run/docker.sock serves the container runtime, so SLAS_RUNTIME_SOCKET=/var/run/docker.sock in .env points model-manager and sandbox-manager at it (the images install.sh builds and loads live in Docker's store); nothing else sees it (INV-4)." |
 | R4 | writes `.env` and the secret files; creates the data directories the services bind-mount, as your user: `Coding`, `Toolchains`, `.git-broker`, `Tickets`, `Skills/library`, `SOP`, `Validation`, `Factory/{Templates,mes/inbox,ca}`, `Models`, `Knowledge`, `Backups/stations`, `qdrant`, `tls` | "Created N data directories under /AI/Agent as uid …" |
 | R5 | places the weights, `docker compose up -d --pull never`, waits for health, prints the sign-in URL | "SW Local Agent Service is up." |
 
@@ -137,9 +137,12 @@ default). `docker ps --filter label=slas.kind=vllm` lists them; the Models page 
 `GET /v1/status` on the model manager say the state of each in a sentence; an instance that
 does not fit is reported, never started. Prometheus scrapes them by those names.
 
-**The Docker socket.** The default stays rootless Podman's socket. On a host that has Docker
-and no Podman socket the installer writes `SLAS_RUNTIME_SOCKET=/var/run/docker.sock` and says
-so; only `model-manager` and `sandbox-manager` mount it, never a service that runs
+**The Docker socket.** On a host that has Docker the installer writes
+`SLAS_RUNTIME_SOCKET=/var/run/docker.sock` and says so: the stack runs on `docker compose`, so
+the images `./install.sh --build` builds or `docker load` loads live in Docker's store, and a
+sandbox or vLLM container asked of Podman's socket on such a host fails with "image not known".
+Rootless Podman's socket stays the compose default and serves a host without Docker. Only
+`model-manager` and `sandbox-manager` mount the socket, never a service that runs
 model-authored or skill-authored steps (INV-4). Set `SLAS_RUNTIME_SOCKET` yourself before the
 install to name another path (rootless Docker, a rootless Podman socket under
 `/run/user/<uid>/podman/`); a value already in `.env` is kept. The preflight says which engine

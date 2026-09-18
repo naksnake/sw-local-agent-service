@@ -80,6 +80,10 @@ describe("Agents an installation starts (ADR-0017)", () => {
     expect(await within(rail).findByRole("button", { name: "Coding" })).toBeTruthy();
     expect(within(rail).queryByRole("button", { name: "Validation" })).toBeNull();
     expect(within(rail).queryByRole("button", { name: "Factory" })).toBeNull();
+    // Home offers only the wizard of an agent that is on.
+    expect(screen.getByRole("button", { name: "New coding task" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "New factory job" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New validation run" })).toBeNull();
     fireEvent.click(within(rail).getByRole("button", { name: "Admin" }));
     expect(await screen.findByRole("heading", { level: 1, name: "People" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Stations" })).toBeNull();

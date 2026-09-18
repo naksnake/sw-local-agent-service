@@ -224,7 +224,7 @@ def test_build_dry_run_describes_every_pull_and_build_and_touches_nothing(tmp_pa
         f"Building the Coding Agent's sandbox images and writing the toolchain manifest to {data_root}/Toolchains/manifest.json.",
         "Would build the sandbox image local/slas/sandbox-python:3.12.6",
         f"Would write the sandbox image lock to {data_root}/sandbox-images.lock.json (2 built) and the toolchain manifest to {data_root}/Toolchains/manifest.json; neither is committed.",
-        f"No Podman socket at {tmp_path}/no-podman.sock, so SLAS_RUNTIME_SOCKET={docker_sock} in .env points model-manager and sandbox-manager at Docker's socket; nothing else sees it (INV-4).",
+        f"Docker's socket {docker_sock} serves the container runtime, so SLAS_RUNTIME_SOCKET={docker_sock} in .env points model-manager and sandbox-manager at it (the images install.sh builds and loads live in Docker's store); nothing else sees it (INV-4).",
         f"Would write {data_root}/.env (quickstart keys, registry local, version {VERSION}, SLAS_RUNTIME_SOCKET={docker_sock}; keys you set are kept).",
         f"Would create the missing data directories under {data_root}: Coding, Toolchains, .git-broker, Tickets, Skills/library, SOP, Validation, Factory/Templates, Factory/mes/inbox, Factory/ca, Models, Knowledge, Backups/stations, qdrant, tls.",
         "Would run: docker compose --project-name slas",
@@ -385,7 +385,7 @@ def test_build_pulls_tags_builds_writes_a_pinned_lock_and_starts_the_stack(tmp_p
     # services bind-mount exist and belong to this user.
     docker_sock = fake_docker_socket(tmp_path)
     assert (
-        f"SLAS_RUNTIME_SOCKET={docker_sock} in .env points model-manager and sandbox-manager at Docker's socket"
+        f"SLAS_RUNTIME_SOCKET={docker_sock} in .env points model-manager and sandbox-manager at it"
         in out
     )
     env_text = (data_root / ".env").read_text()
@@ -860,7 +860,10 @@ def test_sandbox_image_problems_are_three_part_errors(tmp_path: Path) -> None:
     )
 
 
-def test_runtime_socket_choice_prefers_podman_then_docker_then_says_neither(tmp_path: Path) -> None:
+def test_runtime_socket_choice_prefers_docker_then_podman_then_says_neither(tmp_path: Path) -> None:
+    """ADR-0015 amendment: the images live in Docker's store, so Docker's socket wins whenever
+    it exists; Podman's serves only a host without Docker (the first host had both, and every
+    sandbox asked of Podman failed with "image not known")."""
     from slas_deploy.installer import choose_runtime_socket
 
     podman, docker = tmp_path / "p.sock", tmp_path / "d.sock"
@@ -872,18 +875,23 @@ def test_runtime_socket_choice_prefers_podman_then_docker_then_says_neither(tmp_
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(str(path))
         listener.close()
+    docker_sentence = f"Docker's socket {docker} serves the container runtime, so SLAS_RUNTIME_SOCKET={docker} in .env points model-manager and sandbox-manager at it (the images install.sh builds and loads live in Docker's store); nothing else sees it (INV-4)."
     both = choose_runtime_socket("", podman=str(podman), docker=str(docker))
-    assert both.path == "" and both.sentence.startswith(
-        f"Podman's socket {podman} serves the container runtime"
+    assert both.path == str(docker) and both.sentence == docker_sentence
+    docker.unlink()
+    only_podman = choose_runtime_socket("", podman=str(podman), docker=str(docker))
+    assert only_podman.path == "" and only_podman.sentence == (
+        f"No Docker socket at {docker}, so Podman's socket {podman} serves the container runtime; model-manager and sandbox-manager see it and nothing else does (INV-4)."
     )
     podman.unlink()
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(docker))
+    listener.close()
     only_docker = choose_runtime_socket("", podman=str(podman), docker=str(docker))
     assert (
         only_docker.path == str(docker) and only_docker.key_value == f"SLAS_RUNTIME_SOCKET={docker}"
     )
-    assert only_docker.sentence == (
-        f"No Podman socket at {podman}, so SLAS_RUNTIME_SOCKET={docker} in .env points model-manager and sandbox-manager at Docker's socket; nothing else sees it (INV-4)."
-    )
+    assert only_docker.sentence == docker_sentence
     (tmp_path / "plain-file").write_text("not a socket")
     assert (
         choose_runtime_socket(

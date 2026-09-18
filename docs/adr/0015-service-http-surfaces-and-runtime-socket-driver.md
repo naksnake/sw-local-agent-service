@@ -47,6 +47,15 @@ before adding a dependency; the owner's instruction covers this round.
    sandbox spec already enforces (no network, read-only rootfs, caps dropped, no socket or
    display mounts) is what the body carries. `SLAS_RUNTIME_SOCKET` names the socket; a Docker
    host sets it to `/var/run/docker.sock`.
+
+   *Amendment, 2026-09-18.* The installer first preferred Podman's socket whenever it
+   existed. On the first host (Docker and Podman both installed) that pointed the two
+   managers at Podman while `docker compose` and `install.sh --build` had put every image in
+   Docker's store, and every sandbox and vLLM container failed with Podman's "image not
+   known". The rule is now: the socket of the engine that holds the images. Docker's socket
+   wins whenever it exists, because the stack itself runs on `docker compose`; Podman's
+   stays the compose default and serves a host without Docker. `slas doctor` looks in the
+   same order. A value a person sets is still kept.
 4. **The executors serve steps.** The kernel in the orchestrator hands each Validation or
    Factory step to `POST /v1/execute` on the executor's container; the executor performs it
    with the HAL or the station runner and returns the observation. INV-3 holds: the model

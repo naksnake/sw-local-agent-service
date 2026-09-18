@@ -11,7 +11,8 @@
 #   bundle; the filled image lock is written under the data root, never committed. Round 2
 #   (ADR-0015) adds the sandbox images the sandbox manager lists, the toolchain manifest
 #   they satisfy, the vLLM image the model manager starts, and the runtime-socket choice:
-#   Podman's socket by default, Docker's when only that one exists.
+#   Docker's socket when it exists (the images the install builds or loads live in Docker's
+#   store), Podman's only on a host without Docker.
 #
 # Read-only steps come first; nothing on the host changes until every one of them passed.
 # Idempotent: running it twice is safe. `--dry-run` performs the read-only steps for real

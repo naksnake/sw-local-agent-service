@@ -122,8 +122,12 @@ def _is_socket(path: str) -> bool:
 def choose_runtime_socket(
     configured: str, *, podman: str = PODMAN_SOCKET, docker: str = DOCKER_SOCKET
 ) -> RuntimeSocketChoice:
-    """ADR-0015: the default stays Podman's socket; when it is absent and Docker's exists,
-    .env points SLAS_RUNTIME_SOCKET at Docker's. A value a person set is kept as it is."""
+    """ADR-0015 (amended 2026-09-18): the socket of the engine that holds the images. The stack
+    runs on `docker compose`, and `install.sh --build` and `docker load` put every image in
+    Docker's store, so Docker's socket wins whenever it exists; a sandbox or vLLM container
+    created through Podman's socket on such a host fails with "image not known". Podman's
+    socket (the compose default) serves only a host without Docker. A value a person set is
+    kept as it is."""
     holders = " and ".join(sorted(RUNTIME_SOCKET_HOLDERS))
     if configured.strip():
         return RuntimeSocketChoice(
@@ -131,17 +135,18 @@ def choose_runtime_socket(
             f"SLAS_RUNTIME_SOCKET is set to {configured.strip()}; {holders} see that socket "
             "and nothing else does (INV-4).",
         )
-    if _is_socket(podman):
-        return RuntimeSocketChoice(
-            "",
-            f"Podman's socket {podman} serves the container runtime; {holders} see it and "
-            "nothing else does (INV-4).",
-        )
     if _is_socket(docker):
         return RuntimeSocketChoice(
             docker,
-            f"No Podman socket at {podman}, so SLAS_RUNTIME_SOCKET={docker} in .env points "
-            f"{holders} at Docker's socket; nothing else sees it (INV-4).",
+            f"Docker's socket {docker} serves the container runtime, so SLAS_RUNTIME_SOCKET="
+            f"{docker} in .env points {holders} at it (the images install.sh builds and loads "
+            "live in Docker's store); nothing else sees it (INV-4).",
+        )
+    if _is_socket(podman):
+        return RuntimeSocketChoice(
+            "",
+            f"No Docker socket at {docker}, so Podman's socket {podman} serves the container "
+            f"runtime; {holders} see it and nothing else does (INV-4).",
         )
     return RuntimeSocketChoice(
         "",

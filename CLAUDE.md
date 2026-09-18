@@ -782,7 +782,8 @@ services:
                  # sandbox images ship `git` for local commits; sandboxes get NO remote route and NO credentials (INV-14).
                  # install.sh --build builds them from the sandbox manager's list (`python -m slas_sandbox_manager.images list`)
                  # and writes Toolchains/manifest.json; they are not compose services and not in compose/images.lock.*.
-                 # SLAS_RUNTIME_SOCKET: Podman's socket by default; install.sh names Docker's when only that one exists.
+                 # SLAS_RUNTIME_SOCKET: install.sh names Docker's socket when it exists (the stack runs on `docker compose`,
+                 # so the images it builds or loads live in Docker's store); Podman's is the default only without Docker.
   git-broker:  { <<: *common, image: registry.internal/slas/git-broker@sha256:…,           # §5.7 — the ONLY holder of Git credentials
                  networks: [slas-backend, slas-git],                                       # ONLY member of slas-git
                  environment: { <<: *airgap, GIT_HOSTS_ALLOWLIST: /etc/slas/git-hosts.yaml, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0",

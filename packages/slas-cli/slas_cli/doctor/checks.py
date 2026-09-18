@@ -315,13 +315,14 @@ def _env_file_value(host: Host, settings: DoctorSettings, key: str) -> str | Non
 
 def runtime_socket_candidates(host: Host, settings: DoctorSettings) -> list[str]:
     """The configured socket alone when one is named (SLAS_RUNTIME_SOCKET in the environment
-    or in .env); else Podman's path, then Docker's — the order install.sh chooses in."""
+    or in .env); else Docker's path, then Podman's — the order install.sh chooses in, since
+    the images it builds or loads live in Docker's store."""
     configured = (host.env("SLAS_RUNTIME_SOCKET") or "").strip() or (
         _env_file_value(host, settings, "SLAS_RUNTIME_SOCKET") or ""
     ).strip()
     if configured:
         return [configured]
-    return [DEFAULT_RUNTIME_SOCKET, DOCKER_SOCKET]
+    return [DOCKER_SOCKET, DEFAULT_RUNTIME_SOCKET]
 
 
 def _engine_at(host: Host, socket_path: str) -> RuntimeEngine | None:
@@ -377,8 +378,8 @@ def check_runtime_socket(host: Host, settings: DoctorSettings) -> CheckResult:
     if engine is not None:
         note = (
             ""
-            if engine.socket_path == DEFAULT_RUNTIME_SOCKET or len(candidates) == 1
-            else f" (no Podman socket at {DEFAULT_RUNTIME_SOCKET}, so .env will name it)"
+            if engine.socket_path == DOCKER_SOCKET or len(candidates) == 1
+            else f" (no Docker socket at {DOCKER_SOCKET}, so the compose default stays)"
         )
         return _ok(
             check_id,

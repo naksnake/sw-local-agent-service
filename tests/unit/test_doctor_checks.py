@@ -200,29 +200,42 @@ def test_container_runtime_unknown_docker_version() -> None:
 # --- the runtime socket and what is registered behind it (ADR-0015) ------------------------
 
 
-def test_runtime_socket_served_by_docker_when_there_is_no_podman_socket() -> None:
+def test_runtime_socket_served_by_docker_wins_because_the_images_live_there() -> None:
     host = FakeHost.healthy()
     result = checks.check_runtime_socket(host, SETTINGS)
     assert result.status == "ok"
     assert result.summary == (
-        "Docker Engine 29.0.1 serves the container-runtime socket /var/run/docker.sock (no "
-        "Podman socket at /run/podman/podman.sock, so .env will name it); only model-manager "
-        "and sandbox-manager will see it."
+        "Docker Engine 29.0.1 serves the container-runtime socket /var/run/docker.sock; only "
+        "model-manager and sandbox-manager will see it."
     )
     assert ("/var/run/docker.sock", "/version") in host.http_calls
     assert all(argv[0] != "docker" or argv[1] != "info" for argv in host.calls[-1:]), (
         "the engine is identified over the socket with the standard library, not a CLI"
     )
+    # Both sockets present (the first host): Docker's is asked first and wins, so the
+    # managers see the store `docker compose` and `install.sh --build` filled (ADR-0015
+    # amendment); Podman's is not even asked.
+    host.sockets.add("/run/podman/podman.sock")
+    host.http[("/run/podman/podman.sock", "/version")] = FakeHost.PODMAN_VERSION_BODY
+    host.http_calls.clear()
+    both = checks.check_runtime_socket(host, SETTINGS)
+    assert both.summary.startswith("Docker Engine 29.0.1 serves the container-runtime socket")
+    assert ("/run/podman/podman.sock", "/version") not in host.http_calls
+    assert checks.runtime_socket_candidates(host, SETTINGS) == [
+        "/var/run/docker.sock",
+        "/run/podman/podman.sock",
+    ]
 
 
-def test_runtime_socket_served_by_podman_is_the_default() -> None:
+def test_runtime_socket_served_by_podman_on_a_host_without_docker() -> None:
     host = FakeHost.healthy()
     host.serve_podman()
     result = checks.check_runtime_socket(host, SETTINGS)
     assert result.status == "ok"
     assert result.summary == (
-        "Podman 4.9.3 serves the container-runtime socket /run/podman/podman.sock; only "
-        "model-manager and sandbox-manager will see it."
+        "Podman 4.9.3 serves the container-runtime socket /run/podman/podman.sock (no Docker "
+        "socket at /var/run/docker.sock, so the compose default stays); only model-manager "
+        "and sandbox-manager will see it."
     )
 
 
@@ -252,7 +265,7 @@ def test_runtime_socket_missing_or_silent() -> None:
     result = checks.check_runtime_socket(host, SETTINGS)
     assert result.status == "fail"
     assert result.summary == (
-        "No container-runtime socket was found at /run/podman/podman.sock or /var/run/docker.sock."
+        "No container-runtime socket was found at /var/run/docker.sock or /run/podman/podman.sock."
     )
     assert result.detail is not None
     assert "podman.socket" in result.detail.what_to_do

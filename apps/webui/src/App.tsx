@@ -179,9 +179,9 @@ function Routed(props: AppProps) {
           element={
             <HomePage
               {...(homeListsApi !== undefined ? { lists: homeListsApi } : {})}
-              {...(codingApi !== undefined ? { codingApi } : {})}
-              {...(validationApi !== undefined ? { validationApi } : {})}
-              {...(factoryApi !== undefined ? { factoryApi } : {})}
+              {...(codingApi !== undefined && agentOn("coding") ? { codingApi } : {})}
+              {...(validationApi !== undefined && agentOn("validation") ? { validationApi } : {})}
+              {...(factoryApi !== undefined && agentOn("factory") ? { factoryApi } : {})}
               {...(welcome !== undefined ? { welcome } : {})}
               onOpen={openFromHome}
               onSnapshot={onSnapshot}

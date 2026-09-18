@@ -100,7 +100,7 @@ B300 的 GPU 配置（8 顆 GPU，每顆約 288 GB）：
 |---|---|---|
 | R1 | 依釘選的標籤拉取每個第三方映像——vLLM 映像 `vllm/vllm-openai:v0.29.0-x86_64-cu129` 依鎖定檔記錄的摘要拉取——並重新標記為 `local/…`；從 `images/<name>/Dockerfile` 建置每個第一方映像 | 每個映像一句「Pulled …」或「Built …」；填妥的鎖定檔位於 `/AI/Agent/images.lock.json` |
 | R2 | 向沙箱管理器索取映像清單（`python -m slas_sandbox_manager.images list`），以儲存庫根目錄為上下文建置每個 `images/sandbox-<language>/Dockerfile`，將映像 ID 記錄於 `/AI/Agent/sandbox-images.lock.json`，並寫入 `/AI/Agent/Toolchains/manifest.json`（這些映像所含的語言與版本） | 「Built local/slas/sandbox-python:…」、「Wrote the toolchain manifest to …」 |
-| R3 | 選擇容器執行環境 socket：`/run/podman/podman.sock` 存在時用 Podman 的，否則用 Docker 的 `/var/run/docker.sock`，寫入 `.env` 的 `SLAS_RUNTIME_SOCKET` | 「No Podman socket at …, so SLAS_RUNTIME_SOCKET=/var/run/docker.sock in .env points model-manager and sandbox-manager at Docker's socket; nothing else sees it (INV-4).」 |
+| R3 | 選擇容器執行環境 socket：Docker 的 `/var/run/docker.sock` 存在時用它（映像在 Docker 的映像庫裡），否則用 Podman 的 `/run/podman/podman.sock`，寫入 `.env` 的 `SLAS_RUNTIME_SOCKET` | 「Docker's socket /var/run/docker.sock serves the container runtime, so SLAS_RUNTIME_SOCKET=/var/run/docker.sock in .env points model-manager and sandbox-manager at it (the images install.sh builds and loads live in Docker's store); nothing else sees it (INV-4).」 |
 | R4 | 寫入 `.env` 與密鑰檔；以你的使用者身分建立各服務綁定掛載的資料目錄：`Coding`、`Toolchains`、`.git-broker`、`Tickets`、`Skills/library`、`SOP`、`Validation`、`Factory/{Templates,mes/inbox,ca}`、`Models`、`Knowledge`、`Backups/stations`、`qdrant`、`tls` | 「Created N data directories under /AI/Agent as uid …」 |
 | R5 | 放置權重、`docker compose up -d --pull never`、等待健康檢查、印出登入網址 | 「SW Local Agent Service is up.」 |
 
@@ -125,9 +125,11 @@ Validation、Factory 與知識庫（Qdrant、本地搜尋）已建置並測試�
 列出它們；Models 頁面與模型管理器的 `GET /v1/status` 以一句話說明每個實例的狀態；容納不下的實例會被
 回報，絕不啟動。Prometheus 以這些名稱抓取指標。
 
-**Docker socket。** 預設仍為 rootless Podman 的 socket。在有 Docker 而沒有 Podman socket 的主機上，
-安裝程式會寫入 `SLAS_RUNTIME_SOCKET=/var/run/docker.sock` 並說明；只有 `model-manager` 與 `sandbox-manager`
-掛載它，執行模型撰寫或技能撰寫步驟的服務絕不掛載（INV-4）。若要使用其他路徑（rootless Docker、
+**Docker socket。** 在有 Docker 的主機上，安裝程式會寫入 `SLAS_RUNTIME_SOCKET=/var/run/docker.sock`
+並說明：整個堆疊以 `docker compose` 執行，`./install.sh --build` 建置或 `docker load` 載入的映像都在 Docker
+的映像庫裡，若在這種主機上向 Podman 的 socket 要求沙箱或 vLLM 容器，會以「image not known」失敗。rootless
+Podman 的 socket 仍是 compose 的預設值，服務沒有 Docker 的主機。只有 `model-manager` 與 `sandbox-manager`
+掛載該 socket，執行模型撰寫或技能撰寫步驱的服務絕不掛載（INV-4）。若要使用其他路徑（rootless Docker、
 `/run/user/<uid>/podman/` 下的 rootless Podman socket），請在安裝前自行設定 `SLAS_RUNTIME_SOCKET`；
 `.env` 中既有的值會被保留。預檢會說明是哪個引擎在該 socket 上回應：「Docker Engine 29.0.1 serves the
 container-runtime socket /var/run/docker.sock …」或「Podman 4.9.3 serves …」。
