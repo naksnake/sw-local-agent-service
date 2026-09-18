@@ -268,6 +268,9 @@ fi
 AGENTS="$("$PYTHON" -c 'import json,sys; print(",".join(json.loads(sys.argv[1])["agents"]))' "$agents_choice")"
 COMPOSE_PROFILES="$("$PYTHON" -c 'import json,sys; print(",".join(json.loads(sys.argv[1])["profiles"]))' "$agents_choice")"
 AGENTS_SENTENCE="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["sentence"])' "$agents_choice")"
+# The compose services of the parts that are off; their containers from an earlier install
+# are removed before the stack starts and ignored by the health wait.
+OFF_SERVICES="$("$PYTHON" -c 'import json,sys; print(",".join(json.loads(sys.argv[1])["off_services"]))' "$agents_choice")"
 export SLAS_AGENTS="$AGENTS"
 if [[ -n "$COMPOSE_PROFILES" ]]; then export COMPOSE_PROFILES; else unset COMPOSE_PROFILES; fi
 
@@ -657,6 +660,19 @@ fi
 if [[ -n "${COMPOSE_PROFILES:-}" ]]; then
   echo "Compose profiles: $COMPOSE_PROFILES (the executors of the agents you chose)."
 fi
+# `docker compose up` leaves the container of a service whose profile is off, so one an
+# earlier install started (the knowledge base before it became optional, an executor after
+# --agents dropped it) would keep restarting with its old settings and `ps --all` would
+# report it. Remove the containers of every part this install does not start (ADR-0017).
+for svc in ${OFF_SERVICES//,/ }; do
+  stale="$(docker ps -aq --filter label=com.docker.compose.project=slas --filter "label=com.docker.compose.service=$svc" 2>/dev/null | tr '\n' ' ')"
+  stale="${stale% }"
+  if [[ -n "$stale" ]]; then
+    echo "Removing the $svc container an earlier install started: $svc is off now (SLAS_AGENTS=$AGENTS); its data under $DATA_ROOT stays."
+    # shellcheck disable=SC2086 — one id per word
+    run_or_print docker rm -f $stale >/dev/null || echo "Could not remove the $svc container; \`docker rm -f $stale\` removes it by hand."
+  fi
+done
 if ! run_or_print "${COMPOSE[@]}" up -d --pull never --remove-orphans; then
   echo
   echo "docker compose could not start every service."
@@ -664,7 +680,7 @@ if ! run_or_print "${COMPOSE[@]}" up -d --pull never --remove-orphans; then
   echo "What to do: read the lines below, fix what they name, then run ./install.sh again; \`slas status\` and \`slas logs <service>\` show the same at any time."
   echo
   "${COMPOSE[@]}" ps --all 2>&1 || true
-  failing="$("${COMPOSE[@]}" ps --all --format json 2>/dev/null | "$PYTHON" -m slas_deploy.installer unhealthy 2>/dev/null || true)"
+  failing="$("${COMPOSE[@]}" ps --all --format json 2>/dev/null | "$PYTHON" -m slas_deploy.installer unhealthy --ignore "$OFF_SERVICES" 2>/dev/null || true)"
   for svc in $failing; do
     echo
     echo "--- $svc: last 40 log lines"
@@ -694,7 +710,7 @@ echo "Waiting up to $HEALTH_WAIT_S s for the services to report healthy."
 waited=0
 unhealthy=""
 while :; do
-  unhealthy="$("${COMPOSE[@]}" ps --all --format json 2>/dev/null | "$PYTHON" -m slas_deploy.installer unhealthy 2>/dev/null || echo "compose")"
+  unhealthy="$("${COMPOSE[@]}" ps --all --format json 2>/dev/null | "$PYTHON" -m slas_deploy.installer unhealthy --ignore "$OFF_SERVICES" 2>/dev/null || echo "compose")"
   if [[ -z "$unhealthy" ]]; then
     break
   fi

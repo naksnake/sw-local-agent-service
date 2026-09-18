@@ -206,6 +206,15 @@ AGENT_IMAGES: Final[dict[str, frozenset[str]]] = {
     "factory": frozenset({"factory-executor"}),
     "knowledge": frozenset({"local-search-api", "qdrant"}),
 }
+#: The compose services only one optional part starts (`compose.py` puts them behind the
+#: profile of the same name). An install removes the containers of the parts it turns off:
+#: `docker compose up` leaves a container whose service's profile is inactive, so one an
+#: earlier install started would keep restarting with its old settings.
+AGENT_SERVICES: Final[dict[str, tuple[str, ...]]] = {
+    "validation": ("validation-executor",),
+    "factory": ("factory-executor",),
+    "knowledge": ("vector-db", "local-search-api"),
+}
 #: How the installer names each optional part in a sentence.
 AGENT_NOUNS: Final[dict[str, str]] = {
     "validation": "the validation executor",
@@ -251,6 +260,16 @@ def images_off_for(agents: Sequence[str]) -> frozenset[str]:
         if agent not in agents:
             off |= names
     return frozenset(off)
+
+
+def services_off_for(agents: Sequence[str]) -> list[str]:
+    """Compose services an installation without these agents does not start, in start order."""
+    return [
+        service
+        for agent in AGENTS
+        if agent in AGENT_SERVICES and agent not in agents
+        for service in AGENT_SERVICES[agent]
+    ]
 
 
 def compose_profiles(agents: Sequence[str]) -> list[str]:

@@ -55,6 +55,7 @@ from slas_deploy.images import (
     parse_lock_json,
     registry_for,
     render_lock_json,
+    services_off_for,
 )
 from slas_schemas.envfile import EnvFile, generate_secret, read_env, write_atomic
 
@@ -268,14 +269,17 @@ def _load_lock(path: Path) -> ImageLock:
     return parse_lock_json(path.read_text(encoding="utf-8"))
 
 
-def unhealthy_services(ps_json: str) -> list[str]:
+def unhealthy_services(ps_json: str, *, ignore: Sequence[str] = ()) -> list[str]:
     """The services `docker compose ps --format json` shows as not healthy yet.
 
     Accepts one JSON object per line (compose v2.21+) or a JSON array. Healthy means state
     `running` with health `healthy` or no healthcheck; `restarting`, `created`, `paused`,
     `dead`, health `starting` or `unhealthy` are not. A container that exited with 0 is a
-    finished one-shot job (minio-init) and is fine; a non-zero exit is not.
+    finished one-shot job (minio-init) and is fine; a non-zero exit is not. `ignore` names
+    the services this install does not start (ADR-0017): `ps --all` still lists a container
+    of theirs left by an earlier install, and it must not hold the wait.
     """
+    skipped = set(ignore)
     text = ps_json.strip()
     if not text:
         return []
@@ -288,6 +292,8 @@ def unhealthy_services(ps_json: str) -> list[str]:
     unhealthy: list[str] = []
     for row in rows:
         name = str(row.get("Service") or row.get("Name") or "unknown")
+        if name in skipped:
+            continue
         state = str(row.get("State") or "").lower()
         health = str(row.get("Health") or "").lower()
         exit_code = row.get("ExitCode", 0)
@@ -418,7 +424,10 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
     build.add_argument("--dry-run", action="store_true")
     build.add_argument("--agents", default="", help="comma list of agents to start (ADR-0017)")
 
-    commands.add_parser("unhealthy", help="stdin: docker compose ps --format json")
+    unhealthy = commands.add_parser("unhealthy", help="stdin: docker compose ps --format json")
+    unhealthy.add_argument(
+        "--ignore", default="", help="comma list of services this install does not start"
+    )
 
     args = parser.parse_args(list(argv) if argv is not None else None)
     try:
@@ -441,7 +450,15 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
         else:
             sentence += " Every optional part starts."
         out.write(
-            json.dumps({"agents": list(agents), "profiles": profiles, "sentence": sentence}) + "\n"
+            json.dumps(
+                {
+                    "agents": list(agents),
+                    "profiles": profiles,
+                    "off_services": services_off_for(agents),
+                    "sentence": sentence,
+                }
+            )
+            + "\n"
         )
         return EXIT_OK
     if args.command == "build-images":
@@ -491,7 +508,8 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
             out.write(f"Every data directory under {root} exists.\n")
         return EXIT_OK
     if args.command == "unhealthy":
-        out.write(" ".join(unhealthy_services(sys.stdin.read())) + "\n")
+        ignored = [name.strip() for name in args.ignore.split(",") if name.strip()]
+        out.write(" ".join(unhealthy_services(sys.stdin.read(), ignore=ignored)) + "\n")
         return EXIT_OK
     if args.command == "write-env":
         changed = write_env(

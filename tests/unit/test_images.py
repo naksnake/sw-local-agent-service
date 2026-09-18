@@ -177,6 +177,7 @@ def test_agents_choose_which_executor_images_start() -> None:
         default_lock,
         images_off_for,
         parse_agents,
+        services_off_for,
     )
 
     assert parse_agents(None) == ("coding",) and parse_agents("  ") == ("coding",)
@@ -194,6 +195,15 @@ def test_agents_choose_which_executor_images_start() -> None:
         "qdrant",
     }
     assert images_off_for(("coding", "validation", "knowledge")) == {"factory-executor"}
+    # The containers the installer removes when a part is off (the compose service names).
+    assert services_off_for(("coding",)) == [
+        "validation-executor",
+        "factory-executor",
+        "vector-db",
+        "local-search-api",
+    ]
+    assert services_off_for(("coding", "knowledge")) == ["validation-executor", "factory-executor"]
+    assert services_off_for(("coding", "validation", "factory", "knowledge")) == []
     assert compose_profiles(("coding",)) == []
     assert compose_profiles(("coding", "factory")) == ["factory"]
     assert compose_profiles(("coding", "validation", "factory", "knowledge")) == [

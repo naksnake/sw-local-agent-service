@@ -48,6 +48,11 @@ case "$*" in
   *"inspect --format {{.Id}}"*) echo "sha256:$(printf '%s' "id-$last" | sha256sum | cut -d' ' -f1)" ;;
   *"bootstrap status"*) echo "${STUB_BOOTSTRAP:-pending}" ;;
   *" ps --all --format json"*) printf '%s' "${STUB_PS:-}" ;;
+  "ps -aq --filter label=com.docker.compose.project=slas --filter label=com.docker.compose.service="*)
+    # STUB_STALE: "<service>=<id> <service>=<id>": containers an earlier install left behind.
+    for pair in ${STUB_STALE:-}; do
+      [[ "${last#label=com.docker.compose.service=}" == "${pair%%=*}" ]] && echo "${pair#*=}"
+    done ;;
   "compose version") exit 0 ;;
 esac
 exit "${STUB_DOCKER_EXIT:-0}"
@@ -236,7 +241,11 @@ def test_build_dry_run_describes_every_pull_and_build_and_touches_nothing(tmp_pa
     )
     assert "Would run: docker load" not in out
     assert not data_root.exists(), "a dry run writes nothing"
-    assert calls == ["docker compose version"], calls
+    # Docker is only asked read-only questions: its compose version, and whether an earlier
+    # install left a container of a part that is off (ADR-0017); nothing is removed.
+    assert calls[0] == "docker compose version"
+    assert all(c.startswith("docker ps -aq --filter ") for c in calls[1:]), calls
+    assert not any(c.startswith("docker rm") for c in calls)
 
 
 def test_agents_flag_adds_the_executors_and_their_compose_profiles(tmp_path: Path) -> None:
@@ -480,6 +489,46 @@ def test_unhealthy_services_after_the_wait_are_named_with_their_logs(tmp_path: P
     assert any(c.endswith(" logs --tail 20 --no-color api") for c in calls)
     assert any(c.endswith(" logs --tail 20 --no-color llm-gateway") for c in calls)
     assert "bootstrap status" not in " ".join(calls)
+    assert not any(c.startswith("docker rm ") for c in calls), "nothing stale, nothing removed"
+
+
+def test_containers_of_the_parts_that_are_off_are_removed_and_do_not_hold_the_wait(
+    tmp_path: Path,
+) -> None:
+    """ADR-0017: an earlier install started the knowledge base; this one (coding only) removes
+    its containers before `compose up`, since compose leaves a service whose profile is off
+    alone, and the health wait ignores them even when `ps --all` still lists one."""
+    rows = "\n".join(
+        json.dumps(row)
+        for row in (
+            {"Service": "postgres", "State": "running", "Health": "healthy"},
+            {"Service": "vector-db", "State": "restarting", "Health": ""},
+            {"Service": "local-search-api", "State": "created", "Health": ""},
+        )
+    )
+    result, calls, data_root = run_install(
+        tmp_path,
+        env_extra={
+            "STUB_STALE": "vector-db=aaa111 local-search-api=bbb222",
+            "STUB_PS": rows,
+            "SLAS_HEALTH_WAIT_S": "0",
+            "SLAS_HEALTH_POLL_S": "0",
+        },
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = result.stdout
+    assert (
+        "Removing the vector-db container an earlier install started: vector-db is off now "
+        f"(SLAS_AGENTS=coding); its data under {data_root} stays." in out
+    )
+    assert "Removing the local-search-api container an earlier install started" in out
+    assert "Removing the validation-executor" not in out, "nothing of it was there"
+    assert "docker rm -f aaa111" in calls and "docker rm -f bbb222" in calls
+    removals = [i for i, c in enumerate(calls) if c.startswith("docker rm -f ")]
+    up = next(i for i, c in enumerate(calls) if " up -d --pull never --remove-orphans" in c)
+    assert max(removals) < up, "stale containers go before the stack starts"
+    assert "not healthy" not in out and "SW Local Agent Service is up." in out
+    assert any(c.startswith("docker compose") and " ps --all --format json" in c for c in calls)
 
 
 # --- the Python behind the script -------------------------------------------------------------
@@ -501,6 +550,11 @@ def test_unhealthy_services_reads_both_compose_ps_formats() -> None:
     assert unhealthy_services(json.dumps(rows)) == expected
     assert unhealthy_services(json.dumps(rows[0])) == []
     assert unhealthy_services("") == [] and unhealthy_services("  \n") == []
+    assert unhealthy_services(json.dumps(rows), ignore=["grafana", "backup-runner"]) == [
+        "api",
+        "edge",
+        "slas-vector-db-1",
+    ]
 
 
 class FakeDocker:
