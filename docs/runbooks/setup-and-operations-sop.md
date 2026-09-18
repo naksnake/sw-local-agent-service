@@ -167,6 +167,26 @@ If the task stops with "no instance serves the role coder yet", the model manage
 finished starting `vllm-coder`: the Models page shows it as starting, with the fit sentence
 when it will never fit.
 
+**Add a model from the Models page (quickstart only, ADR-0018).** On a connected quickstart
+host the Models page has an **Add a model** panel: paste a Hugging Face link
+(`https://huggingface.co/<owner>/<repo>`, with `/tree/<revision>` or `/commit/<sha>` if you
+want a pinned revision, or a bare `<owner>/<repo>`), optionally give a registry id, and press
+**Download and import**. The `model-fetcher` container, the only one with a route out, reaches
+the hub hosts in `SLAS_HUB_HOSTS` (default `huggingface.co,cdn-lfs.huggingface.co,*.hf.co`),
+through `HTTPS_PROXY` when `.env` names one, downloads the weights into
+`/AI/Agent/Models/<id>/` with progress on the page ("Downloading Qwen3.8-27B-FP8: 12.4 GiB of
+29.0 GiB, 3 of 9 files."), verifies every file against the checksum the hub publishes, writes
+`SHA256SUMS` and `manifest.json`, and appends the entry to `Models/models.yaml` with `roles: []`.
+The card appears within about 30 seconds; pick the model in **Who serves each role** or tick
+it under **Cross-check voters** and press **Save roles**: the model manager rewrites
+`models.yaml` and starts or stops instances to match, no restart. A gated repository needs a
+token: paste it into `${SLAS_DATA_ROOT}/secrets/hf_token` (`/AI/Agent/secrets/hf_token`, created
+empty by the installer, mode 0600); it is sent as a header only and never shown.
+**Cancel** stops after the current file and the same link resumes later. The `vram_gib` of an
+added model is an estimate from the file sizes (plus 25 %); correct it in `models.yaml` if you
+know the real need. A prod install does not start the fetcher: weights arrive in the signed
+bundle, and the panel answers "The model-fetcher did not answer."
+
 ## 8 · Procedure C — Daily operation
 
 **Home** shows what needs you (three-part notices), what is running, and recent results. The
