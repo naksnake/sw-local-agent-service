@@ -21,6 +21,13 @@ class RollbackBody(SlasModel):
     role: str = Field(min_length=1)
 
 
+class RolesBody(SlasModel):
+    """Partial: only the keys given change; a role given as null is unassigned."""
+
+    roles: dict[str, str | None] | None = None
+    voters: list[str] | None = None
+
+
 def build_router(controller: Controller) -> APIRouter:
     router = APIRouter(prefix="/v1")
 
@@ -48,5 +55,11 @@ def build_router(controller: Controller) -> APIRouter:
     @router.get("/fit")
     def fit(model: str = Query(min_length=1)) -> dict[str, Any]:
         return controller.fit(model)
+
+    @router.put("/roles")
+    def roles(request: Request, body: RolesBody) -> dict[str, Any]:
+        identity = identity_of(request)
+        require(identity, MODEL_MANAGE, verb="change which model serves a role")
+        return controller.set_roles(body.roles, body.voters)
 
     return router

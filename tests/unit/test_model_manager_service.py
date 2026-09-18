@@ -906,13 +906,15 @@ def test_fit_route_and_unknown_model(tmp_path: Path) -> None:
 def test_route_table_matches_the_contract(tmp_path: Path) -> None:
     contract = (REPO_ROOT / "docs" / "api-contract-round-2.md").read_text(encoding="utf-8")
     section = contract.split("## 3. model-manager", 1)[1].split("## 3b.", 1)[0]
-    documented = set(re.findall(r"`(GET|POST) (/v1/[^\s`?]+)`", section))
+    documented = set(re.findall(r"`(GET|POST|PUT) (/v1/[^\s`?]+)`", section))
+    documented.discard(("PUT", "/v1/instances"))  # the gateway's route, named in the prose
     assert documented == {
         ("GET", "/v1/status"),
         ("POST", "/v1/reconcile"),
         ("POST", "/v1/swap"),
         ("POST", "/v1/rollback"),
         ("GET", "/v1/fit"),
+        ("PUT", "/v1/roles"),
     }
     h = Harness(tmp_path)
     table = route_table(h.app)
@@ -920,6 +922,126 @@ def test_route_table_matches_the_contract(tmp_path: Path) -> None:
     assert set(table) == documented | {("GET", "/health"), ("GET", "/metrics")}
     assert h.client.get("/metrics").status_code == 200
     assert h.client.get("/docs").status_code == 404
+
+
+# --- roles and voters from the Models page (PUT /v1/roles, ADR-0018 part B) -------------------
+
+
+def weights_for(h: Harness, *paths: str) -> None:
+    for path in paths:
+        target = h.models_file.parent / path
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "SHA256SUMS").write_text("deadbeef  model.safetensors\n")
+
+
+def test_put_roles_rewrites_the_registry_keeps_the_rest_and_reconciles(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    h.models_file.write_text(
+        render_registry_yaml(PROFILE_REGISTRIES["quickstart"], header="Kept header\nline two"),
+        encoding="utf-8",
+    )
+    weights_for(h, "deepseek-v4-flash", "qwen3.8-27b-fp8", "bge-m3", "bge-reranker-v2-m3")
+    h.controller.reconcile()
+    assert h.api.specs["vllm-planner"].labels["slas.model"] == "qwen3.8-27b-fp8"
+
+    # planner → DeepSeek-V4 Flash (declared for it), coder stays, voters unchanged.
+    response = h.client.put(
+        "/v1/roles", json={"roles": {"planner": "deepseek-v4-flash"}}, headers=MANAGER.headers()
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["roles"]["planner"] == "deepseek-v4-flash" and body["roles"]["coder"] == (
+        "qwen3.8-27b-fp8"
+    )
+    assert body["voters"] == ["deepseek-v4-flash", "qwen3.8-27b-fp8"]
+    assert body["sentence"].startswith(
+        "Saved: planner → DeepSeek-V4 Flash. 2 voters from 2 families. To match the registry: "
+    )
+    assert "stop vllm-planner" in body["sentence"] and "start vllm-planner" in body["sentence"]
+    assert h.api.specs["vllm-planner"].labels["slas.model"] == "deepseek-v4-flash", (
+        "reconciled at once"
+    )
+    text = h.models_file.read_text()
+    assert text.startswith("# Kept header\n# line two\nversion: 1\n"), "the header stays"
+    assert "  planner: deepseek-v4-flash" in text and "  coder: qwen3.8-27b-fp8" in text
+    assert "vram_gib: 180" in text and "context: 131072" in text, "every other field kept"
+    assert not h.models_file.with_name("models.yaml.tmp").exists()
+    assert h.events("registry.roles_changed")[0]["changes"] == ["planner → DeepSeek-V4 Flash"]
+
+    # A role the model was not declared for: the assignment becomes the declaration.
+    body = h.client.put(
+        "/v1/roles", json={"roles": {"triage": "qwen3.8-27b-fp8"}}, headers=MANAGER.headers()
+    ).json()
+    qwen = next(m for m in body["models"] if m["id"] == "qwen3.8-27b-fp8")
+    assert qwen["roles"] == ["coder", "planner", "triage"] and qwen["present"] is True
+
+    # Voters: replaced as a whole; a null role is unassigned; nothing else moves.
+    body = h.client.put(
+        "/v1/roles",
+        json={"roles": {"rerank": None}, "voters": ["qwen3.8-27b-fp8"]},
+        headers=MANAGER.headers(),
+    ).json()
+    assert "rerank" not in body["roles"] and body["voters"] == ["qwen3.8-27b-fp8"]
+    assert body["sentence"].startswith(
+        "Saved: rerank is no longer served; voters: Qwen3.8-27B. 1 voter from 1 family."
+    )
+    assert "vllm-rerank" not in h.api.specs or h.api.states["vllm-rerank"] != "running"
+    assert "vllm-voter-deepseek-v4-flash" not in h.api.specs or (
+        h.api.states["vllm-voter-deepseek-v4-flash"] != "running"
+    )
+
+
+def test_put_roles_refusals_in_three_parts(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    weights_for(h, "deepseek-v4-flash", "qwen3.8-27b-fp8", "bge-m3")
+
+    def put(body: dict[str, Any], who: Identity = MANAGER) -> httpx.Response:
+        response: httpx.Response = h.client.put("/v1/roles", json=body, headers=who.headers())
+        return response
+
+    assert_problem(put({"roles": {"coder": "qwen3.8-27b-fp8"}}, VIEWER), 403)
+    assert_problem(h.client.put("/v1/roles", json={}), 401)
+    assert assert_problem(put({}), 400)["what_happened"] == "Nothing to change."
+    unknown_role = assert_problem(put({"roles": {"poet": "qwen3.8-27b-fp8"}}), 400)
+    assert unknown_role["what_happened"] == "poet is not a role."
+    unknown_model = assert_problem(put({"roles": {"coder": "ghost"}}), 400)
+    assert unknown_model["what_happened"] == "There is no model called ghost in the registry."
+    absent = assert_problem(put({"roles": {"rerank": "bge-reranker-v2-m3"}}), 400)
+    assert absent["what_happened"] == "The weights of BGE Reranker v2 M3 are not here yet."
+    assert "Add the model from this page" in absent["what_to_do"]
+    twice = assert_problem(put({"voters": ["bge-m3", "bge-m3"]}), 400)
+    assert twice["what_happened"] == "A model is listed twice among the voters."
+    assert h.models_file.read_text() == render_registry_yaml(PROFILE_REGISTRIES["quickstart"]), (
+        "a refusal leaves the file as it was"
+    )
+    # While a swap is in flight the registry is not rewritten under it.
+    blocking = BlockingSmoke()
+    busy = Harness(tmp_path, smoke=blocking)
+    weights_for(busy, "deepseek-v4-flash", "qwen3.8-27b-fp8")
+    busy.prober.everything = True
+    busy.controller.reconcile()
+    started = busy.client.post(
+        "/v1/swap",
+        json={"role": "planner", "candidate": "deepseek-v4-flash"},
+        headers=MANAGER.headers(),
+    )
+    assert started.status_code == 200, started.text
+    blocking.entered.wait(5)
+    in_flight = assert_problem(
+        busy.client.put(
+            "/v1/roles", json={"roles": {"coder": "deepseek-v4-flash"}}, headers=MANAGER.headers()
+        ),
+        409,
+    )
+    assert in_flight["what_happened"] == "A swap of planner is in progress."
+    blocking.release.set()
+    busy.wait_swap()
+    # A registry file that cannot be read is a 503, not a rewrite.
+    broken = Harness(tmp_path)
+    broken.models_file.write_text("models: [")
+    assert_problem(
+        broken.client.put("/v1/roles", json={"voters": []}, headers=MANAGER.headers()), 503
+    )
 
 
 # --- the smoke tester -----------------------------------------------------------------------
