@@ -787,8 +787,10 @@ def test_a_crash_loop_shows_the_error_before_the_last_exit_not_the_fresh_start(
     h.controller.reconcile()
     sentence = h.rows()["vllm-coder"]["sentence"]
     assert "It exited 2 times before and the runtime started it again." in sentence
+    # The root cause is the first exception of the attempt, not the API server's pointer.
     assert (
-        "Before it last exited it logged: (APIServer pid=1) RuntimeError: Engine core" in sentence
+        "Before it last exited it logged: (EngineCore_DP0 pid=71) ERROR ValueError: To serve"
+        in sentence
     )
     assert sentence.endswith(
         "Last log line: (APIServer pid=1) [transformers] The `use_fast` parameter is deprecated."
@@ -805,6 +807,91 @@ def test_a_crash_loop_shows_the_error_before_the_last_exit_not_the_fresh_start(
     assert lines[-1].endswith("Using max model len 131072"), "one line after the error, no more"
     assert not any("use_fast" in line for line in lines), "the fresh attempt's warnings are noise"
     assert not h.events("instance.context_reduced")
+
+
+EC = "(EngineCore_DP0 pid=71) ERROR 09-18 08:00:50 [core.py:822] "
+AP = "(APIServer pid=1) "
+ENGINE_CORE_CRASH = "\n".join(
+    [
+        AP + "INFO 09-18 08:00:43 [model.py:2021] Using max model len 131072",
+        "(EngineCore_DP0 pid=71) INFO 09-18 08:00:48 [gpu_model_runner.py:2653] Loading model",
+        EC + "EngineCore failed to start.",
+        EC + "Traceback (most recent call last):",
+        EC + '  File "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/core.py", line 813',
+        EC + "    engine_core = EngineCoreProc(*args)",
+        EC + "                  ^^^^^^^^^^^^^^^^^^^^^^^",
+        EC
+        + '  File "/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu_worker.py", line 2',
+        EC + "    torch.cuda.set_device(self.device)",
+        EC + "RuntimeError: CUDA error: no kernel image is available for execution on the device",
+        AP + "Traceback (most recent call last):",
+        AP + '  File "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/utils.py", line 1320',
+        AP + "    raise RuntimeError(",
+        AP + "RuntimeError: Engine core initialization failed. See root cause above. "
+        "Failed core proc(s): {}",
+        AP + "INFO 09-18 08:02:10 [model.py:2021] Using max model len 131072",
+        AP + "[transformers] The `use_fast` parameter is deprecated.",
+    ]
+)
+
+
+def test_crash_evidence_keeps_the_engine_root_cause_and_drops_the_traceback_frames(
+    tmp_path: Path,
+) -> None:
+    """The first host, round three: the row showed twelve lines of the API server's traceback
+    ending in "See root cause above", and the root cause (the engine process's own exception,
+    logged earlier) was cut off. The evidence is the whole failed attempt's error cluster
+    minus the frames, so both exceptions fit and the first one is the cause."""
+    h = Harness(tmp_path, coder_first=True)
+    h.controller.reconcile()
+    h.api.logs_text["vllm-coder"] = ENGINE_CORE_CRASH
+    h.api.restarting("vllm-coder", times=87)
+    h.controller.reconcile()
+    row = h.rows()["vllm-coder"]
+    assert row["state"] == "failed"
+    lines = row["sentence"].split("\n")
+    assert lines[0].startswith("Qwen3.8-27B keeps crashing: the runtime started it 87 times")
+    body = lines[1:]
+    assert any(line.endswith("EngineCore failed to start.") for line in body)
+    assert any(
+        line.endswith(
+            "RuntimeError: CUDA error: no kernel image is available for execution on the device"
+        )
+        for line in body
+    )
+    assert any("Engine core initialization failed" in line for line in body)
+    assert not any('File "' in line for line in body), "frames are noise"
+    assert not any("^^^^" in line for line in body)
+    assert not any("Traceback (most recent call last)" in line for line in body)
+    assert not any("torch.cuda.set_device" in line for line in body), "the code under a frame"
+    assert not any("use_fast" in line for line in body), "the fresh attempt is not the evidence"
+    assert body[-1].endswith("Using max model len 131072"), "one line after the last error"
+    assert body[0].endswith("Using max model len 131072"), "a few lines before the first"
+
+    # The loading sentence names the root cause, not the pointer to it.
+    h.api.restarting("vllm-coder", times=1)
+    h.controller.reconcile()
+    sentence = h.rows()["vllm-coder"]["sentence"]
+    assert (
+        "Before it last exited it logged: (EngineCore_DP0 pid=71) ERROR 09-18 08:00:50 "
+        "[core.py:822] RuntimeError: CUDA error: no kernel image"
+    ) in sentence
+
+    # A very long cluster keeps its head (the cause) and its tail, and says what it dropped.
+    long_log = ENGINE_CORE_CRASH.replace(
+        "(APIServer pid=1) Traceback (most recent call last):",
+        "\n".join(f"(APIServer pid=1) ERROR frame {i} in a very deep stack" for i in range(80)),
+    )
+    h.api.logs_text["vllm-coder"] = long_log
+    h.api.restarting("vllm-coder", times=88)
+    h.controller.reconcile()
+    body = h.rows()["vllm-coder"]["sentence"].split("\n")[1:]
+    assert len(body) == 40
+    assert any("RuntimeError: CUDA error" in line for line in body)
+    assert any("Engine core initialization failed" in line for line in body)
+    assert any(
+        line.startswith("… ") and line.endswith(" more traceback lines left out …") for line in body
+    )
 
 
 def test_a_context_that_does_not_fit_the_kv_cache_is_halved_and_kept(tmp_path: Path) -> None:

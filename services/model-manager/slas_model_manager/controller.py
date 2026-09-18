@@ -72,10 +72,45 @@ PAUSE_STOP_TIMEOUT_S: Final = 2
 #: How far back the manager reads a restarted container's log for the reason it exited,
 #: and what an error line looks like there (Python tracebacks, vLLM errors, the OOM killer).
 CRASH_EVIDENCE_LINES: Final = 400
+#: How many lines of evidence a row carries at most, and how far apart two error lines may
+#: be and still belong to the same failed attempt.
+CRASH_EVIDENCE_KEEP: Final = 40
+CRASH_CLUSTER_GAP: Final = 30
 ERROR_LINE: Final = re.compile(
     r"Traceback|Error|ERROR|CRITICAL|Killed|out of memory|OutOfMemory|No available memory|"
     r"not enough memory|Not enough memory"
 )
+#: An exception's own message line ("ValueError: …"), as opposed to a traceback frame.
+EXCEPTION_LINE: Final = re.compile(r"\b\w*(Error|Exception|Killed)\b: ")
+#: What a log line carries before its message: vLLM's process prefix and the logger's
+#: level, time and location. Stripped for classification only, never from the evidence.
+LOG_PREFIX: Final = re.compile(
+    r"^(\(\S+ pid=\d+\) ?)?((ERROR|INFO|WARNING|DEBUG|CRITICAL) \d\d-\d\d \d\d:\d\d:\d\d"
+    r" \[[^\]]*\] ?|(ERROR|INFO|WARNING|DEBUG|CRITICAL) )?"
+)  # one space at most after each part: the message's own indentation must survive
+FRAME_LINE: Final = re.compile(r'^\s*File ".*", line \d+')
+CARET_LINE: Final = re.compile(r"^\s*[\^~]+\s*$")
+TRACEBACK_HEAD: Final = re.compile(r"^\s*Traceback \(most recent call last\):\s*$")
+
+
+def _without_frames(lines: Sequence[str]) -> list[str]:
+    """The log lines minus Python traceback frames: `File "…", line n`, the source line
+    under it, the caret line, and the "Traceback" heading. Messages stay."""
+    kept: list[str] = []
+    after_frame = False
+    for line in lines:
+        body = LOG_PREFIX.sub("", line)
+        if FRAME_LINE.match(body):
+            after_frame = True
+            continue
+        if after_frame and body.startswith(" "):
+            after_frame = False
+            continue  # the source line quoted under the frame
+        after_frame = False
+        if CARET_LINE.match(body) or TRACEBACK_HEAD.match(body) or not body.strip():
+            continue
+        kept.append(line)
+    return kept
 
 
 class SystemClock:
@@ -808,28 +843,46 @@ class Controller:
         if restarts:
             times = "once" if restarts == 1 else f"{restarts} times"
             text += f" It exited {times} before and the runtime started it again."
-            errors = [line for line in self._crash_evidence(name) if ERROR_LINE.search(line)]
+            # The first exception of the failed attempt is the root cause; the API server's
+            # later "Engine core initialization failed" only points back at it.
+            errors = [line for line in self._crash_evidence(name) if EXCEPTION_LINE.search(line)]
             if errors:
-                text += f" Before it last exited it logged: {errors[-1].strip()[:200]}"
+                text += f" Before it last exited it logged: {errors[0].strip()[:200]}"
         lines = [line for line in self.runtime.last_log_lines(name, 5) if line.strip()]
         if lines:
             text += f" Last log line: {lines[-1].strip()[:200]}"
         return text
 
-    def _crash_evidence(self, name: str, *, before: int = 12, after: int = 1) -> list[str]:
-        """The log lines around the last error a restarted container logged.
+    def _crash_evidence(
+        self, name: str, *, before: int = 4, after: int = 1, limit: int = CRASH_EVIDENCE_KEEP
+    ) -> list[str]:
+        """The messages of the last failed attempt a restarted container logged.
 
         The runtime keeps one log across restarts, so the tail of a crash-looping container
-        is the fresh attempt's start-up lines, not the reason it died. The reason is the
-        last error-like line before that; a window around it is what a person needs.
-        Falls back to the last 40 lines when nothing looks like an error.
+        is the fresh attempt's start-up lines, not the reason it died. The reason is in the
+        last cluster of error lines before that: vLLM's engine process logs its own traceback
+        ("EngineCore failed to start" and the exception) and the API server then logs a second
+        traceback that only says "see root cause above". The cluster is taken whole, the
+        traceback frames (`File "…"`, the code line under each, the carets) are dropped so the
+        exception messages stand out, and a long remainder keeps its head, where the root
+        cause is, and its tail. Falls back to the last lines when nothing looks like an error.
         """
         lines = self.runtime.last_log_lines(name, CRASH_EVIDENCE_LINES)
         hits = [i for i, line in enumerate(lines) if ERROR_LINE.search(line)]
         if not hits:
-            return lines[-40:]
+            return lines[-limit:]
         last = hits[-1]
-        return lines[max(0, last - before) : last + after + 1]
+        first = last
+        for i in reversed(hits[:-1]):
+            if first - i > CRASH_CLUSTER_GAP:
+                break
+            first = i
+        window = _without_frames(lines[max(0, first - before) : last + after + 1])
+        if len(window) <= limit:
+            return window
+        head, tail = limit - 10, 9
+        left_out = len(window) - head - tail
+        return [*window[:head], f"… {left_out} more traceback lines left out …", *window[-tail:]]
 
     @staticmethod
     def _entry_for(registry: Registry, model_id: str) -> ModelEntry | None:
