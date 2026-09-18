@@ -1,7 +1,10 @@
 """The container runtime boundary and the vLLM container spec (CLAUDE.md §7, §12).
 
-`--enable-prefix-caching` and `--guided-decoding-backend xgrammar` are mandatory on every
-generate instance; the airgap environment is mandatory on every container (INV-1, INV-2).
+`--enable-prefix-caching` and structured outputs with the xgrammar backend are mandatory on
+every generate instance (CLAUDE.md §7); the airgap environment is mandatory on every container
+(INV-1, INV-2). The backend travels as `--structured-outputs-config {"backend": "xgrammar"}`:
+vLLM removed the older `--guided-decoding-backend` flag, and an instance given it exits at
+start with "unrecognized arguments" before it loads a single weight.
 The Podman driver implementing `ContainerRuntime` arrives with its approved dependency;
 tests run against `FakeRuntime`.
 """
@@ -22,18 +25,27 @@ AIRGAP_ENV: Final[dict[str, str]] = {
     "HF_HUB_DISABLE_TELEMETRY": "1",
     "VLLM_NO_USAGE_STATS": "1",
 }
+#: The JSON vLLM's `--structured-outputs-config` takes (a fixed string, never built from
+#: input); `backend` names the grammar engine every generate instance must use.
+STRUCTURED_OUTPUTS_CONFIG: Final = '{"backend": "xgrammar"}'
 MANDATORY_GENERATE_FLAGS: Final[tuple[str, ...]] = (
     "--enable-prefix-caching",
-    "--guided-decoding-backend",
+    "--structured-outputs-config",
 )
 GENERATE_ROLES: Final[frozenset[str]] = frozenset({"coder", "planner", "triage"})
 INFERENCE_NETWORK: Final = "slas-inference"
 
 #: What a vLLM instance does: chat completions, embeddings, or reranking scores
-#: (docs/api-contract-round-2.md §3: embed and rerank entries start with `--task embed` /
-#: `--task score` and none of the generate flags).
+#: (docs/api-contract-round-2.md §3). vLLM removed `--task`; a pooling instance is asked for
+#: with `--runner pooling`, and an embedding model is converted with `--convert embed`. A
+#: reranker (a sequence-classification cross-encoder) scores as it is, so `score` carries
+#: the runner alone. Neither carries the generate flags.
 VllmTask = Literal["generate", "embed", "score"]
 TASK_FOR_ROLE: Final[dict[str, VllmTask]] = {"embed": "embed", "rerank": "score"}
+POOLING_FLAGS: Final[dict[VllmTask, tuple[str, ...]]] = {
+    "embed": ("--runner", "pooling", "--convert", "embed"),
+    "score": ("--runner", "pooling"),
+}
 
 
 def task_for_role(role: str | None) -> VllmTask:
@@ -99,9 +111,9 @@ def vllm_spec(
     """The vLLM container for `entry` as `name` on `gpu_ids`.
 
     `task` decides the flags: a generate instance carries the mandatory prefix-caching and
-    xgrammar flags (CLAUDE.md §7); an embed or score instance carries `--task` and none of
-    them. `generate=False` keeps the older meaning "no generate flags" for callers that have
-    no task to name.
+    xgrammar flags (CLAUDE.md §7); an embed or score instance carries the pooling runner
+    flags and none of them. `generate=False` keeps the older meaning "no generate flags" for
+    callers that have no task to name.
     """
     argv = [
         "--model",
@@ -118,9 +130,13 @@ def vllm_spec(
     elif entry.quant == "awq4":
         argv += ["--quantization", "awq_marlin"]
     if task != "generate":
-        argv += ["--task", task]
+        argv += list(POOLING_FLAGS[task])
     elif generate:
-        argv += ["--enable-prefix-caching", "--guided-decoding-backend", "xgrammar"]
+        argv += [
+            "--enable-prefix-caching",
+            "--structured-outputs-config",
+            STRUCTURED_OUTPUTS_CONFIG,
+        ]
     return ContainerSpec(
         name=name,
         image=image,

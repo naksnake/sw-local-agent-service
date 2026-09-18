@@ -126,7 +126,10 @@ and Prometheus), `ipc_host=True`, shm 16 GiB, `mounts=[host models dir → /data
 `gpu_ids` from the placement, env = `AIRGAP_ENV` + `CUDA_VISIBLE_DEVICES` (renumbered
 `0..n-1`, since the request already selects the devices), `restart="unless-stopped"`, labels
 `slas.kind=vllm`, `slas.instance=<name>`, `slas.model=<id>`. Embedding and rerank entries
-start vLLM with `--task embed` / `--task score` and no generate flags. Placement: greedy by
+start vLLM with `--runner pooling` (`--convert embed` for an embedding model; a reranker scores
+as it is) and no generate flags; a generate instance carries `--enable-prefix-caching` and
+`--structured-outputs-config {"backend": "xgrammar"}` (vLLM removed `--task` and
+`--guided-decoding-backend`; an instance given either exits at start). Placement: greedy by
 `vram_gib` against `SLAS_GPU_VRAM_GIB` per GPU (default 270, an HGX B300 GPU); an instance that does not fit
 is reported `failed` with the fit sentence, never started. A crashed container's last 40 log
 lines go into the `sentence`.

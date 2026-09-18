@@ -585,7 +585,9 @@ hot-swap; the Model Manager provides one by starting the candidate alongside, sm
 switching the gateway route, and draining the incumbent. `slas model fit` states VRAM need
 vs. free in a sentence before any load. Quantisation: FP8 on Hopper/Blackwell, AWQ 4-bit on
 Ada/Ampere, one BF16 reference kept for eval regression. `--enable-prefix-caching` and
-`--guided-decoding-backend xgrammar` are mandatory on every generate instance.
+`--structured-outputs-config {"backend": "xgrammar"}` are mandatory on every generate instance
+(the latter replaced vLLM's removed `--guided-decoding-backend xgrammar`; an instance given the
+old flag exits at start).
 
 ## §8 LLMOps
 **8.1 Eval** — Ragas/TruLens configured against local vLLM only (`slas_eval/judges.py` is

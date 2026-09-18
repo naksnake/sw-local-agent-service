@@ -656,6 +656,14 @@ RUNTIME_SOCKET="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["
 echo
 "$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["sentence"])' "$socket_choice"
 
+# The GPUs, as nvidia-smi sees them: SLAS_GPU_IDS and SLAS_GPU_VRAM_GIB in .env used to be the
+# reference host's guesses (four GPUs of 270 GiB); on any other host the model manager then
+# placed instances on GPUs that do not exist, and no model instance ever started.
+gpu_choice="$("$PYTHON" -m slas_deploy.installer gpus --json)"
+GPU_IDS="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["ids"])' "$gpu_choice")"
+GPU_VRAM_GIB="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["vram_gib"])' "$gpu_choice")"
+"$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["sentence"])' "$gpu_choice"
+
 if [[ $DRY_RUN -eq 1 ]]; then
   if [[ -n "$RUNTIME_SOCKET" ]]; then
     echo "Would write $ENV_FILE ($PROFILE keys, registry $REGISTRY, version $VERSION, SLAS_RUNTIME_SOCKET=$RUNTIME_SOCKET; keys you set are kept)."
@@ -668,7 +676,8 @@ else
   mkdir -p "$DATA_ROOT"
   env_args=(--example "$SCRIPT_DIR/config/.env.example" --target "$ENV_FILE" --profile "$PROFILE" \
     --data-root "$DATA_ROOT" --version "$VERSION" --registry "$REGISTRY" --uid "$(id -u)" --gid "$(id -g)" \
-    --tls-names "$TLS_NAMES" --public-host "$PUBLIC_HOST" --runtime-socket "$RUNTIME_SOCKET" --agents "$AGENTS")
+    --tls-names "$TLS_NAMES" --public-host "$PUBLIC_HOST" --runtime-socket "$RUNTIME_SOCKET" --agents "$AGENTS" \
+    --gpu-ids "$GPU_IDS" --gpu-vram-gib "$GPU_VRAM_GIB")
   if [[ $PUBLIC_HOST_CHOSEN -eq 1 ]]; then env_args+=(--public-host-chosen); fi
   "$PYTHON" -m slas_deploy.installer write-env "${env_args[@]}"
   # The sign-in URL follows the file: a name pinned there (--public-host) stays.
@@ -745,6 +754,7 @@ fi
 # ---------------------------------------------------------------------------- 4 wait and report
 if [[ $DRY_RUN -eq 1 ]]; then
   echo "Would wait until every service reports healthy, then print https://$PUBLIC_HOST and the one-time administrator password."
+  echo "Would wait up to ${SLAS_MODEL_WAIT_S:-900} s for the model instances and print each one's state; the install ends with the reason when the coder role has no healthy instance."
   echo
   echo "Dry run finished: every read-only step passed; nothing was changed on this host."
   exit 0
@@ -811,4 +821,49 @@ esac
 if [[ "$PROFILE" == "prod" ]]; then
   echo "Keycloak: https://$PUBLIC_HOST/auth (realm slas). Vault: unseal keys were printed by the bootstrap; store them offline now."
 fi
+
+# ---------------------------------------------------------------------------- 5 the model instances
+# The stack is up, but the Coding Agent needs a healthy coder instance, and a vLLM instance
+# loads its weights for minutes. Wait for it here and say what happened to every instance, so
+# a first install ends with "the coding model is ready" or with the reason it is not.
+# SLAS_MODEL_WAIT_S (default 900) and SLAS_MODEL_POLL_S (default 15) shape the wait.
+MODEL_WAIT_S="${SLAS_MODEL_WAIT_S:-900}"
+MODEL_POLL_S="${SLAS_MODEL_POLL_S:-15}"
+echo
+echo "Waiting up to $MODEL_WAIT_S s for the model instances; a large model loads its weights for several minutes on its first start."
+model_status() {
+  "${COMPOSE[@]}" exec -T model-manager python -c 'import sys, urllib.request; sys.stdout.write(urllib.request.urlopen("http://127.0.0.1:8000/v1/status", timeout=10).read().decode())' 2>/dev/null || true
+}
+waited=0
+instances_rc=3
+instances_report=""
+while :; do
+  set +e
+  instances_report="$(model_status | "$PYTHON" -m slas_deploy.installer instances --role coder)"
+  instances_rc=$?
+  set -e
+  # 2 = still loading: wait. Anything else is final; the health wait above already saw the
+  # model manager healthy, so a status it does not give (3) is reported, not waited for.
+  if [[ $instances_rc -ne 2 ]]; then break; fi
+  if [[ $waited -ge $MODEL_WAIT_S ]]; then break; fi
+  sleep "$MODEL_POLL_S"
+  waited=$((waited + MODEL_POLL_S))
+done
+echo "$instances_report"
+case $instances_rc in
+  0)
+    echo "The coding model is ready; start a coding task from the Coding page." ;;
+  2)
+    echo "The model instances are still loading after $MODEL_WAIT_S s."
+    echo "Likely cause: large weights on a slow disk, or several instances loading at once."
+    echo "What to do: watch the Models page; a coding task can start as soon as the coder row says healthy." ;;
+  3)
+    : ;;  # the report already says the model manager did not answer and how to look
+  *)
+    echo
+    echo "The coder role has no healthy instance, so a coding task cannot start yet."
+    echo "Likely cause: the sentences above name it: a crash (with its last log lines), a model that does not fit this host's GPUs, or no GPU at all."
+    echo "What to do: fix what they name — the Models page lets you give the coder role a smaller model or add one from a link — then run ./install.sh again or wait for the model manager's next reconcile."
+    exit 1 ;;
+esac
 exit 0

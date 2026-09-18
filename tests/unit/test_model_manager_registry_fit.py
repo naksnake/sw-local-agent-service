@@ -112,7 +112,12 @@ def test_vllm_spec_carries_the_mandatory_flags_and_airgap_env() -> None:
     spec = vllm_spec(coder, name="vllm-coder", gpu_ids=[0, 1], image=IMAGE)
     for flag in MANDATORY_GENERATE_FLAGS:
         assert flag in spec.argv
-    assert spec.argv[spec.argv.index("--guided-decoding-backend") + 1] == "xgrammar"
+    # vLLM's current flag; the removed `--guided-decoding-backend` would end the instance at
+    # start with "unrecognized arguments".
+    assert (
+        spec.argv[spec.argv.index("--structured-outputs-config") + 1] == '{"backend": "xgrammar"}'
+    )
+    assert "--guided-decoding-backend" not in spec.argv
     assert spec.argv[:4] == [
         "--model",
         "/data/Models/qwen2.5-coder-32b-awq",

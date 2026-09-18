@@ -390,9 +390,11 @@ def test_vllm_spec_task_flags_for_embed_and_rerank() -> None:
     embed = vllm_spec(
         QUICKSTART.model("bge-m3"), name="vllm-embed", gpu_ids=[0], image=IMAGE, task="embed"
     )
-    assert embed.argv[-2:] == ["--task", "embed"]
+    # vLLM's current pooling flags: `--task` is gone, and an instance given it exits at start.
+    assert embed.argv[-4:] == ["--runner", "pooling", "--convert", "embed"]
+    assert "--task" not in embed.argv
     assert "--enable-prefix-caching" not in embed.argv
-    assert "--guided-decoding-backend" not in embed.argv
+    assert "--structured-outputs-config" not in embed.argv
     score = vllm_spec(
         QUICKSTART.model("bge-reranker-v2-m3"),
         name="vllm-rerank",
@@ -400,11 +402,11 @@ def test_vllm_spec_task_flags_for_embed_and_rerank() -> None:
         image=IMAGE,
         task="score",
     )
-    assert score.argv[-2:] == ["--task", "score"]
+    assert score.argv[-2:] == ["--runner", "pooling"] and "--convert" not in score.argv
     generate = vllm_spec(
         QUICKSTART.model("qwen3.8-27b-fp8"), name="vllm-coder", gpu_ids=[0], image=IMAGE
     )
-    assert "--task" not in generate.argv and "--enable-prefix-caching" in generate.argv
+    assert "--runner" not in generate.argv and "--enable-prefix-caching" in generate.argv
 
 
 # --- placement --------------------------------------------------------------------------------
@@ -496,8 +498,9 @@ def test_quickstart_registry_starts_every_instance_and_publishes_when_healthy(
     assert triage["Cmd"][:2] == ["--model", "/data/Models/deepseek-v4-flash"]
     assert "--enable-prefix-caching" in triage["Cmd"]
     embed = h.api.bodies["vllm-embed"]["Cmd"]
-    assert embed[-2:] == ["--task", "embed"] and "--enable-prefix-caching" not in embed
-    assert h.api.bodies["vllm-rerank"]["Cmd"][-2:] == ["--task", "score"]
+    assert embed[-4:] == ["--runner", "pooling", "--convert", "embed"]
+    assert "--enable-prefix-caching" not in embed
+    assert h.api.bodies["vllm-rerank"]["Cmd"][-2:] == ["--runner", "pooling"]
 
     status = h.status()
     assert status["engine"] == "docker"

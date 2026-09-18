@@ -47,6 +47,11 @@ case "$*" in
     if [[ "$last" == *"@sha256:"* ]]; then echo "$last"; else echo "${last%%:*}@sha256:$(printf '%s' "digest-$last" | sha256sum | cut -d' ' -f1)"; fi ;;
   *"inspect --format {{.Id}}"*) echo "sha256:$(printf '%s' "id-$last" | sha256sum | cut -d' ' -f1)" ;;
   *"bootstrap status"*) echo "${STUB_BOOTSTRAP:-pending}" ;;
+  *" exec -T model-manager python -c "*)
+    # The model manager's GET /v1/status: a healthy coder unless the test says otherwise
+    # (STUB_MODEL_STATUS set but empty = the manager did not answer).
+    healthy='{"sentence": "1 of 1 model instances are healthy.", "instances": [{"name": "vllm-coder", "role": "coder", "state": "healthy", "sentence": "Qwen3.8-27B is serving the coder role at http://vllm-coder:8000."}]}'
+    printf '%s' "${STUB_MODEL_STATUS-$healthy}" ;;
   *" ps --all --format json"*) printf '%s' "${STUB_PS:-}" ;;
   "ps -aq --filter label=com.docker.compose.project=slas --filter label=com.docker.compose.service="*)
     # STUB_STALE: "<service>=<id> <service>=<id>": containers an earlier install left behind.
@@ -93,6 +98,14 @@ if __name__ == "__main__":
     sys.exit(main())
 '''
 SANDBOX_TAGS = ("local/slas/sandbox-python:3.12.6", "local/slas/sandbox-shell:5.2.21")
+
+# nvidia-smi as the installer queries it (`installer gpus`): two 80 GB cards unless a test
+# sets STUB_NVIDIA_SMI (set but empty = no GPU).
+STUB_NVIDIA_SMI = """#!/usr/bin/env bash
+echo "nvidia-smi $*" >> "$STUB_LOG"
+printf '%s\\n' "${STUB_NVIDIA_SMI-0, 81559
+1, 81559}"
+"""
 
 
 def mirror_checkout(tmp_path: Path, *, sandbox_cli: bool) -> Path:
@@ -143,6 +156,9 @@ def run_install(
     stub = stubs / "docker"
     stub.write_text(STUB_DOCKER)
     stub.chmod(0o755)
+    smi = stubs / "nvidia-smi"
+    smi.write_text(STUB_NVIDIA_SMI)
+    smi.chmod(0o755)
     log = tmp_path / "stub.log"
     log.write_text("")
     repo = mirror_checkout(tmp_path, sandbox_cli=sandbox_cli)
@@ -153,6 +169,9 @@ def run_install(
         {
             "SLAS_PODMAN_SOCKET": str(tmp_path / "no-podman.sock"),
             "SLAS_DOCKER_SOCKET": str(fake_docker_socket(tmp_path)),
+            # The stub answers the model manager's status at once; no wait in tests.
+            "SLAS_MODEL_WAIT_S": "0",
+            "SLAS_MODEL_POLL_S": "0",
         }
     )
     env.update(env_extra or {})
@@ -230,10 +249,12 @@ def test_build_dry_run_describes_every_pull_and_build_and_touches_nothing(tmp_pa
         "Would build the sandbox image local/slas/sandbox-python:3.12.6",
         f"Would write the sandbox image lock to {data_root}/sandbox-images.lock.json (2 built) and the toolchain manifest to {data_root}/Toolchains/manifest.json; neither is committed.",
         f"Docker's socket {docker_sock} serves the container runtime, so SLAS_RUNTIME_SOCKET={docker_sock} in .env points model-manager and sandbox-manager at it (the images install.sh builds and loads live in Docker's store); nothing else sees it (INV-4).",
+        "2 GPUs found (80 GiB each): .env gets SLAS_GPU_IDS=0,1 and SLAS_GPU_VRAM_GIB=74 (the memory the model manager plans against, with 6 % headroom); a value you set by hand is kept.",
         f"Would write {data_root}/.env (quickstart keys, registry local, version {VERSION}, SLAS_RUNTIME_SOCKET={docker_sock}; keys you set are kept).",
         f"Would create the missing data directories under {data_root}: Coding, Toolchains, .git-broker, Tickets, Skills/library, SOP, Validation, Factory/Templates, Factory/mes/inbox, Factory/ca, Models, Knowledge, Backups/stations, qdrant, tls.",
         "Would run: docker compose --project-name slas",
         "up -d --pull never --remove-orphans",
+        "Would wait up to 0 s for the model instances and print each one's state; the install ends with the reason when the coder role has no healthy instance.",
         "Dry run finished: every read-only step passed; nothing was changed on this host.",
     ]
     position = -1
@@ -249,7 +270,10 @@ def test_build_dry_run_describes_every_pull_and_build_and_touches_nothing(tmp_pa
     # Docker is only asked read-only questions: its compose version, and whether an earlier
     # install left a container of a part that is off (ADR-0017); nothing is removed.
     assert calls[0] == "docker compose version"
-    assert all(c.startswith("docker ps -aq --filter ") for c in calls[1:]), calls
+    assert all(
+        c.startswith("docker ps -aq --filter ") or c.startswith("nvidia-smi --query-gpu=")
+        for c in calls[1:]
+    ), calls
     assert not any(c.startswith("docker rm") for c in calls)
 
 
@@ -444,6 +468,12 @@ def test_build_pulls_tags_builds_writes_a_pinned_lock_and_starts_the_stack(tmp_p
     assert not any(c.startswith("docker load") for c in calls)
     assert any(" exec -T api slas-api bootstrap status" in c for c in calls)
     assert "SW Local Agent Service is up." in out
+    # The GPUs nvidia-smi found, not the reference host's guesses; the model instances waited
+    # for, and the coder reported ready.
+    assert "SLAS_GPU_IDS=0,1\n" in env_text and "SLAS_GPU_VRAM_GIB=74\n" in env_text
+    assert "Waiting up to 0 s for the model instances" in out
+    assert "  vllm-coder (coder): healthy — Qwen3.8-27B is serving the coder role" in out
+    assert "The coding model is ready; start a coding task from the Coding page." in out
     assert "SLAS_TLS_NAMES=127.0.0.1,localhost," in env_text, "the edge answers to the host's names"
     assert "SLAS_PUBLIC_HOST=" in env_text and "SLAS_PUBLIC_HOST=\n" not in env_text
     assert "The certificate is self-signed: the browser asks once whether to continue." in out
@@ -457,6 +487,109 @@ def test_build_pulls_tags_builds_writes_a_pinned_lock_and_starts_the_stack(tmp_p
     assert "already chose a password" in result.stdout and password not in result.stdout
     assert f"SLAS_RUNTIME_SOCKET is set to {docker_sock};" in result.stdout
     assert f"Every data directory under {data_root} exists." in result.stdout
+
+
+def test_the_install_ends_with_the_reason_when_the_coder_has_no_healthy_instance(
+    tmp_path: Path,
+) -> None:
+    """The first host ran for hours with "No instance serves the role coder yet": the install
+    now waits for the model instances and ends with each one's sentence — a crash with its
+    log tail, no room, no GPU — and a non-zero exit when the coder role has none."""
+    crashed = {
+        "sentence": "0 of 2 model instances are healthy; vllm-coder failed; vllm-triage failed.",
+        "instances": [
+            {
+                "name": "vllm-coder",
+                "role": "coder",
+                "state": "failed",
+                "sentence": "Qwen3.8-27B crashed. Last log lines:\nValueError: No available memory for the cache blocks.",
+            },
+            {
+                "name": "vllm-triage",
+                "role": "triage",
+                "state": "failed",
+                "sentence": "DeepSeek-V4 Flash needs about 180 GiB of GPU memory, but no GPU has room; vllm-triage was not started.",
+            },
+        ],
+    }
+    result, _, _ = run_install(tmp_path, env_extra={"STUB_MODEL_STATUS": json.dumps(crashed)})
+    assert result.returncode == 1, result.stdout + result.stderr
+    out = result.stdout
+    assert "SW Local Agent Service is up." in out, "the stack is up; the models are the problem"
+    assert "  vllm-coder (coder): failed — Qwen3.8-27B crashed. Last log lines:" in out
+    assert "      ValueError: No available memory for the cache blocks." in out
+    assert "  vllm-triage (triage): failed — DeepSeek-V4 Flash needs about 180 GiB" in out
+    assert "The coder role has no healthy instance, so a coding task cannot start yet." in out
+    assert "What to do: fix what they name" in out
+
+    # The model manager not answering is a sentence and a pointer, not a failed install.
+    (tmp_path / "silent").mkdir()
+    (tmp_path / "nogpu").mkdir()
+    silent, _, _ = run_install(tmp_path / "silent", env_extra={"STUB_MODEL_STATUS": ""})
+    assert silent.returncode == 0, silent.stdout + silent.stderr
+    assert (
+        "The model manager did not answer, so the state of the model instances is unknown."
+        in silent.stdout
+    )
+    assert "docker compose -p slas logs model-manager" in silent.stdout
+
+    # No GPU on the host: .env keeps its keys and the sentence says why nothing will start.
+    no_gpu, _, data_root = run_install(tmp_path / "nogpu", env_extra={"STUB_NVIDIA_SMI": ""})
+    assert no_gpu.returncode == 0, no_gpu.stdout + no_gpu.stderr
+    assert (
+        "nvidia-smi found no GPU (or is not installed), so SLAS_GPU_IDS and SLAS_GPU_VRAM_GIB in .env stay as they are"
+        in no_gpu.stdout
+    )
+    env_text = (data_root / ".env").read_text()
+    assert "SLAS_GPU_IDS=\n" in env_text and "SLAS_GPU_VRAM_GIB=270\n" in env_text
+
+
+def test_gpu_inventory_and_instance_reports() -> None:
+    from slas_deploy.installer import (
+        EXIT_LOADING,
+        EXIT_UNKNOWN,
+        detect_gpus,
+        instances_report,
+        parse_nvidia_smi,
+    )
+
+    assert parse_nvidia_smi("0, 81559\n1, 81559\nno-such-line\n2, 24564\n") == [
+        (0, 81559),
+        (1, 81559),
+        (2, 24564),
+    ]
+    mixed = detect_gpus(lambda argv: "0, 81559\n1, 24564\n")
+    assert mixed.ids == (0, 1) and mixed.vram_gib == 22 and mixed.ids_text == "0,1"
+    assert mixed.sentence.startswith(
+        "2 GPUs found (24 GiB each, the smallest): .env gets SLAS_GPU_IDS=0,1 and SLAS_GPU_VRAM_GIB=22"
+    )
+    b300 = detect_gpus(lambda argv: "0, 294912\n")
+    assert b300.vram_gib == 270, "the reference host keeps its documented number"
+    assert b300.sentence.startswith(
+        "1 GPU found (288 GiB each): .env gets SLAS_GPU_IDS=0 and SLAS_GPU_VRAM_GIB=270"
+    )
+    none = detect_gpus(lambda argv: None)
+    assert none.ids == () and none.vram_gib is None and none.ids_text == ""
+
+    healthy = {
+        "sentence": "s.",
+        "instances": [
+            {"name": "vllm-coder", "role": "coder", "state": "healthy", "sentence": "ok."}
+        ],
+    }
+    assert instances_report(json.dumps(healthy))[0] == 0
+    loading = {
+        "sentence": "s.",
+        "instances": [
+            {"name": "vllm-coder", "role": "coder", "state": "starting", "sentence": "loading."}
+        ],
+    }
+    assert instances_report(json.dumps(loading))[0] == EXIT_LOADING
+    code, report = instances_report(json.dumps({"sentence": "s.", "instances": []}))
+    assert code == 1 and "No instance is planned for the coder role." in report
+    assert (
+        instances_report("")[0] == EXIT_UNKNOWN and instances_report("nonsense")[0] == EXIT_UNKNOWN
+    )
 
 
 def test_a_failed_build_stops_before_the_stack_starts(tmp_path: Path) -> None:

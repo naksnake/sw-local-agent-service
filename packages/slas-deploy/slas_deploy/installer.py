@@ -24,9 +24,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import stat
+import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, TextIO
@@ -170,6 +172,151 @@ def create_data_dirs(root: Path, directories: Sequence[str] = DATA_DIRECTORIES) 
     return created
 
 
+# --- the GPUs -------------------------------------------------------------------------------
+
+#: What the installer asks nvidia-smi: one line per GPU, `index, memory.total (MiB)`.
+NVIDIA_SMI_QUERY: Final[tuple[str, ...]] = (
+    "nvidia-smi",
+    "--query-gpu=index,memory.total",
+    "--format=csv,noheader,nounits",
+)
+#: The share of a GPU's memory the placement may plan against: the CUDA context, the
+#: activation workspace and fragmentation take the rest (288 GB → 270 GiB, the B300 default).
+VRAM_HEADROOM: Final = 0.94
+
+
+@dataclass(frozen=True)
+class GpuInventory:
+    """The GPUs nvidia-smi sees, as .env should record them for the model manager."""
+
+    ids: tuple[int, ...]
+    #: GiB per GPU the placement plans against: the smallest card, minus the headroom.
+    vram_gib: int | None
+    sentence: str
+
+    @property
+    def ids_text(self) -> str:
+        return ",".join(str(i) for i in self.ids)
+
+
+def parse_nvidia_smi(text: str) -> list[tuple[int, int]]:
+    """`0, 81559` lines → [(index, MiB)]; anything else on a line is skipped."""
+    gpus: list[tuple[int, int]] = []
+    for line in text.splitlines():
+        index, sep, memory = line.partition(",")
+        if not sep:
+            continue
+        try:
+            gpus.append((int(index.strip()), int(float(memory.strip()))))
+        except ValueError:
+            continue
+    return gpus
+
+
+def detect_gpus(run: Callable[[Sequence[str]], str | None]) -> GpuInventory:
+    """Ask nvidia-smi which GPUs this host has; `run` returns its stdout or None.
+
+    SLAS_GPU_IDS and SLAS_GPU_VRAM_GIB used to be guesses (four GPUs of 270 GiB, the reference
+    host); on any other host the model manager then placed instances on GPUs that do not exist
+    or planned against memory the cards do not have, and every vLLM instance failed.
+    """
+    output = run(NVIDIA_SMI_QUERY)
+    gpus = parse_nvidia_smi(output or "")
+    if not gpus:
+        return GpuInventory(
+            (),
+            None,
+            "nvidia-smi found no GPU (or is not installed), so SLAS_GPU_IDS and "
+            "SLAS_GPU_VRAM_GIB in .env stay as they are; the model manager needs them to "
+            "match the host before any model instance can start.",
+        )
+    ids = tuple(index for index, _ in gpus)
+    smallest_mib = min(memory for _, memory in gpus)
+    vram_gib = int(smallest_mib / 1024 * VRAM_HEADROOM)
+    count = len(gpus)
+    shown = f"{smallest_mib / 1024:.0f} GiB"
+    return GpuInventory(
+        ids,
+        vram_gib,
+        f"{count} GPU{'s' if count != 1 else ''} found ({shown} each"
+        + ("" if len({m for _, m in gpus}) == 1 else ", the smallest")
+        + f"): .env gets SLAS_GPU_IDS={','.join(str(i) for i in ids)} and "
+        f"SLAS_GPU_VRAM_GIB={vram_gib} (the memory the model manager plans against, with "
+        f"{int((1 - VRAM_HEADROOM) * 100)} % headroom); a value you set by hand is kept.",
+    )
+
+
+def run_nvidia_smi(argv: Sequence[str]) -> str | None:
+    executable = shutil.which(argv[0])
+    if executable is None:
+        return None
+    try:
+        completed = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            [executable, *argv[1:]],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return completed.stdout if completed.returncode == 0 else None
+
+
+# --- the model instances after the start -----------------------------------------------------
+
+EXIT_LOADING: Final = 2
+EXIT_UNKNOWN: Final = 3
+
+
+def instances_report(status_json: str, *, role: str = "coder") -> tuple[int, str]:
+    """Read the model manager's `GET /v1/status`; return (exit code, what to print).
+
+    0: an instance serves `role` and is healthy. EXIT_LOADING: not yet, and some instance is
+    still loading. EXIT_PROBLEMS: nothing is loading and the role has no healthy instance —
+    the sentences say why (a crash with its log tail, no room, no GPU). EXIT_UNKNOWN: the
+    status could not be read.
+    """
+    text = status_json.strip()
+    if not text:
+        return EXIT_UNKNOWN, (
+            "The model manager did not answer, so the state of the model instances is unknown. "
+            "Likely cause: it is still starting. What to do: in a minute open the Models page, "
+            "or run `docker compose -p slas logs model-manager` on the host."
+        )
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return EXIT_UNKNOWN, (
+            "The model manager answered something that is not its status. What to do: run "
+            "`docker compose -p slas logs model-manager` on the host."
+        )
+    rows = payload.get("instances") if isinstance(payload, dict) else None
+    rows = [r for r in rows or [] if isinstance(r, dict)]
+    lines = [
+        str(payload.get("sentence") or "").strip() or "The model manager reported no sentence."
+    ]
+    for row in rows:
+        name = str(row.get("name") or "?")
+        served = f" ({row['role']})" if row.get("role") else " (voter)"
+        state = str(row.get("state") or "?")
+        sentence = str(row.get("sentence") or "").strip().replace("\n", "\n      ")
+        lines.append(f"  {name}{served}: {state} — {sentence}")
+    coder = [r for r in rows if r.get("role") == role]
+    if any(r.get("state") == "healthy" for r in coder):
+        return EXIT_OK, "\n".join(lines)
+    if any(r.get("state") == "starting" for r in rows):
+        return EXIT_LOADING, "\n".join(lines)
+    if not coder:
+        lines.append(
+            f"No instance is planned for the {role} role. Likely cause: Models/models.yaml "
+            f"names no model for it, or the model does not fit this host's GPUs. What to do: "
+            "on the Models page give the role a model that fits, or add a smaller one."
+        )
+    return EXIT_PROBLEMS, "\n".join(lines)
+
+
 def merge_names(existing: str, wanted: str) -> str:
     """`SLAS_TLS_NAMES` as the union of what the file says and what this install needs, the
     file's order first, no duplicates: a name added by hand stays, and a name the installer
@@ -197,6 +344,8 @@ def write_env(
     public_host_chosen: bool = False,
     runtime_socket: str | None = None,
     agents: Sequence[str] = DEFAULT_AGENTS,
+    gpu_ids: str | None = None,
+    gpu_vram_gib: str | None = None,
 ) -> list[str]:
     """Fill the keys the profile needs, never touching a key a person already set.
 
@@ -245,6 +394,12 @@ def write_env(
     settable = {"SLAS_REGISTRY": registry}
     if runtime_socket:
         settable["SLAS_RUNTIME_SOCKET"] = runtime_socket
+    # The GPUs nvidia-smi found (`detect_gpus`): filled while the keys are at the template's
+    # guesses, kept once a person set them.
+    if gpu_ids:
+        settable["SLAS_GPU_IDS"] = gpu_ids
+    if gpu_vram_gib:
+        settable["SLAS_GPU_VRAM_GIB"] = gpu_vram_gib
     if profile == "prod":
         settable.update(PROD_KEYS)
     for key, value in settable.items():
@@ -416,6 +571,16 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
         help="host path of the container-runtime socket to record (empty keeps the default)",
     )
     env_cmd.add_argument("--agents", default="", help="comma list of agents to start (ADR-0017)")
+    env_cmd.add_argument("--gpu-ids", default="", help="SLAS_GPU_IDS as nvidia-smi found them")
+    env_cmd.add_argument("--gpu-vram-gib", default="", help="SLAS_GPU_VRAM_GIB from nvidia-smi")
+
+    gpus_cmd = commands.add_parser("gpus", help="what nvidia-smi sees, as JSON for .env")
+    gpus_cmd.add_argument("--json", action="store_true")
+
+    instances_cmd = commands.add_parser(
+        "instances", help="stdin: the model manager's GET /v1/status; exit 0 when the role is up"
+    )
+    instances_cmd.add_argument("--role", default="coder")
 
     sock = commands.add_parser("runtime-socket")
     sock.add_argument("--configured", default="", help="SLAS_RUNTIME_SOCKET as set today")
@@ -558,6 +723,26 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
         else:
             out.write(f"Every data directory under {root} exists.\n")
         return EXIT_OK
+    if args.command == "gpus":
+        inventory = detect_gpus(run_nvidia_smi)
+        if args.json:
+            out.write(
+                json.dumps(
+                    {
+                        "ids": inventory.ids_text,
+                        "vram_gib": "" if inventory.vram_gib is None else str(inventory.vram_gib),
+                        "sentence": inventory.sentence,
+                    }
+                )
+                + "\n"
+            )
+        else:
+            out.write(inventory.sentence + "\n")
+        return EXIT_OK
+    if args.command == "instances":
+        code, report = instances_report(sys.stdin.read(), role=args.role)
+        out.write(report + "\n")
+        return code
     if args.command == "unhealthy":
         ignored = [name.strip() for name in args.ignore.split(",") if name.strip()]
         out.write(" ".join(unhealthy_services(sys.stdin.read(), ignore=ignored)) + "\n")
@@ -577,6 +762,8 @@ def main(argv: Sequence[str] | None = None, *, stdout: TextIO | None = None) -> 
             public_host_chosen=args.public_host_chosen,
             runtime_socket=args.runtime_socket or None,
             agents=agents,
+            gpu_ids=args.gpu_ids or None,
+            gpu_vram_gib=args.gpu_vram_gib or None,
         )
         out.write(
             f"{args.target}: {'set ' + ', '.join(changed) if changed else 'nothing to change'}.\n"
