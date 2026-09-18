@@ -115,8 +115,8 @@ def vllm_spec(
     flags and none of them. `generate=False` keeps the older meaning "no generate flags" for
     callers that have no task to name.
     """
+    # The model is `vllm serve`'s positional argument; `--model` is deprecated there.
     argv = [
-        "--model",
         f"{models_dir}/{entry.path}",
         "--served-model-name",
         entry.id,

@@ -375,7 +375,17 @@ class Controller:
         statuses = {name: self._container_status(ref) for name, ref in refs.items()}
         # A container someone stopped by hand is planned as absent: the driver replaces it.
         visible = [ref for ref in known if statuses[ref.name] != "stopped"]
-        actions = self._respect_swaps(plan_reconcile(registry, visible), registry, refs)
+        # A container's command and image are fixed when it is created. One left from an
+        # older model manager (other vLLM flags, another image) is replaced, or the fix that
+        # the new manager carries never reaches it and it keeps crashing with the old flags.
+        outdated: dict[str, str] = {}
+        for candidate in visible:
+            reason = self._outdated_reason(registry, candidate)
+            if reason is not None:
+                outdated[candidate.name] = reason
+        actions = self._respect_swaps(
+            plan_reconcile(registry, visible, outdated=outdated), registry, refs
+        )
         desired = desired_instances(registry)
         starting = [a for a in actions if a.kind == "start"]
         touched = {a.name for a in actions if a.kind != "keep"}
@@ -394,7 +404,7 @@ class Controller:
 
         for action in actions:
             if action.kind == "stop":
-                ref = refs.pop(action.name, None)
+                ref = refs.pop(action.name) if action.name in refs else None
                 statuses.pop(action.name, None)
                 if ref is not None:
                     self.runtime.stop(ref)
@@ -458,6 +468,29 @@ class Controller:
             fresh[name] = self._observe(registry, ref, statuses.get(name))
         self._states = fresh
         return actions
+
+    def _outdated_reason(self, registry: Registry, ref: ContainerRef) -> str | None:
+        """Why a container serving the right model must still be replaced, or None."""
+        try:
+            entry = registry.model(ref.spec.model_id)
+        except KeyError:
+            return None  # the plan stops it for the model mismatch
+        _, role = self._kind_and_role(ref.name)
+        expected = vllm_spec(
+            entry,
+            name=ref.name,
+            gpu_ids=list(ref.spec.gpu_ids),
+            image=self.image,
+            task=task_for_role(role),
+        )
+        if ref.spec.image != self.image:
+            return f"runs {ref.spec.image}, but the image lock names {self.image}"
+        if list(ref.spec.argv) != list(expected.argv):
+            return (
+                "was created with other vLLM flags than the model manager now uses; a "
+                "container's command is fixed at creation"
+            )
+        return None
 
     def _respect_swaps(
         self, actions: list[Action], registry: Registry, refs: Mapping[str, ContainerRef]

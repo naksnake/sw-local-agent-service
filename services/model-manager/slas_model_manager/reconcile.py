@@ -6,6 +6,7 @@ reason each. The manager applies them through `ContainerRuntime`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal
 
 from pydantic import Field
@@ -30,15 +31,34 @@ def desired_instances(registry: Registry) -> dict[str, str]:
     return desired
 
 
-def plan_reconcile(registry: Registry, running: list[ContainerRef]) -> list[Action]:
+def plan_reconcile(
+    registry: Registry,
+    running: list[ContainerRef],
+    *,
+    outdated: Mapping[str, str] | None = None,
+) -> list[Action]:
+    """`outdated` names containers that serve the right model but were created with other
+    flags or another image than the manager would use now (a container's command is fixed
+    at creation): each is stopped and started again, with the given reason."""
     desired = desired_instances(registry)
     actual = {ref.name: ref for ref in running if ref.name.startswith("vllm-")}
+    stale = dict(outdated or {})
     actions: list[Action] = []
     for name, model_id in desired.items():
         ref = actual.get(name)
         if ref is None:
             actions.append(
                 Action(kind="start", name=name, model_id=model_id, reason="not running yet")
+            )
+        elif ref.spec.model_id == model_id and name in stale:
+            actions.append(Action(kind="stop", name=name, model_id=model_id, reason=stale[name]))
+            actions.append(
+                Action(
+                    kind="start",
+                    name=name,
+                    model_id=model_id,
+                    reason="started again as it should be",
+                )
             )
         elif ref.spec.model_id != model_id:
             actions.append(

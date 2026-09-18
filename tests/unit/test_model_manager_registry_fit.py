@@ -118,12 +118,9 @@ def test_vllm_spec_carries_the_mandatory_flags_and_airgap_env() -> None:
         spec.argv[spec.argv.index("--structured-outputs-config") + 1] == '{"backend": "xgrammar"}'
     )
     assert "--guided-decoding-backend" not in spec.argv
-    assert spec.argv[:4] == [
-        "--model",
-        "/data/Models/qwen2.5-coder-32b-awq",
-        "--served-model-name",
-        coder.id,
-    ]
+    # The model path is `vllm serve`'s positional argument (`--model` is deprecated there).
+    assert spec.argv[:3] == ["/data/Models/qwen2.5-coder-32b-awq", "--served-model-name", coder.id]
+    assert "--model" not in spec.argv
     assert (
         "--tensor-parallel-size" in spec.argv
         and spec.argv[spec.argv.index("--tensor-parallel-size") + 1] == "2"

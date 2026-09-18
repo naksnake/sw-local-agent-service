@@ -495,7 +495,7 @@ def test_quickstart_registry_starts_every_instance_and_publishes_when_healthy(
     assert triage["HostConfig"]["NetworkMode"] == NETWORK
     assert triage["Labels"]["slas.model"] == "deepseek-v4-flash"
     assert "CUDA_VISIBLE_DEVICES=0" in triage["Env"] and "VLLM_NO_USAGE_STATS=1" in triage["Env"]
-    assert triage["Cmd"][:2] == ["--model", "/data/Models/deepseek-v4-flash"]
+    assert triage["Cmd"][:1] == ["/data/Models/deepseek-v4-flash"], "positional for vllm serve"
     assert "--enable-prefix-caching" in triage["Cmd"]
     embed = h.api.bodies["vllm-embed"]["Cmd"]
     assert embed[-4:] == ["--runner", "pooling", "--convert", "embed"]
@@ -560,6 +560,55 @@ def test_reconcile_is_idempotent_and_survives_a_manager_restart(tmp_path: Path) 
     report = again.controller.reconcile()
     assert {a.kind for a in report.actions} == {"keep"}
     assert sorted(h.api.specs) == sorted(created)
+
+
+def test_a_container_created_with_old_flags_is_replaced_by_a_new_model_manager(
+    tmp_path: Path,
+) -> None:
+    """The first host: vLLM containers created by an earlier manager kept crashing with
+    `--guided-decoding-backend` after the manager itself was fixed, because a container's
+    command is fixed at creation and a matching name and model read as "keep". A fresh
+    manager now compares the flags (and the image) and replaces what differs."""
+    h = Harness(tmp_path)
+    h.prober.everything = True
+    h.controller.reconcile()
+    old_argv = [
+        "--model",
+        "/data/Models/qwen3.8-27b-fp8",
+        "--served-model-name",
+        "qwen3.8-27b-fp8",
+        "--max-model-len",
+        "131072",
+        "--tensor-parallel-size",
+        "1",
+        "--quantization",
+        "fp8",
+        "--enable-prefix-caching",
+        "--guided-decoding-backend",
+        "xgrammar",
+    ]
+    h.api.specs["vllm-coder"].labels["slas.argv"] = json.dumps(old_argv)
+    h.api.crash("vllm-coder", exit_code=2)
+    h.api.logs_text["vllm-coder"] = "vllm: error: unrecognized arguments: --guided-decoding-backend"
+
+    again = Harness(tmp_path, api=h.api)  # the manager restarted with the fixed image
+    again.prober.everything = True
+    report = again.controller.reconcile()
+    kinds = {(a.kind, a.name) for a in report.actions}
+    assert ("stop", "vllm-coder") in kinds and ("start", "vllm-coder") in kinds
+    stop = next(a for a in report.actions if a.kind == "stop" and a.name == "vllm-coder")
+    assert stop.reason.startswith("was created with other vLLM flags")
+    assert all(a.kind == "keep" for a in report.actions if a.name != "vllm-coder")
+    cmd = h.api.bodies["vllm-coder"]["Cmd"]
+    assert "--guided-decoding-backend" not in cmd and "--structured-outputs-config" in cmd
+    assert h.api.states["vllm-coder"] == "running"
+    assert again.rows()["vllm-coder"]["state"] == "healthy"
+
+    # An image change (a new lock) replaces every instance the same way.
+    newer = Harness(tmp_path, api=h.api, image=IMAGE.replace("v0.29.0", "v0.30.0"))
+    newer.prober.everything = True
+    replaced = {a.name for a in newer.controller.reconcile().actions if a.kind == "stop"}
+    assert "vllm-coder" in replaced and "vllm-embed" in replaced
 
 
 def test_crashed_container_is_reported_failed_with_its_last_forty_log_lines(
