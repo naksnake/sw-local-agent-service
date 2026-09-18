@@ -51,6 +51,8 @@ InstanceStatus = Literal["starting", "healthy", "unhealthy", "stopped", "failed"
 DEFAULT_MODELS_FILE: Final = "/data/Models/models.yaml"
 DEFAULT_RECONCILE_INTERVAL_S: Final = 30.0
 MODEL_MANAGE: Final = "model:manage"
+#: The role whose instance the Coding Agent needs first (CLAUDE.md §1.4, ADR-0017).
+CODER_ROLE: Final = "coder"
 
 
 class SystemClock:
@@ -96,8 +98,14 @@ class Controller:
         swap_runtime: ContainerRuntime | None = None,
         clock: Clock | None = None,
         ping: Callable[[], EngineInfo] | None = None,
+        coder_first: bool = True,
     ) -> None:
         self.runtime = runtime
+        #: Start the coder's instance alone; the others wait until it answers (or fails).
+        #: Seven instances reading 450 GB of weights at once kept the first host's coder
+        #: loading for a quarter of an hour; the Coding Agent needs that one instance first.
+        self.coder_first = coder_first
+        self._starting_since: dict[str, datetime] = {}
         self.registry_path = registry_path
         self.gateway = gateway
         self.gpu_ids = list(gpu_ids)
@@ -388,6 +396,16 @@ class Controller:
         )
         desired = desired_instances(registry)
         starting = [a for a in actions if a.kind == "start"]
+        deferred = self._deferred_behind_coder(starting, statuses, desired)
+        starting = [a for a in starting if a.name not in deferred]
+        coder_name = instance_name(CODER_ROLE)
+        # The report says what happened this tick: a deferred start is not a start.
+        actions = [
+            a.model_copy(update={"kind": "keep", "reason": f"waits until {coder_name} answers"})
+            if a.name in deferred
+            else a
+            for a in actions
+        ]
         touched = {a.name for a in actions if a.kind != "keep"}
         pinned = {
             name: (ref.spec.gpu_ids, self._needed(registry, ref.spec.model_id))
@@ -401,6 +419,25 @@ class Controller:
             pinned=pinned,
         )
         fresh: dict[str, InstanceState] = {}
+        for name in deferred:
+            model_id = desired[name]
+            entry = registry.model(model_id)
+            kind, role = self._kind_and_role(name)
+            fresh[name] = InstanceState(
+                name=name,
+                model_id=model_id,
+                display_name=entry.display_name,
+                kind=kind,
+                role=role,
+                state="starting",
+                sentence=(
+                    f"{entry.display_name} waits its turn: {coder_name} loads first so the "
+                    "Coding Agent's model is ready soonest; this instance starts when the coder "
+                    "answers."
+                ),
+                url=instance_url(name),
+                container=False,
+            )
 
         for action in actions:
             if action.kind == "stop":
@@ -468,6 +505,29 @@ class Controller:
             fresh[name] = self._observe(registry, ref, statuses.get(name))
         self._states = fresh
         return actions
+
+    def _deferred_behind_coder(
+        self,
+        starting: list[Action],
+        statuses: Mapping[str, InstanceStatus | None],
+        desired: Mapping[str, str],
+    ) -> set[str]:
+        """The starts that wait while the coder's instance loads (coder first, then the rest).
+
+        The gate holds while the coder is being started this tick or is running without
+        having answered yet; a coder that crashed, does not fit or is not in the registry
+        holds nobody back.
+        """
+        coder_name = instance_name(CODER_ROLE)
+        if not self.coder_first or coder_name not in desired:
+            return set()
+        coder_starts_now = any(a.name == coder_name for a in starting)
+        coder_loading = (
+            statuses.get(coder_name) == "starting" and coder_name not in self._ever_healthy
+        )
+        if not (coder_starts_now or coder_loading):
+            return set()
+        return {a.name for a in starting if a.name != coder_name}
 
     def _outdated_reason(self, registry: Registry, ref: ContainerRef) -> str | None:
         """Why a container serving the right model must still be replaced, or None."""
@@ -577,7 +637,7 @@ class Controller:
             )
         elif status == "starting":
             state = "starting"
-            sentence = f"{display} is loading its weights; not answering yet."
+            sentence = self._loading_sentence(name, display)
         elif status == "stopped":
             state = "stopped"
             sentence = f"{display} was stopped outside the platform; it is started again next tick."
@@ -586,6 +646,8 @@ class Controller:
             lines = self.runtime.last_log_lines(name)
             tail = "\n".join(lines) if lines else "the runtime kept no log lines"
             sentence = f"{display} crashed. Last log lines:\n{tail}"
+        if state != "starting":
+            self._starting_since.pop(name, None)
         return InstanceState(
             name=name,
             model_id=ref.spec.model_id,
@@ -597,6 +659,20 @@ class Controller:
             sentence=sentence,
             url=instance_url(name),
         )
+
+    def _loading_sentence(self, name: str, display: str) -> str:
+        """How long the instance has been loading and what vLLM last logged, so a person
+        watching the Models page (or the install) sees progress, not a frozen line."""
+        since = self._starting_since.setdefault(name, self.clock.now())
+        minutes = int((self.clock.now() - since).total_seconds() // 60)
+        text = f"{display} is loading its weights"
+        if minutes >= 1:
+            text += f" for {minutes} min"
+        text += "; not answering yet."
+        lines = [line for line in self.runtime.last_log_lines(name, 5) if line.strip()]
+        if lines:
+            text += f" Last log line: {lines[-1].strip()[:200]}"
+        return text
 
     @staticmethod
     def _entry_for(registry: Registry, model_id: str) -> ModelEntry | None:

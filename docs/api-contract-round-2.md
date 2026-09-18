@@ -104,7 +104,11 @@ Owns every `vllm-*` container. Reads `${SLAS_DATA_ROOT}/Models/models.yaml`, com
 desired instances (`reconcile.desired_instances`), places them on GPUs, starts them through
 the runtime socket (`slas_container.ContainerApi`), waits for `GET /health` on each, then
 publishes the table to the gateway (`PUT /v1/instances`). The loop runs in a thread every
-`SLAS_RECONCILE_INTERVAL_S` (default 30) and on `POST /v1/reconcile`.
+`SLAS_RECONCILE_INTERVAL_S` (default 30) and on `POST /v1/reconcile`. With
+`SLAS_START_CODER_FIRST=1` (the default) the coder's instance is started alone and every other
+start waits, reported `starting` with "waits its turn", until the coder answers its health
+check or fails; a `starting` instance's sentence carries how long it has loaded and vLLM's
+last log line.
 
 | Route | Body → Answer |
 |---|---|

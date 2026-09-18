@@ -379,6 +379,9 @@ def base_compose() -> dict[str, Any]:
             "SLAS_VLLM_IMAGE": third_party("vllm"),
             "SLAS_VLLM_SHM": "16g",
             "SLAS_RECONCILE_INTERVAL_S": "30",
+            # The coder's instance loads alone, the rest once it answers (the Coding Agent
+            # needs that one first); 0 starts everything at once.
+            "SLAS_START_CODER_FIRST": "${SLAS_START_CODER_FIRST:-1}",
             "VLLM_NO_USAGE_STATS": "1",
             **service_urls(*URL_READERS["model-manager"]),
         },

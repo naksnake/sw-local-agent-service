@@ -846,6 +846,11 @@ while :; do
   # model manager healthy, so a status it does not give (3) is reported, not waited for.
   if [[ $instances_rc -ne 2 ]]; then break; fi
   if [[ $waited -ge $MODEL_WAIT_S ]]; then break; fi
+  # Once a minute, the coder's line: how long it has loaded and what vLLM last logged.
+  if [[ $MODEL_POLL_S -gt 0 && $waited -gt 0 && $(( waited % 60 )) -eq 0 ]]; then
+    coder_line="$(printf '%s\n' "$instances_report" | grep -m1 'vllm-coder' || true)"
+    echo "  after ${waited} s:${coder_line:-  no coder instance is listed yet}"
+  fi
   sleep "$MODEL_POLL_S"
   waited=$((waited + MODEL_POLL_S))
 done
@@ -855,8 +860,8 @@ case $instances_rc in
     echo "The coding model is ready; start a coding task from the Coding page." ;;
   2)
     echo "The model instances are still loading after $MODEL_WAIT_S s."
-    echo "Likely cause: large weights on a slow disk, or several instances loading at once."
-    echo "What to do: watch the Models page; a coding task can start as soon as the coder row says healthy." ;;
+    echo "Likely cause: large weights on a slow disk; the coder loads alone first (SLAS_START_CODER_FIRST=1), so nothing else competes for the disk."
+    echo "What to do: watch the Models page, or \`docker logs -f vllm-coder\` for vLLM's own progress; a coding task can start as soon as the coder row says healthy." ;;
   3)
     : ;;  # the report already says the model manager did not answer and how to look
   *)

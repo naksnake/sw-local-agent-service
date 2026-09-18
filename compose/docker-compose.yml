@@ -343,6 +343,7 @@ services:
       SLAS_VLLM_IMAGE: "${SLAS_REGISTRY}/vllm/vllm-openai:v0.29.0-x86_64-cu129"
       SLAS_VLLM_SHM: 16g
       SLAS_RECONCILE_INTERVAL_S: "30"
+      SLAS_START_CODER_FIRST: "${SLAS_START_CODER_FIRST:-1}"
       VLLM_NO_USAGE_STATS: "1"
       SLAS_GATEWAY_URL: http://llm-gateway:8000
     logging:

@@ -78,6 +78,7 @@ def build_controller(
         smoke=smoke if smoke is not None else HttpSmokeTester(),
         clock=clock,
         ping=runtime_api.ping,
+        coder_first=settings.start_coder_first,
     )
     return controller, runtime_api
 

@@ -60,6 +60,9 @@ class Settings:
     vllm_shm_bytes: int = DEFAULT_SHM_BYTES
     reconcile_interval_s: float = DEFAULT_RECONCILE_INTERVAL_S
     model_start_timeout_s: float = DEFAULT_MODEL_START_TIMEOUT_S
+    #: Start the coder's instance alone and the rest once it answers, so the Coding Agent's
+    #: model is not slowed by six other instances reading their weights at the same time.
+    start_coder_first: bool = True
     bind: str = DEFAULT_BIND
 
     @classmethod
@@ -89,5 +92,7 @@ class Settings:
             model_start_timeout_s=number(
                 "SLAS_MODEL_START_TIMEOUT_S", DEFAULT_MODEL_START_TIMEOUT_S
             ),
+            start_coder_first=text("SLAS_START_CODER_FIRST", "1").lower()
+            not in ("0", "false", "no"),
             bind=text("SLAS_BIND", DEFAULT_BIND),
         )

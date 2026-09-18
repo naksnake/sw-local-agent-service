@@ -131,6 +131,7 @@ class Harness:
         image: str = IMAGE,
         registry: dict[str, object] | None = None,
         smoke: Any = None,
+        coder_first: bool = False,
     ) -> None:
         self.models_file = tmp_path / "Models" / "models.yaml"
         self.models_file.parent.mkdir(parents=True, exist_ok=True)
@@ -143,6 +144,7 @@ class Harness:
             vllm_image=image,
             host_models_dir=HOST_MODELS,
             inference_network=NETWORK,
+            start_coder_first=coder_first,
         )
         self.api = api if api is not None else FakeContainerApi(engine)
         self.prober = FakeProber()
@@ -609,6 +611,82 @@ def test_a_container_created_with_old_flags_is_replaced_by_a_new_model_manager(
     newer.prober.everything = True
     replaced = {a.name for a in newer.controller.reconcile().actions if a.kind == "stop"}
     assert "vllm-coder" in replaced and "vllm-embed" in replaced
+
+
+def test_the_coder_loads_first_and_the_other_instances_wait_until_it_answers(
+    tmp_path: Path,
+) -> None:
+    """The first host: seven vLLM instances reading their weights at once kept the coder
+    loading past the install's 15 min wait. With SLAS_START_CODER_FIRST the manager starts
+    only vllm-coder, reports the others as waiting, and starts them once the coder answers."""
+    h = Harness(tmp_path, coder_first=True)
+    report = h.controller.reconcile()
+    assert sorted(h.api.specs) == ["vllm-coder"]
+    assert {a.name for a in report.actions if a.kind == "start"} == {"vllm-coder"}
+    waiting = next(a for a in report.actions if a.name == "vllm-planner")
+    assert waiting.kind == "keep" and waiting.reason == "waits until vllm-coder answers"
+    rows = h.rows()
+    assert rows["vllm-coder"]["state"] == "starting"
+    assert rows["vllm-planner"]["state"] == "starting"
+    assert rows["vllm-planner"]["sentence"].startswith(
+        "Qwen3.8-27B waits its turn: vllm-coder loads first"
+    )
+    assert len(rows) == 7, "every desired instance has a row while the coder loads"
+    published = {r["name"] for r in h.gateway.bodies[-1]["instances"]}
+    assert published == {"vllm-coder"}, "only containers are published to the gateway"
+
+    # Still loading next tick: nothing else starts.
+    h.controller.reconcile()
+    assert sorted(h.api.specs) == ["vllm-coder"]
+
+    # The coder answers: the rest start on the same tick.
+    h.prober.healthy = {"vllm-coder"}
+    report = h.controller.reconcile()
+    assert len(h.api.specs) == 7
+    assert {a.name for a in report.actions if a.kind == "start"} == set(h.api.specs) - {
+        "vllm-coder"
+    }
+    assert h.rows()["vllm-coder"]["state"] == "healthy"
+    assert h.rows()["vllm-planner"]["state"] == "starting"
+
+    # A crashed coder holds nobody back: the gate is for a loading coder only.
+    crashed = Harness(tmp_path, coder_first=True)
+    crashed.controller.reconcile()
+    crashed.api.crash("vllm-coder", exit_code=1)
+    crashed.controller.reconcile()
+    assert len(crashed.api.specs) == 7
+
+    # The default harness (SLAS_START_CODER_FIRST=0) starts everything at once.
+    at_once = Harness(tmp_path)
+    at_once.controller.reconcile()
+    assert len(at_once.api.specs) == 7
+
+
+def test_a_loading_instance_says_for_how_long_and_what_vllm_last_logged(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    h.controller.reconcile()
+    row = h.rows()["vllm-coder"]
+    assert row["sentence"] == "Qwen3.8-27B is loading its weights; not answering yet."
+
+    h.clock._now += timedelta(minutes=7, seconds=30)  # the test owns the clock
+    h.api.logs_text["vllm-coder"] = (
+        "INFO Starting to load model /data/Models/qwen3.8-27b-fp8...\n"
+        "INFO Loading weights took 310.2 seconds\n"
+        "INFO Capturing CUDA graphs (mixed prefill-decode, PIECEWISE): 40%\n\n"
+    )
+    h.controller.reconcile()
+    row = h.rows()["vllm-coder"]
+    assert row["state"] == "starting"
+    assert row["sentence"] == (
+        "Qwen3.8-27B is loading its weights for 7 min; not answering yet. "
+        "Last log line: INFO Capturing CUDA graphs (mixed prefill-decode, PIECEWISE): 40%"
+    )
+
+    # Once healthy the timer is forgotten; a later restart counts from zero again.
+    h.prober.healthy = {"vllm-coder"}
+    h.controller.reconcile()
+    assert h.rows()["vllm-coder"]["state"] == "healthy"
+    assert "vllm-coder" not in h.controller._starting_since
 
 
 def test_crashed_container_is_reported_failed_with_its_last_forty_log_lines(
