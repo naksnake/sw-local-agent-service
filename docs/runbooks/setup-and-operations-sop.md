@@ -68,7 +68,7 @@ Files to carry in: the release bundle `slas-bundle-<version>.tgz`, `config/cosig
 | A1 | `git clone` the repository; `uv sync --frozen && uv run pytest` | every test passes |
 | A2 | `config/model-sources.txt` ships filled in, every line pinned to a commit; change a line only to pick another build | every line names a repository and a commit |
 | A3 | `scripts/fetch_models.py fetch --sources config/model-sources.txt --profile prod --dry-run --dest ./models`, then the same without `--dry-run`; `export HF_TOKEN=…` only for gated repositories | "Total: 7 models, …" and the free disk, then one sentence per model and `models/manifest.json` |
-| A4 | Rerun A3 after any interruption; it resumes and keeps complete files | "Done: N models" |
+| A4 | Rerun A3 after any interruption; it resumes a cut file and keeps complete ones. A model that finished earlier is recognised from `manifest.json` and its checksum file and is neither listed on the hub nor hashed again | "Done: N models", or "already complete … nothing to download" |
 | A5 | Waits: `scripts/lock-images.sh --sign` then `scripts/build-bundle.sh --profile prod`; commit the filled lock | `compose/images.lock.*` has no null digest |
 | A6 | Copy `models/`, the bundle and `config/cosign.pub` to the sneakernet disk | checksums recorded |
 

@@ -62,7 +62,7 @@ NVIDIA runtime 是否有回應；NVIDIA container toolkit；cgroups v2；`/AI/Ag
 | A1 | `git clone` 儲存庫；`uv sync --frozen && uv run pytest` | 所有測試通過 |
 | A2 | `config/model-sources.txt` 已填妥，每一行都釘選至一個提交；只有要改用其他版本時才修改該行 | 每一行都寫有儲存庫與提交 |
 | A3 | 先執行 `scripts/fetch_models.py fetch --sources config/model-sources.txt --profile prod --dry-run --dest ./models`，再去掉 `--dry-run` 執行一次；僅在受限儲存庫時 `export HF_TOKEN=…` | 先顯示「Total: 7 models, …」與可用磁碟空間，之後每個模型一句話，並產生 `models/manifest.json` |
-| A4 | 任何中斷後重新執行 A3；會續傳並保留已完成的檔案 | 顯示「Done: N models」 |
+| A4 | 任何中斷後重新執行 A3；會續傳被切斷的檔案並保留已完成的檔案。先前已完成的模型會依 `manifest.json` 與校驗檔辨識，不再向 hub 列舉也不再重算雜湊 | 顯示「Done: N models」，或「already complete … nothing to download」 |
 | A5 | 待決：`scripts/lock-images.sh --sign`，再 `scripts/build-bundle.sh --profile prod`；提交填妥的鎖定檔 | `compose/images.lock.*` 沒有 null 摘要 |
 | A6 | 將 `models/`、安裝包與 `config/cosign.pub` 複製到攜帶磁碟 | 已記錄校驗和 |
 

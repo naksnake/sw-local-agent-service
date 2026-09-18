@@ -456,6 +456,9 @@ class FetchedModel:
     files: dict[str, str] = field(default_factory=dict)  # relative path → sha256
     bytes: int = 0
     skipped: list[str] = field(default_factory=list)
+    sizes: dict[str, int] = field(default_factory=dict)  # relative path → bytes on disk
+    #: True when the model was found complete on disk and nothing was downloaded.
+    kept: bool = False
 
     def sentence(self) -> str:
         skipped = f"; {len(self.skipped)} redundant files skipped" if self.skipped else ""
@@ -463,6 +466,59 @@ class FetchedModel:
             f"{self.path}: {len(self.files)} files, {human(self.bytes)}, from {self.repo} at "
             f"{self.commit[:12]}{skipped}."
         )
+
+
+_HEX = re.compile(r"^[0-9a-f]{7,64}$")
+
+
+def already_here(dest: Path, source: Source) -> FetchedModel | None:
+    """The model as an earlier run left it, when nothing needs the hub: the manifest names the
+    same pinned commit, the checksum file is there, and every file it lists is on disk with the
+    size the manifest recorded. A revision that is a branch name never takes this path (it can
+    move); a missing or shorter file falls through to the full check, which hashes and resumes.
+    """
+    if not _HEX.match(source.revision.lower()):
+        return None
+    entry = next(
+        (
+            m
+            for m in read_manifest(dest / "manifest.json").get("models", [])
+            if m.get("path") == source.path
+        ),
+        None,
+    )
+    if entry is None:
+        return None
+    commit = str(entry.get("commit", "")).lower()
+    if not commit.startswith(source.revision.lower()):
+        return None
+    sums_path = dest / source.path / "SHA256SUMS"
+    if not sums_path.is_file():
+        return None
+    sums = read_sums(sums_path)
+    if not sums:
+        return None
+    recorded = entry.get("sizes") if isinstance(entry.get("sizes"), dict) else {}
+    sizes: dict[str, int] = {}
+    for name in sums:
+        target = dest / source.path / name
+        if not target.is_file():
+            return None
+        size = target.stat().st_size
+        expected = recorded.get(name)
+        if (expected is not None and size != int(expected)) or size == 0:
+            return None
+        sizes[name] = size
+    return FetchedModel(
+        path=source.path,
+        repo=str(entry.get("repo", source.repo)),
+        revision=source.revision,
+        commit=commit,
+        files=sums,
+        bytes=sum(sizes.values()),
+        sizes=sizes,
+        kept=True,
+    )
 
 
 @dataclass
@@ -605,7 +661,8 @@ def fetch_planned(hub: Hub, plan: ModelPlan, dest: Path, *, log: TextIO) -> Fetc
                     "anew.",
                 )
         fetched.files[remote.path] = actual
-        fetched.bytes += target.stat().st_size
+        fetched.sizes[remote.path] = target.stat().st_size
+        fetched.bytes += fetched.sizes[remote.path]
     write_sums(target_dir, fetched.files)
     return fetched
 
@@ -645,6 +702,7 @@ def write_manifest(dest: Path, models: list[FetchedModel], *, now: datetime) -> 
             "commit": model.commit,
             "files": len(model.files),
             "bytes": model.bytes,
+            "sizes": dict(sorted(model.sizes.items())),
             "fetched_at": now.isoformat(),
         }
     payload = {"generated_at": now.isoformat(), "models": [entries[k] for k in sorted(entries)]}
@@ -803,11 +861,31 @@ def main(
         )
         if opener is not None:
             hub.opener = opener
+        # A model an earlier run completed is kept without asking the hub or hashing a byte:
+        # the manifest names the pinned commit and every file is there at its recorded size.
+        kept: list[FetchedModel] = []
+        todo: list[Source] = []
+        for source in sources:
+            done = already_here(dest, source)
+            if done is None:
+                todo.append(source)
+                continue
+            kept.append(done)
+            out.write(
+                f"{source.path}: already complete at {dest / source.path} ({len(done.files)} "
+                f"files, {human(done.bytes)}); nothing to download.\n"
+            )
+        if not todo:
+            if len(kept) == 1:
+                out.write("The model is already here; nothing was downloaded.\n")
+            else:
+                out.write(f"All {len(kept)} models are already here; nothing was downloaded.\n")
+            return 0
         # Say what will happen before it happens (CLAUDE.md §9): list and size everything,
         # check the disk, and only then download.
         plans = [
             plan_model(hub, source, dest, include=args.include, exclude=args.exclude, log=out)
-            for source in sources
+            for source in todo
         ]
         for plan in plans:
             out.write(plan.sentence() + "\n")
@@ -821,9 +899,10 @@ def main(
             out.write(model.sentence() + "\n")
         total = sum(m.bytes for m in fetched)
         noun = "model" if len(fetched) == 1 else "models"
+        already = f" {len(kept)} already here, untouched." if kept else ""
         out.write(
             f"Done: {len(fetched)} {noun}, {human(total)}, checksums in each SHA256SUMS and "
-            f"{manifest}.\n"
+            f"{manifest}.{already}\n"
             f"Next: on the platform host run `./install.sh --models {dest}` (carry {dest}/ "
             "there first if this is not that host); the installer verifies every checksum "
             "and puts the weights under Models/.\n"

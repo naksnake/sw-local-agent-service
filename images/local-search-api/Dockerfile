@@ -7,8 +7,11 @@
 FROM ghcr.io/astral-sh/uv@sha256:e4644cb5bd56fdc2c5ea3ee0525d9d21eed1603bccd6a21f887a938be7e85be1 AS uv
 FROM docker.io/library/python@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254 AS build
 COPY --from=uv /uv /usr/local/bin/uv
+# No bytecode compile in the build: uv's compile step opens every file in the venv at
+# once and fails with "No file descriptors available" under the 1024-descriptor limit
+# Docker 25+ gives a build step. Python compiles on first import instead (a second).
 ENV UV_PROJECT_ENVIRONMENT=/opt/slas/.venv UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy \
-    UV_COMPILE_BYTECODE=1 UV_NO_PROGRESS=1 UV_CACHE_DIR=/tmp/uv-cache
+    UV_COMPILE_BYTECODE=0 UV_NO_PROGRESS=1 UV_CACHE_DIR=/tmp/uv-cache
 WORKDIR /opt/slas
 # Resolving one workspace member needs every member's pyproject: packages/, services/ and
 # apps/api. The lock pins the versions; --no-editable makes the venv self-contained.

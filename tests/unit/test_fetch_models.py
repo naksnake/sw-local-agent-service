@@ -106,7 +106,9 @@ class FakeHub:
                 if self.path.startswith("/api/models/demo/missing/"):
                     self._send(404, b"{}")
                     return
-                prefix = "/demo/tiny/resolve/main/"
+                # Any revision resolves: the pinned commit and the branch serve the same files.
+                revision = re.match(r"^/demo/tiny/resolve/[^/]+/", self.path)
+                prefix = revision.group(0) if revision else "/demo/tiny/resolve/main/"
                 if self.path.startswith(prefix):
                     name = self.path[len(prefix) :]
                     data: bytes | None = outer.files.get(name)
@@ -541,3 +543,54 @@ def test_a_flaky_link_is_retried_and_an_http_answer_is_not(hub: FakeHub, tmp_pat
         fm.plan_model(made, fm.Source.parse("gone=demo/missing"), tmp_path, log=out)
     assert "The hub has nothing at" in missing.value.what_happened
     assert pauses == [], "a 404 is an answer, not a flaky link"
+
+
+def test_a_model_fetched_earlier_is_kept_without_asking_the_hub_or_hashing(
+    hub: FakeHub, tmp_path: Path
+) -> None:
+    """A second run finds the manifest, the checksum file and every file at its recorded size,
+    says so, and never opens a connection (the weights are far too large to fetch twice)."""
+    dest = tmp_path / "models"
+    code, out = run("fetch", "--model", "tiny=demo/tiny@abc123def4567890", "--dest", str(dest))
+    assert code == 0, out
+    manifest = json.loads((dest / "manifest.json").read_text())
+    (entry,) = manifest["models"]
+    assert entry["sizes"]["model.safetensors"] == len(WEIGHTS)
+
+    hub.requests.clear()
+    code, out = run("fetch", "--model", "tiny=demo/tiny@abc123def4567890", "--dest", str(dest))
+    assert code == 0, out
+    assert (
+        f"tiny: already complete at {dest / 'tiny'} (3 files, 1.0 MiB); nothing to download." in out
+    )
+    assert "The model is already here; nothing was downloaded." in out
+    assert hub.requests == [], "no listing, no download"
+    assert "Total:" not in out and "fetched " not in out
+
+    # A branch name can move: the fast path is only for a pinned commit.
+    code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))
+    assert code == 0 and hub.requests, "main is listed on the hub again"
+    assert "kept    model.safetensors (already complete)" in out
+
+    # A file that shrank breaks the fast path and the full check fetches it again.
+    (dest / "tiny" / "config.json").write_bytes(CONFIG[:3])
+    hub.requests.clear()
+    code, out = run("fetch", "--model", "tiny=demo/tiny@abc123def4567890", "--dest", str(dest))
+    assert code == 0 and "already complete at" not in out
+    assert any(path.endswith("/config.json") for path, _ in hub.requests)
+    assert (dest / "tiny" / "config.json").read_bytes() == CONFIG
+
+    # Two models, one already here: the done line counts what moved and what stayed.
+    hub.requests.clear()
+    code, out = run(
+        "fetch",
+        "--model",
+        "tiny=demo/tiny@abc123def4567890",
+        "--model",
+        "twin=demo/tiny@abc123def4567890",
+        "--dest",
+        str(dest),
+    )
+    assert code == 0, out
+    assert "tiny: already complete at" in out
+    assert "Done: 1 model, 1.0 MiB," in out and "1 already here, untouched." in out
