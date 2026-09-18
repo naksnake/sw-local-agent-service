@@ -6,7 +6,10 @@
 #                    provided: /data/tls/server.crt and /data/tls/server.key (cert.pem and
 #                    key.pem are accepted too).
 #   SLAS_TLS_NAMES   the names the certificate is for, comma-separated (install.sh writes
-#                    127.0.0.1,localhost,<hostname>); each becomes a Caddy site address.
+#                    127.0.0.1,localhost,<hostname>,<the host's IP addresses>); each becomes a
+#                    Caddy site address.
+#   SLAS_PUBLIC_HOST the sign-in name; a browser that opens an IP address sends no SNI, and
+#                    Caddy then serves this name's certificate (default_sni) instead of none.
 #   SLAS_AUTH_UPSTREAM  prod only: Keycloak behind /auth (http://keycloak:8080).
 #
 # Routes: /healthz answered here · /api/* → api:8000 · /grafana/* → grafana:3000 (the prefix
@@ -43,6 +46,17 @@ case "$mode" in
       "Set SLAS_TLS_MODE to one of them in .env, then run docker compose up -d again." ;;
 esac
 
+# Connections to an IP address carry no server name; without a default Caddy would find no
+# certificate for them and the browser would show a bare TLS error. The sign-in name's
+# certificate is the default when that name is one the certificate is issued for.
+default_sni=""
+public_host="${SLAS_PUBLIC_HOST:-}"
+if [ -n "$public_host" ]; then
+  for name in $names; do
+    if [ "$name" = "$public_host" ]; then default_sni="	default_sni $public_host"; fi
+  done
+fi
+
 auth_block=""
 if [ -n "${SLAS_AUTH_UPSTREAM:-}" ]; then
   auth_block="
@@ -55,7 +69,8 @@ cat > "$caddyfile" <<EOF
 {
 	admin off
 	skip_install_trust
-	auto_https disable_redirects
+	auto_https disable_redirects${default_sni:+
+$default_sni}
 	storage file_system {
 		root /data/tls/caddy
 	}
@@ -80,5 +95,5 @@ $names {
 }
 EOF
 
-echo "edge: TLS $mode for $names; /api → api:8000, /grafana → grafana:3000, everything else → webui:8000."
+echo "edge: TLS $mode for $names${default_sni:+ (default: $public_host)}; /api → api:8000, /grafana → grafana:3000, everything else → webui:8000."
 exec caddy run --config "$caddyfile" --adapter caddyfile

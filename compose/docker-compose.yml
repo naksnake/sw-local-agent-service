@@ -62,6 +62,7 @@ services:
       HF_HUB_DISABLE_TELEMETRY: "1"
       SLAS_TLS_MODE: "${SLAS_TLS_MODE}"
       SLAS_TLS_NAMES: "${SLAS_TLS_NAMES}"
+      SLAS_PUBLIC_HOST: "${SLAS_PUBLIC_HOST}"
     logging:
       driver: json-file
       options:

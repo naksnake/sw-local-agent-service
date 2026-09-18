@@ -40,8 +40,10 @@ MODEL_SOURCES="${SLAS_MODEL_SOURCES:-$SCRIPT_DIR/config/model-sources.txt}"
 PODMAN_SOCKET="${SLAS_PODMAN_SOCKET:-/run/podman/podman.sock}"
 DOCKER_SOCKET="${SLAS_DOCKER_SOCKET:-/var/run/docker.sock}"
 VERSION="$(grep -m1 '^version' "$SCRIPT_DIR/pyproject.toml" | sed 's/.*"\(.*\)"/\1/')"
-# The name browsers use for the sign-in URL; --public-host or SLAS_PUBLIC_HOST names it, else
-# the host's own name. Every name and address the edge answers to goes in SLAS_TLS_NAMES.
+# The name browsers use for the sign-in URL. --public-host or SLAS_PUBLIC_HOST pins it; else
+# it is this host's IP address on the default route (the DHCP address other machines reach,
+# refreshed on every run), or the host's name when there is no such address. Every name and
+# address the edge answers to goes in SLAS_TLS_NAMES.
 PUBLIC_HOST="${SLAS_PUBLIC_HOST:-}"
 PUBLIC_HOST_CHOSEN=0
 [[ -n "$PUBLIC_HOST" ]] && PUBLIC_HOST_CHOSEN=1
@@ -64,9 +66,11 @@ step passed.
                        Validation and Factory bring their executor containers and their pages
                        (ADR-0017). Also read from \$SLAS_AGENTS and the existing .env.
   --data-root PATH     Where the platform keeps its data. Default: \$SLAS_DATA_ROOT or /AI/Agent.
-  --public-host NAME   The name or IP address browsers use for the sign-in URL (SLAS_PUBLIC_HOST).
-                       Default: this host's name. The edge answers to it, to localhost and to every
-                       IP address of this host (SLAS_TLS_NAMES), so https://<ip> works too.
+  --public-host NAME   Pin the name or IP address browsers use for the sign-in URL
+                       (SLAS_PUBLIC_HOST). Default: this host's IP address on the default route,
+                       refreshed on every run so a DHCP change is followed; the host's name when
+                       there is none. The edge answers to it, to the host's name, to localhost
+                       and to every IP address of this host (SLAS_TLS_NAMES).
   --bundle DIR         Install from an offline bundle (its manifest is verified with cosign in prod).
                        Default: ./bundle when it exists.
   --registry HOST      Pull from a registry inside the perimeter (Harbor); every image is
@@ -574,7 +578,19 @@ host_ips() {
   printf '%s\n' "$found" | awk 'NF && !seen[$0]++'
 }
 HOST_IPS="$(host_ips | paste -sd, -)"
-if [[ -z "$PUBLIC_HOST" ]]; then PUBLIC_HOST="$HOST_NAME"; fi
+# The address on the default route: what another machine on the network reaches this host at.
+primary_ip() {
+  local via=""
+  if command -v ip >/dev/null 2>&1; then
+    via="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+  fi
+  if [[ -z "$via" ]]; then via="${HOST_IPS%%,*}"; fi
+  printf '%s\n' "$via"
+}
+if [[ -z "$PUBLIC_HOST" ]]; then
+  PUBLIC_HOST="$(primary_ip)"
+  [[ -z "$PUBLIC_HOST" ]] && PUBLIC_HOST="$HOST_NAME"
+fi
 TLS_NAMES="127.0.0.1,localhost,$HOST_NAME${HOST_IPS:+,$HOST_IPS},$PUBLIC_HOST"
 ENV_FILE="$DATA_ROOT/.env"
 
@@ -651,7 +667,7 @@ else
     --tls-names "$TLS_NAMES" --public-host "$PUBLIC_HOST" --runtime-socket "$RUNTIME_SOCKET" --agents "$AGENTS")
   if [[ $PUBLIC_HOST_CHOSEN -eq 1 ]]; then env_args+=(--public-host-chosen); fi
   "$PYTHON" -m slas_deploy.installer write-env "${env_args[@]}"
-  # The sign-in URL follows the file: a name set there by hand or on an earlier run stays.
+  # The sign-in URL follows the file: a name pinned there (--public-host) stays.
   env_public_host="$(sed -n 's/^SLAS_PUBLIC_HOST=//p' "$ENV_FILE" | tail -n 1 | tr -d '"')"
   [[ -n "$env_public_host" ]] && PUBLIC_HOST="$env_public_host"
   "$PYTHON" -m slas_deploy.installer secrets --dir "$DATA_ROOT/secrets" --profile "$PROFILE"

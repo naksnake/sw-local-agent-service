@@ -251,7 +251,13 @@ def base_compose() -> dict[str, Any]:
         first_party("edge"),
         networks=["slas-edge", "slas-frontend"],
         ports=["${SLAS_HTTPS_PORT}:443"],
-        environment={"SLAS_TLS_MODE": "${SLAS_TLS_MODE}", "SLAS_TLS_NAMES": "${SLAS_TLS_NAMES}"},
+        environment={
+            "SLAS_TLS_MODE": "${SLAS_TLS_MODE}",
+            "SLAS_TLS_NAMES": "${SLAS_TLS_NAMES}",
+            # The sign-in name's certificate is Caddy's default for a browser that opens an IP
+            # address (no server name in the handshake).
+            "SLAS_PUBLIC_HOST": "${SLAS_PUBLIC_HOST}",
+        },
         volumes=[f"{DATA}/tls:/data/tls"],
         cap_add=["NET_BIND_SERVICE"],
         healthcheck=_health("slas-health", "https://127.0.0.1/healthz", "--insecure-local"),

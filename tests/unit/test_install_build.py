@@ -947,11 +947,11 @@ def test_write_env_records_the_runtime_socket_only_while_it_is_at_the_default(
     assert write(None) == []
 
 
-def test_write_env_merges_tls_names_and_replaces_the_public_host_only_when_chosen(
+def test_write_env_merges_tls_names_and_follows_the_address_until_the_public_host_is_pinned(
     tmp_path: Path,
 ) -> None:
-    """A browser may use the host's IP: the edge's names can only grow, and the sign-in name
-    changes only when the person names it (--public-host)."""
+    """Other machines reach the host by its DHCP address: the edge's names can only grow, and
+    the sign-in name follows the installer's address on every run until --public-host pins it."""
     from slas_deploy.installer import merge_names, write_env
     from slas_schemas.envfile import read_env
 
@@ -973,24 +973,45 @@ def test_write_env_merges_tls_names_and_replaces_the_public_host_only_when_chose
     # First install: the host's name only (as installs before the host's addresses were added).
     changed = write("127.0.0.1,localhost,rex", "rex")
     assert {"SLAS_TLS_NAMES", "SLAS_PUBLIC_HOST"} <= set(changed)
+    assert "SLAS_PUBLIC_HOST_PINNED" not in changed
     env = read_env(target)
-    assert (
-        env.get("SLAS_TLS_NAMES") == "127.0.0.1,localhost,rex"
-        and env.get("SLAS_PUBLIC_HOST") == "rex"
-    )
-    # A person adds a name by hand; the next run keeps it and adds the address it learnt.
+    assert env.get("SLAS_TLS_NAMES") == "127.0.0.1,localhost,rex"
+    assert env.get("SLAS_PUBLIC_HOST") == "rex"
+    # A person adds a name by hand; the next run keeps it, adds the address it learnt, and
+    # makes that address the sign-in name (the host's name resolves nowhere else on the LAN).
     env.set("SLAS_TLS_NAMES", "127.0.0.1,localhost,rex,lab.example")
     target.write_text(env.render())
-    assert write("127.0.0.1,localhost,rex,10.1.2.3,rex", "rex") == ["SLAS_TLS_NAMES"]
+    assert write("127.0.0.1,localhost,rex,10.1.2.3,rex", "10.1.2.3") == [
+        "SLAS_TLS_NAMES",
+        "SLAS_PUBLIC_HOST",
+    ]
     env = read_env(target)
     assert env.get("SLAS_TLS_NAMES") == "127.0.0.1,localhost,rex,lab.example,10.1.2.3"
-    assert env.get("SLAS_PUBLIC_HOST") == "rex", "not chosen on this run, so the file's name stays"
-    # The same run again changes nothing; --public-host <ip> replaces the sign-in name.
-    assert write("127.0.0.1,localhost,rex,10.1.2.3", "rex") == []
-    assert write("127.0.0.1,localhost,rex,10.1.2.3", "10.1.2.3", chosen=True) == [
-        "SLAS_PUBLIC_HOST"
+    assert env.get("SLAS_PUBLIC_HOST") == "10.1.2.3"
+    # The same run again changes nothing; a DHCP change is followed on the next run.
+    assert write("127.0.0.1,localhost,rex,10.1.2.3", "10.1.2.3") == []
+    assert write("127.0.0.1,localhost,rex,10.1.2.9", "10.1.2.9") == [
+        "SLAS_TLS_NAMES",
+        "SLAS_PUBLIC_HOST",
     ]
-    assert read_env(target).get("SLAS_PUBLIC_HOST") == "10.1.2.3"
+    names = read_env(target).get("SLAS_TLS_NAMES")
+    assert names == "127.0.0.1,localhost,rex,lab.example,10.1.2.3,10.1.2.9"
+    # --public-host pins a name: later runs leave it alone whatever address the host has.
+    assert write("127.0.0.1,localhost,rex,10.1.2.9,slas.lab", "slas.lab", chosen=True) == [
+        "SLAS_TLS_NAMES",
+        "SLAS_PUBLIC_HOST",
+        "SLAS_PUBLIC_HOST_PINNED",
+    ]
+    env = read_env(target)
+    assert env.get("SLAS_PUBLIC_HOST") == "slas.lab" and env.get("SLAS_PUBLIC_HOST_PINNED") == "yes"
+    assert write("127.0.0.1,localhost,rex,10.1.2.7", "10.1.2.7") == ["SLAS_TLS_NAMES"]
+    assert read_env(target).get("SLAS_PUBLIC_HOST") == "slas.lab", "pinned: the address moves on"
+    # Clearing the pin makes the name follow the address again.
+    env = read_env(target)
+    env.set("SLAS_PUBLIC_HOST_PINNED", "")
+    target.write_text(env.render())
+    assert write("127.0.0.1,localhost,rex,10.1.2.7", "10.1.2.7") == ["SLAS_PUBLIC_HOST"]
+    assert read_env(target).get("SLAS_PUBLIC_HOST") == "10.1.2.7"
 
 
 def test_data_dirs_are_created_once_as_this_user(tmp_path: Path) -> None:

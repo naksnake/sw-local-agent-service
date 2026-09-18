@@ -72,6 +72,7 @@ COMMON_KEYS: Final[dict[str, str | None]] = {
     "SLAS_GID": None,
     "SLAS_TLS_NAMES": None,
     "SLAS_PUBLIC_HOST": None,
+    "SLAS_PUBLIC_HOST_PINNED": None,
 }
 
 PROD_KEYS: Final[dict[str, str]] = {
@@ -191,9 +192,12 @@ def write_env(
 ) -> list[str]:
     """Fill the keys the profile needs, never touching a key a person already set.
 
-    Two keys behave differently: `SLAS_TLS_NAMES` is merged (the edge's certificate can only
-    gain names), and `SLAS_PUBLIC_HOST` is replaced when `public_host_chosen` says the person
-    named it on this run (`--public-host`, `SLAS_PUBLIC_HOST`)."""
+    Two keys behave differently. `SLAS_TLS_NAMES` is merged: the edge's certificate can only
+    gain names. `SLAS_PUBLIC_HOST` follows the installer's value (the host's address on the
+    default route, so a DHCP change is followed on the next run) until a run with
+    `public_host_chosen` (`--public-host`, `SLAS_PUBLIC_HOST`) pins it: that writes
+    `SLAS_PUBLIC_HOST_PINNED=yes`, and later runs leave the name alone until the person clears
+    that key."""
     defaults = EnvFile.parse(example.read_text(encoding="utf-8"))
     env = read_env(target) if target.is_file() else EnvFile.parse(defaults.render())
     changed: list[str] = []
@@ -206,9 +210,13 @@ def write_env(
     if env.get("SLAS_TLS_NAMES") != merged_names:
         env.set("SLAS_TLS_NAMES", merged_names, under_marker="# --- prod profile (ADR-0012) ---")
         changed.append("SLAS_TLS_NAMES")
-    if public_host_chosen and env.get("SLAS_PUBLIC_HOST") != public_host:
+    pinned = (env.get("SLAS_PUBLIC_HOST_PINNED") or "").strip().lower() in ("yes", "1", "true")
+    if (public_host_chosen or not pinned) and env.get("SLAS_PUBLIC_HOST") != public_host:
         env.set("SLAS_PUBLIC_HOST", public_host, under_marker="# --- prod profile (ADR-0012) ---")
         changed.append("SLAS_PUBLIC_HOST")
+    if public_host_chosen and not pinned:
+        env.set("SLAS_PUBLIC_HOST_PINNED", "yes", under_marker="# --- prod profile (ADR-0012) ---")
+        changed.append("SLAS_PUBLIC_HOST_PINNED")
 
     # The installer owns these: they describe this install, not a choice a person makes.
     owned = {
@@ -226,10 +234,7 @@ def write_env(
             changed.append(key)
     # These a person may have set by hand; the installer fills them only while they are at
     # the template's default.
-    settable = {
-        "SLAS_REGISTRY": registry,
-        "SLAS_PUBLIC_HOST": public_host,
-    }
+    settable = {"SLAS_REGISTRY": registry}
     if runtime_socket:
         settable["SLAS_RUNTIME_SOCKET"] = runtime_socket
     if profile == "prod":

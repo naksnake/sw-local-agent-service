@@ -75,6 +75,9 @@ def test_the_base_stack_follows_the_zone_model_and_adr_0003() -> None:
     assert services["edge"]["ports"] == ["${SLAS_HTTPS_PORT}:443"]
     assert services["edge"]["sysctls"] == {"net.ipv4.ip_unprivileged_port_start": "0"}
     assert services["edge"]["environment"]["SLAS_TLS_MODE"] == "${SLAS_TLS_MODE}"
+    assert services["edge"]["environment"]["SLAS_PUBLIC_HOST"] == "${SLAS_PUBLIC_HOST}", (
+        "Caddy's default certificate for a browser that opens the IP address"
+    )
     for holder in compose.RUNTIME_SOCKET_HOLDERS:
         assert (
             f"{compose.RUNTIME_SOCKET}:{compose.RUNTIME_SOCKET_IN_CONTAINER}"
@@ -440,11 +443,10 @@ def test_installer_writes_env_and_secrets_idempotently(tmp_path: Path) -> None:
     second = write_env(
         example=REPO_ROOT / "config" / ".env.example", target=target, profile="prod",
         data_root=tmp_path / "data", version="0.0.2", registry="harbor.internal", uid=1000,
-        gid=1000, tls_names="127.0.0.1,localhost", public_host="y",
+        gid=1000, tls_names="127.0.0.1,localhost", public_host="slas.lab.internal",
     )  # fmt: skip
     assert second == ["SLAS_VERSION"], "a second run changes only what the installer owns"
     assert read_env(target).get("SLAS_BACKUP_RETENTION_DAYS") == "365"
-    assert read_env(target).get("SLAS_PUBLIC_HOST") == "slas.lab.internal", "not chosen, kept"
 
     created = write_secrets(tmp_path / "data" / "secrets", "prod")
     assert set(created) == {

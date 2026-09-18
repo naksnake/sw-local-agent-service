@@ -230,7 +230,8 @@ works today against the executor's enrolment server.
 |---|---|---|
 | Preflight ✗ Container runtime | Docker stopped or your user not in the `docker` group | `sudo systemctl enable --now docker`; add the user; log in again |
 | Preflight ✗ GPU | no NVIDIA driver | install the driver, reboot, run again |
-| The browser cannot open `https://<ip>` (TLS error, connection reset) | the edge answers only to the names in `SLAS_TLS_NAMES`; an install before 2026-09-18 listed the host's name only | `git pull && ./install.sh` adds the host's addresses; to make the IP the sign-in URL, `./install.sh --public-host <ip>` |
+| The browser cannot open `https://<ip>` (TLS error, connection reset) | the edge answers only to the names in `SLAS_TLS_NAMES`; an install before 2026-09-18 listed the host's name only | `git pull && ./install.sh`: the sign-in URL becomes the host's address on the default route and the certificate covers every address of the host |
+| The host's DHCP address changed and the old URL no longer answers | `SLAS_PUBLIC_HOST` and the certificate name the old address | `./install.sh` again: it refreshes the address (unless `SLAS_PUBLIC_HOST_PINNED=yes`) and recreates the edge; a fixed DHCP reservation for the host avoids the repeat |
 | Install prints "Nothing was changed on this host." | a read-only step failed: signature, lock, manifest | read the sentence above it; fix; run again |
 | "not pinned … scripts/lock-images.sh" | the image lock shipped unfilled | run A5 on the build host, commit, rebuild the bundle |
 | `verify` names a file | copy error on the sneakernet disk | copy that file again, verify again |

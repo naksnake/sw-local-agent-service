@@ -212,7 +212,8 @@ uv run python -m slas_cli doctor               # 對本主機執行預檢
 |---|---|---|
 | 預檢 ✗ Container runtime | Docker 未啟動，或使用者不在 `docker` 群組 | `sudo systemctl enable --now docker`；加入群組；重新登入 |
 | 預檢 ✗ GPU | 沒有 NVIDIA 驅動程式 | 安裝驅動程式、重新開機、再執行 |
-| 瀏覽器打不開 `https://<ip>`（TLS 錯誤、連線重設） | edge 只回應 `SLAS_TLS_NAMES` 列出的名稱；2026-09-18 之前的安裝只列了主機名稱 | `git pull && ./install.sh` 會加入主機的位址；要讓 IP 成為登入網址，執行 `./install.sh --public-host <ip>` |
+| 瀏覽器打不開 `https://<ip>`（TLS 錯誤、連線重設） | edge 只回應 `SLAS_TLS_NAMES` 列出的名稱；2026-09-18 之前的安裝只列了主機名稱 | `git pull && ./install.sh`：登入網址改為主機在預設路由上的位址，憑證涵蓋主機的每個位址 |
+| 主機的 DHCP 位址變了，舊網址不再回應 | `SLAS_PUBLIC_HOST` 與憑證記的是舊位址 | 再執行一次 `./install.sh`：它會更新位址（除非 `SLAS_PUBLIC_HOST_PINNED=yes`）並重建 edge；替主機設定固定的 DHCP 保留位址可免於重複 |
 | 安裝印出「Nothing was changed on this host.」 | 某個唯讀步驟失敗：簽章、鎖定檔、清單 | 閱讀其上方的句子；修正；再執行 |
 | 「not pinned … scripts/lock-images.sh」 | 映像鎖定檔出貨時未填妥 | 在建置主機執行 A5、提交、重建安裝包 |
 | `verify` 列出某個檔案 | 攜帶磁碟複製錯誤 | 重新複製該檔案，再驗證 |
