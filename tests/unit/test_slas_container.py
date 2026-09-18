@@ -119,6 +119,7 @@ def vllm_spec() -> CreateSpec:
         network_aliases=["vllm-coder"],
         mounts=[Mount(source="/AI/Agent/Models", target="/data/Models", read_only=True)],
         shm_size_bytes=16 * 1024**3,
+        nofile=65536,
         ipc_host=True,
         gpu_ids=[0, 1],
         labels={"slas.role": "coder"},
@@ -134,6 +135,7 @@ def test_spec_body_docker_and_podman_gpu_syntax() -> None:
     ]
     assert host["Binds"] == ["/AI/Agent/Models:/data/Models:ro"]
     assert host["IpcMode"] == "host" and host["ShmSize"] == 16 * 1024**3
+    assert host["Ulimits"] == [{"Name": "nofile", "Soft": 65536, "Hard": 65536}]
     assert host["CapDrop"] == ["ALL"] and "no-new-privileges" in host["SecurityOpt"]
     assert host["NetworkMode"] == "slas_slas-inference"
     assert docker["NetworkingConfig"]["EndpointsConfig"]["slas_slas-inference"]["Aliases"] == [
@@ -166,6 +168,7 @@ def test_spec_sandbox_body_and_refusals() -> None:
     assert body["HostConfig"]["ReadonlyRootfs"] is True
     assert body["HostConfig"]["Tmpfs"] == {"/tmp": "rw,nosuid,size=512m"}  # noqa: S108
     assert body["HostConfig"]["PidsLimit"] == 512
+    assert "Ulimits" not in body["HostConfig"], "a sandbox keeps the runtime's default"
     assert body["User"] == "10001:10001" and body["WorkingDir"] == "/workspace"
     assert body["Entrypoint"] == ["/bin/sleep"]
     assert "NetworkingConfig" not in body

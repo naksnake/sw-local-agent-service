@@ -1,12 +1,70 @@
-"""The repository keeps the layout from CLAUDE.md §13."""
+"""The repository keeps the layout from CLAUDE.md §13, and every workspace member declares
+what it imports: a service image is `uv sync --package <member>` with its dependency closure
+and nothing else, so an `slas_*` import outside the closure starts a container that exits
+with `ModuleNotFoundError`."""
 
 from __future__ import annotations
 
+import re
+import tomllib
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SLAS_IMPORT = re.compile(r"^\s*(?:from|import)\s+(slas_[a-z0-9_]+)", re.MULTILINE)
+REQUIREMENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def workspace_members() -> dict[str, Path]:
+    """Distribution name → member directory, from the root `[tool.uv.workspace]`."""
+    root = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    members: dict[str, Path] = {}
+    for pattern in root["tool"]["uv"]["workspace"]["members"]:
+        for directory in sorted(REPO_ROOT.glob(pattern)):
+            manifest = directory / "pyproject.toml"
+            if manifest.is_file():
+                data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+                members[data["project"]["name"]] = directory
+    return members
+
+
+def declared_dependencies(directory: Path) -> set[str]:
+    data = tomllib.loads((directory / "pyproject.toml").read_text(encoding="utf-8"))
+    names = set()
+    for requirement in data["project"].get("dependencies", []):
+        match = REQUIREMENT_NAME.match(requirement)
+        assert match, (directory, requirement)
+        names.add(match.group(0).lower())
+    return names
+
+
+def dependency_closure(name: str, members: dict[str, Path]) -> set[str]:
+    closure: set[str] = set()
+    pending = [name]
+    while pending:
+        current = pending.pop()
+        if current in closure or current not in members:
+            continue
+        closure.add(current)
+        pending.extend(declared_dependencies(members[current]))
+    return closure
+
+
+def modules_of(directory: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in directory.glob("slas_*")
+        if path.is_dir() and (path / "__init__.py").is_file()
+    )
+
+
+def imported_slas_modules(module: Path) -> set[str]:
+    found: set[str] = set()
+    for source in module.rglob("*.py"):
+        found.update(SLAS_IMPORT.findall(source.read_text(encoding="utf-8")))
+    return found
+
 
 DIRECTORIES = [
     "apps/api",
@@ -89,6 +147,25 @@ def test_every_python_package_has_a_typed_module_matching_its_name() -> None:
         assert (package_dir / "pyproject.toml").is_file(), package_dir
         assert (module / "__init__.py").is_file(), module
         assert (module / "py.typed").is_file(), f"{module} must ship py.typed"
+
+
+def test_every_workspace_member_declares_the_slas_packages_it_imports() -> None:
+    members = workspace_members()
+    assert {"slas-sandbox-manager", "slas-orchestrator", "slas-api"} <= set(members)
+    module_owner = {
+        module.name: name for name, directory in members.items() for module in modules_of(directory)
+    }
+    assert module_owner["slas_orchestrator"] == "slas-orchestrator"
+    missing: list[str] = []
+    for name, directory in sorted(members.items()):
+        closure = dependency_closure(name, members)
+        for module in modules_of(directory):
+            for imported in sorted(imported_slas_modules(module)):
+                owner = module_owner.get(imported)
+                assert owner is not None, f"{module}: {imported} is not a workspace package"
+                if owner not in closure:
+                    missing.append(f"{name} imports {imported} but does not depend on {owner}")
+    assert missing == [], "\n".join(missing)
 
 
 def test_branding_lives_where_claude_md_says() -> None:

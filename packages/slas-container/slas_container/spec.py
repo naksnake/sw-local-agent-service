@@ -21,6 +21,11 @@ Restart = Literal["no", "unless-stopped", "on-failure"]
 _NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 _ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+#: The open-file limit a vLLM instance gets: Docker's default soft limit of 1024 is too low
+#: for a multi-GPU engine (NCCL rings, safetensors shards, compiled kernels) and stops it
+#: with "Too many open files" instead of a model answer.
+NOFILE: int = 65536
+
 
 class Mount(SlasModel):
     source: str = Field(min_length=1, description="Host path (or a named volume)")
@@ -54,6 +59,8 @@ class CreateSpec(SlasModel):
     memory_bytes: int | None = Field(default=None, ge=1)
     nano_cpus: int | None = Field(default=None, ge=1)
     shm_size_bytes: int | None = Field(default=None, ge=1)
+    #: Soft and hard `nofile` limit; None keeps the runtime's default.
+    nofile: int | None = Field(default=None, ge=1)
     ipc_host: bool = False
     gpu_ids: list[int] = Field(default_factory=list)
     labels: dict[str, str] = Field(default_factory=dict)
@@ -94,6 +101,8 @@ class CreateSpec(SlasModel):
             host["NanoCpus"] = self.nano_cpus
         if self.shm_size_bytes is not None:
             host["ShmSize"] = self.shm_size_bytes
+        if self.nofile is not None:
+            host["Ulimits"] = [{"Name": "nofile", "Soft": self.nofile, "Hard": self.nofile}]
         if self.ipc_host:
             host["IpcMode"] = "host"
         if self.gpu_ids:

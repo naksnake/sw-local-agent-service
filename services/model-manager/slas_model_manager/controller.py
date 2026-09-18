@@ -311,7 +311,18 @@ class Controller:
                     url=instance_url(action.name),
                     container=False,
                 )
-                self.log.error("instance.start_failed", instance=action.name, model=model_id)
+                # The runtime's own sentences go in the log: an operator reading
+                # `slas logs model-manager` must see why, not only that it failed.
+                self.log.error(
+                    "instance.start_failed",
+                    instance=action.name,
+                    model=model_id,
+                    image=self.image,
+                    gpus=gpu_ids,
+                    what_happened=exc.message.what_happened,
+                    likely_cause=exc.message.likely_cause,
+                    what_to_do=exc.message.what_to_do,
+                )
                 continue
             self._ever_healthy.discard(action.name)
             self.log.info("instance.started", instance=action.name, model=model_id, gpus=gpu_ids)

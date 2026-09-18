@@ -731,6 +731,7 @@ name = "slas-cli"
 version = "0.0.1"
 source = { editable = "packages/slas-cli" }
 dependencies = [
+    { name = "slas-deploy" },
     { name = "slas-hal" },
     { name = "slas-kernel" },
     { name = "slas-observability" },
@@ -740,6 +741,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "slas-deploy", editable = "packages/slas-deploy" },
     { name = "slas-hal", editable = "packages/slas-hal" },
     { name = "slas-kernel", editable = "packages/slas-kernel" },
     { name = "slas-observability", editable = "packages/slas-observability" },
@@ -769,6 +771,7 @@ name = "slas-deploy"
 version = "0.0.1"
 source = { editable = "packages/slas-deploy" }
 dependencies = [
+    { name = "slas-authz" },
     { name = "slas-hal" },
     { name = "slas-observability" },
     { name = "slas-schemas" },
@@ -776,6 +779,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "slas-authz", editable = "packages/slas-authz" },
     { name = "slas-hal", editable = "packages/slas-hal" },
     { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },
@@ -1052,6 +1056,7 @@ version = "0.0.1"
 source = { editable = "services/sandbox-manager" }
 dependencies = [
     { name = "slas-container" },
+    { name = "slas-git" },
     { name = "slas-http" },
     { name = "slas-observability" },
     { name = "slas-schemas" },
@@ -1060,6 +1065,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "slas-container", editable = "packages/slas-container" },
+    { name = "slas-git", editable = "packages/slas-git" },
     { name = "slas-http", editable = "packages/slas-http" },
     { name = "slas-observability", editable = "packages/slas-observability" },
     { name = "slas-schemas", editable = "packages/slas-schemas" },

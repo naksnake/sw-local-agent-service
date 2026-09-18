@@ -159,6 +159,9 @@ PROD_SECRETS: Final[tuple[str, ...]] = (
 )
 
 HEALTH_INTERVAL: Final = {"interval": "15s", "timeout": "5s", "retries": 8, "start_period": "30s"}
+#: Open-file limit for the services that hold many files at once (Qdrant's segments); the
+#: model manager gives the vllm-* containers the same number (`slas_container.spec.NOFILE`).
+NOFILE_LIMIT: Final = {"soft": 65536, "hard": 65536}
 
 
 def _health(*argv: str) -> dict[str, Any]:
@@ -263,6 +266,11 @@ def base_compose() -> dict[str, Any]:
         networks=["slas-frontend"],
         read_only=True,
         tmpfs=["/tmp"],  # noqa: S108 — the container's own tmpfs
+        # The Caddy image gives its binary the file capability cap_net_bind_service. With
+        # every capability dropped the kernel refuses to exec such a binary as a non-root
+        # uid ("operation not permitted"), so the one capability stays in the bounding set;
+        # the uid still gains nothing at exec (no-new-privileges), and it serves on 8000.
+        cap_add=["NET_BIND_SERVICE"],
     )
     services["api"] = _slas(
         "api",
@@ -367,7 +375,9 @@ def base_compose() -> dict[str, Any]:
         volumes=[f"{DATA}/qdrant:/qdrant/storage"],
         healthcheck=_tcp(6333),
         # The knowledge base starts only when SLAS_AGENTS names knowledge (ADR-0017).
-        extra={"profiles": ["knowledge"]},
+        # Qdrant opens one descriptor per segment file and panics at Docker's default soft
+        # limit of 1024 ("Too many open files"), so the limit is raised for this container.
+        extra={"profiles": ["knowledge"], "ulimits": {"nofile": NOFILE_LIMIT}},
     )
     services["local-search-api"] = _slas(
         "local-search-api",

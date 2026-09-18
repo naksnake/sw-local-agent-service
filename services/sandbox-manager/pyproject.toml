@@ -9,6 +9,7 @@ dependencies = [
   "slas-schemas",
   "slas-http",
   "slas-container",
+  "slas-git",
 ]
 
 [project.scripts]
@@ -26,3 +27,4 @@ slas-observability = { workspace = true }
 slas-schemas = { workspace = true }
 slas-http = { workspace = true }
 slas-container = { workspace = true }
+slas-git = { workspace = true }

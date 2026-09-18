@@ -701,7 +701,11 @@ def test_a_start_the_runtime_refuses_is_a_failed_instance_with_the_runtime_sente
     assert rows["vllm-coder"]["sentence"].startswith(
         f"The container runtime refused to create vllm-coder from {IMAGE}."
     )
-    assert h.events("instance.start_failed")
+    failed = h.events("instance.start_failed")
+    assert failed, "the log names every instance the runtime refused"
+    assert failed[0]["what_happened"].startswith("The container runtime refused to create")
+    assert failed[0]["likely_cause"] and failed[0]["what_to_do"], "with the reason and the fix"
+    assert failed[0]["image"] == IMAGE
     assert h.gateway.bodies[-1]["instances"] == [], "nothing runs, so nothing is published"
     assert "7 model instances" in h.status()["sentence"]
 

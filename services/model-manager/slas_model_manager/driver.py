@@ -21,6 +21,7 @@ from typing import Final, Protocol
 import httpx
 
 from slas_container import ContainerError, ContainerInfo, CreateSpec, EngineInfo, Mount
+from slas_container.spec import NOFILE
 from slas_model_manager.runtime import AIRGAP_ENV, ContainerRef, ContainerRuntime, ContainerSpec
 
 KIND_LABEL: Final = "slas.kind"
@@ -143,6 +144,7 @@ class ContainerApiRuntime:
             network_aliases=[spec.name],
             mounts=[Mount(source=self.host_models_dir, target=MODELS_MOUNT, read_only=True)],
             shm_size_bytes=self.shm_bytes,
+            nofile=NOFILE,
             ipc_host=True,
             gpu_ids=devices,
             labels=vllm_labels(spec),

@@ -94,6 +94,11 @@ def test_the_base_stack_follows_the_zone_model_and_adr_0003() -> None:
     assert services["factory-executor"]["profiles"] == ["factory"]
     assert services["vector-db"]["profiles"] == ["knowledge"]
     assert services["local-search-api"]["profiles"] == ["knowledge"]
+    # Qdrant panics at Docker's default 1024 open files; Caddy's binary carries the file
+    # capability cap_net_bind_service and cannot exec with every capability dropped.
+    assert services["vector-db"]["ulimits"] == {"nofile": {"soft": 65536, "hard": 65536}}
+    assert services["webui"]["cap_add"] == ["NET_BIND_SERVICE"]
+    assert services["edge"]["cap_add"] == ["NET_BIND_SERVICE"]
     assert "profiles" not in services["agent-core-orchestrator"]
     assert "profiles" not in services["sandbox-manager"]
     assert set(services) >= {
