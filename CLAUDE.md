@@ -4,7 +4,7 @@
 > this file first and treats it as authoritative. Where this file conflicts with a
 > request, surface the conflict; never resolve it silently.
 >
-> **Version 3.5 · 2026-09-17** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
+> **Version 3.6 · 2026-09-18** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
 > (phases, done criteria) and `docs/PROMPTS.md` (copy-paste session prompts).
 > 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14). 3.2 records open decisions
 > 12–14 (model weights and voters) raised by the shipped model registries. 3.3 accepts the
@@ -19,6 +19,9 @@
 > the socket that exists; ADR-0016 pins `cryptography` for the git broker's AES-GCM credential sealer.
 > 3.5 records ADR-0017: the Coding Agent is the delivery focus; `SLAS_AGENTS` (default `coding`)
 > names the agents an installation starts, and the others stay built, tested and off (§1.4).
+> 3.6 records ADR-0018, the one recorded quickstart exception to INV-1 beside ADR-0014: the
+> `model-fetcher` service downloads weights from a pasted hub link on the Models page and
+> imports them into the registry; roles and voters change on that page (§4.1 zone F, §11).
 
 ---
 
@@ -116,7 +119,7 @@ desktop. Nothing in §1.1, §2 or §4 changes; this is scope, not architecture.
 
 | ID | Invariant |
 |---|---|
-| **INV-1** | No external network dependency at runtime — weights, images, packages, fonts, telemetry, CA, NTP. |
+| **INV-1** | No external network dependency at runtime — weights, images, packages, fonts, telemetry, CA, NTP. The one recorded quickstart exception is ADR-0018: `model-fetcher`, sole member of `slas-egress`, reaches the model hub allowlist and nothing else; prod does not start it. |
 | **INV-2** | No cloud AI services (OpenAI, Anthropic API, Azure/Vertex/Bedrock, Copilot, Codex, LangSmith, W&B cloud, HF Inference…). Offline libraries allowed with tracing off. |
 | **INV-3** | **The LLM is never in the hardware control loop.** Models compile plans and analyse results; a deterministic executor performs actions. Applies to power, firmware, GUI on stations, and anything with physical effect. |
 | **INV-4** | **Agents never touch the platform host.** OS-level control is of the machine the agent works *on* — sandbox, target server, factory station — never the host running the platform. No host X11 socket, `/dev/input`, or runtime socket is mounted into anything that runs model-authored or skill-authored steps. |
@@ -172,6 +175,7 @@ Node, shell tooling, yamllint/jsonschema); `slas toolchain list` shows what is a
 | **G Git broker** | clone/pull/push with injected credentials; bundle export/import | backend + `slas-git` (allowlisted Git hosts only) | plain container, no sockets, sole `slas-git` member |
 | **C Inference** | vLLM instances | inference net, no egress | GPU containers, managed |
 | **S Screen worker** | Xvfb + VNC + screen driver, per session | none (talks to orchestrator only) | gVisor |
+| **F Model fetcher** | downloads weights from a pasted hub link into `Models/`, imports the registry entry (ADR-0018) | backend + `slas-egress` (hub allowlist only); quickstart only | plain container, no sockets, sole `slas-egress` member |
 | **D Targets** | servers, stations | lab / factory | not ours |
 
 Zone A and Zone S never talk to vLLM. The kernel calls the gateway, then sends concrete
@@ -697,6 +701,7 @@ parsed with macros/external entities off · TypeScript strict, no `any` without 
 component talking to vLLM; hosts the Consensus Router) · `services/model-manager` (only
 one starting inference containers) · `services/sandbox-manager` · `services/screen-worker`
 · `services/git-broker` (only component holding Git credentials or reaching Git hosts)
+· `services/model-fetcher` (the only component with hub egress, quickstart only, ADR-0018)
 · `services/validation-executor` and `services/factory-executor` (only ones touching
 targets, via `slas_hal` / station runner) · `packages/slas-kernel`, `slas-hal`,
 `slas-skills`, `slas-authz` (shared; authz runs where the action executes). Every service
@@ -739,6 +744,7 @@ networks:
   slas-lab: {}                                    # validation-executor ONLY (macvlan in prod)
   slas-factory: {}                                # factory-executor ONLY
   slas-git: {}                                    # git-broker ONLY; egress allowlisted to config/git-hosts.yaml
+  slas-egress: {}                                 # model-fetcher ONLY; the hub allowlist (ADR-0018); quickstart only
 services:
   edge:        { <<: *common, image: registry.internal/slas/edge@sha256:…, networks: [slas-edge, slas-frontend], ports: ["443:443"] }
   webui:       { <<: *common, image: registry.internal/slas/webui@sha256:…, networks: [slas-frontend] }
@@ -791,6 +797,12 @@ services:
                            "./config/git-hosts.yaml:/etc/slas/git-hosts.yaml:rw"],        # rw: Admin → Git hosts renders it (round 2)
                  tmpfs: ["/run/slas-keys:mode=700,size=16m"],                              # per-operation SSH key files, shredded after use
                  security_opt: ["no-new-privileges:true"], cap_drop: [ALL] }
+  model-fetcher: { <<: *common, image: registry.internal/slas/model-fetcher@sha256:…,       # ADR-0018 — the ONLY component with egress; quickstart only
+                 networks: [slas-backend, slas-egress], profiles: [fetch],                 # COMPOSE_PROFILES gains `fetch` on quickstart, never on prod
+                 environment: { SLAS_MODELS_DIR: /data/Models, SLAS_HUB_HOSTS: "huggingface.co,cdn-lfs.huggingface.co,*.hf.co",
+                                HF_ENDPOINT: "${HF_ENDPOINT}", HTTPS_PROXY: "${HTTPS_PROXY}", HF_TOKEN_FILE: /run/secrets/hf_token },
+                 volumes: ["${SLAS_DATA_ROOT}/Models:/data/Models"], secrets: [hf_token],   # writes Models/<path>/, SHA256SUMS, manifest.json, models.yaml
+                 security_opt: ["no-new-privileges:true"], cap_drop: [ALL] }               # no runtime socket, no credential store, no model context
   validation-executor: { <<: *common, image: registry.internal/slas/validation-executor@sha256:…,   # + NVQual, MFT, fio, stress-ng, perftest
                  networks: [slas-backend, slas-observability, slas-lab],
                  environment: { GUARDRAIL_POLICY: /etc/slas/guardrails.yaml, SYSLOG_LISTEN: "0.0.0.0:5514", LLM_IN_CONTROL_LOOP: "false" } }
@@ -818,10 +830,10 @@ sw-local-agent-service/
 ├── CLAUDE.md  README.md  install.sh
 ├── docs/{DEVELOPMENT_PLAN.md, PROMPTS.md, adr/, runbooks/, ui/, ui-demo/, golden-set/, glossary.yaml}
 ├── apps/{webui, api}
-├── services/{agent-core-orchestrator, llm-gateway, model-manager, sandbox-manager, screen-worker,
+├── services/{agent-core-orchestrator, llm-gateway, model-manager, model-fetcher, sandbox-manager, screen-worker,
 │             git-broker, validation-executor, factory-executor, station-runner, local-search-api, edge}
 ├── packages/{slas-kernel, slas-schemas, slas-authz, slas-hal, slas-skills, slas-screen, slas-git,
-│             slas-diff, slas-triage, slas-rag, slas-sop, slas-eval, slas-cli}
+│             slas-diff, slas-triage, slas-rag, slas-sop, slas-eval, slas-cli, slas-fetch}
 ├── plans/{schema/plan.schema.json, primitives/}          # Validation/Factory plan verbs
 ├── skills/{schema/skill.schema.json, library/}           # shipped skills
 ├── templates/factory/                                    # test-loop templates
