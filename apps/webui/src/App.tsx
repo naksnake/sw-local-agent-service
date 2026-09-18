@@ -215,7 +215,10 @@ function Routed(props: AppProps) {
           }
         />
         <Route path="runs" element={<Later page="runs" />} />
-        <Route path="models" element={modelsApi !== undefined ? <ModelsPage api={modelsApi} /> : <Later page="models" />} />
+        <Route
+          path="models"
+          element={modelsApi !== undefined ? <ModelsPage api={modelsApi} canManage={can("model:manage")} /> : <Later page="models" />}
+        />
         <Route path="skills" element={<Later page="skills" />} />
         <Route
           path="settings"

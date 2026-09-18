@@ -429,6 +429,7 @@ def test_each_route_forwards_to_the_service_the_contract_names() -> None:
         "git_broker": ("/git/",),
         "factory_executor": ("/stations",),
         "model_manager": ("/models/",),
+        "model_fetcher": ("/models/fetches",),
     }
     for route in ROUTES:
         assert route.path.startswith(expected_prefix[route.service]), route

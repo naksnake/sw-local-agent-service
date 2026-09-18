@@ -23,7 +23,7 @@ FORBIDDEN_MOUNTS = ("/tmp/.X11-unix", "/dev/input", "docker.sock")  # noqa: S108
 
 def test_every_deployment_file_is_in_step_with_the_code() -> None:
     files = rendered_files()
-    assert len(files) == 29
+    assert len(files) == 30
     for relative, content in files.items():
         path = REPO_ROOT / relative
         assert path.is_file(), f"{relative} is missing; run `uv run python -m slas_deploy.render`"
@@ -34,9 +34,9 @@ def test_every_deployment_file_is_in_step_with_the_code() -> None:
 
 
 def test_render_writes_everywhere_and_prints_a_count(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
-    assert len(write_all(tmp_path)) == 29
+    assert len(write_all(tmp_path)) == 30
     assert render_main([str(tmp_path / "again")]) == 0
-    assert "29 files written" in capsys.readouterr().out
+    assert "30 files written" in capsys.readouterr().out
 
 
 def test_the_base_stack_follows_the_zone_model_and_adr_0003() -> None:

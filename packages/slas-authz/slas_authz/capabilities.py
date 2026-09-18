@@ -61,7 +61,7 @@ DESCRIPTIONS: Final[dict[Capability, str]] = {
     Capability.FACTORY_STATIONS_MANAGE: (
         "add test stations, issue their enrolment codes and tune them"
     ),
-    Capability.MODEL_MANAGE: "swap and roll back models",
+    Capability.MODEL_MANAGE: "add models, assign roles and voters, swap and roll back models",
 }
 
 #: The names a skill file may list under `requires:` (CLAUDE.md §6.1).

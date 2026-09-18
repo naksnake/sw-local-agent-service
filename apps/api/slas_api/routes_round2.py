@@ -29,7 +29,12 @@ from slas_authz import Capability
 from slas_schemas.errors import ThreePartMessage
 
 Service = Literal[
-    "orchestrator", "git_broker", "sandbox_manager", "factory_executor", "model_manager"
+    "orchestrator",
+    "git_broker",
+    "sandbox_manager",
+    "factory_executor",
+    "model_manager",
+    "model_fetcher",
 ]
 Method = Literal["GET", "POST", "PUT", "DELETE"]
 
@@ -201,6 +206,14 @@ ROUTES: Final[tuple[ProxyRoute, ...]] = (
     ProxyRoute("GET", "/models/status", "model_manager", "/v1/status"),
     ProxyRoute("POST", "/models/swap", "model_manager", "/v1/swap", (C.MODEL_MANAGE,)),
     ProxyRoute("POST", "/models/rollback", "model_manager", "/v1/rollback", (C.MODEL_MANAGE,)),
+    ProxyRoute("PUT", "/models/roles", "model_manager", "/v1/roles", (C.MODEL_MANAGE,)),
+    # --- Models page: Add a model (model-fetcher §3b, ADR-0018) ---------------------------
+    ProxyRoute("GET", "/models/fetches", "model_fetcher", "/v1/fetches"),
+    ProxyRoute("POST", "/models/fetches", "model_fetcher", "/v1/fetches", (C.MODEL_MANAGE,)),
+    ProxyRoute("GET", "/models/fetches/{id}", "model_fetcher", "/v1/fetches/{id}"),
+    ProxyRoute(
+        "DELETE", "/models/fetches/{id}", "model_fetcher", "/v1/fetches/{id}", (C.MODEL_MANAGE,)
+    ),
 )
 
 #: The terminal route, documented with the table but wired by hand below.

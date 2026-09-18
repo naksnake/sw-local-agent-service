@@ -306,6 +306,19 @@
       "started_by": "compose"
     },
     {
+      "name": "model-fetcher",
+      "reference": "slas/model-fetcher:${SLAS_VERSION}",
+      "upstream": "built offline from images/ and the vendored caches",
+      "first_party": true,
+      "digest": null,
+      "image_id": null,
+      "signed_by": "slas-release",
+      "profiles": [
+        "quickstart"
+      ],
+      "started_by": "compose"
+    },
+    {
       "name": "sandbox-manager",
       "reference": "slas/sandbox-manager:${SLAS_VERSION}",
       "upstream": "built offline from images/ and the vendored caches",

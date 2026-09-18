@@ -152,6 +152,20 @@ container-runtime socket /var/run/docker.sock …」或「Podman 4.9.3 serves �
 若任務停在「no instance serves the role coder yet」，表示模型管理器尚未啟動完成 `vllm-coder`：Models
 頁面會顯示它正在啟動；若永遠容納不下，則顯示容納句子。
 
+**從 Models 頁面新增模型（僅 quickstart，ADR-0018）。** 在連網的 quickstart 主機上，Models 頁面有
+**Add a model** 面板：貼上 Hugging Face 連結（`https://huggingface.co/<owner>/<repo>`，要釘選版本時加上
+`/tree/<revision>` 或 `/commit/<sha>`，或直接輸入 `<owner>/<repo>`），可選填 registry id，然後按
+**Download and import**。`model-fetcher` 容器是唯一有對外路由的容器，只連向 `SLAS_HUB_HOSTS` 所列的 hub
+主機（預設 `huggingface.co,cdn-lfs.huggingface.co,*.hf.co`），若 `.env` 設有 `HTTPS_PROXY` 則經由該代理；
+它將權重下載到 `/AI/Agent/Models/<id>/`，頁面顯示進度（「Downloading Qwen3.8-27B-FP8: 12.4 GiB of
+29.0 GiB, 3 of 9 files.」），逐檔比對 hub 公布的校驗和，寫入 `SHA256SUMS` 與 `manifest.json`，並以
+`roles: []` 將條目附加到 `Models/models.yaml`。卡片約 30 秒內出現；在 **Who serves each role** 中選取該
+模型，或在 **Cross-check voters** 勾選它，然後按 **Save roles**：模型管理器重寫 `models.yaml` 並啟動或停止
+實例以符合設定，無需重新啟動。受限儲存庫需要 token：貼到 `${SLAS_DATA_ROOT}/secrets/hf_token`（安裝程式
+建立的空檔，權限 0600）；它只作為標頭送出，永不顯示。**Cancel** 會在目前檔案結束後停止，之後以相同連結
+再次下載即可續傳。新增模型的 `vram_gib` 是依檔案大小估算（加 25 %）；若知道實際需求，請在 `models.yaml`
+中修正。prod 安裝不啟動 fetcher：權重由簽署的安裝包提供，此面板會回應「The model-fetcher did not answer.」
+
 ## 8 · 程序 C — 日常營運
 
 **Home** 顯示需要你處理的事項（三段式提示）、正在執行的工作與最近結果。頂端的健康狀態句子統計執行中

@@ -1,39 +1,30 @@
-"""scripts/fetch_models.py against a fake hub on loopback: tree listing, the plan and disk
-check, resume, checksums (sha256 for LFS files, git blob ids for small ones),
-redundant-format skipping, sections and profiles, the offline verify, manifest merging, and
-the three-part errors."""
+"""slas_fetch (the library behind scripts/fetch_models.py and the model-fetcher service)
+against a fake hub on loopback: tree listing, the plan and disk check, resume, checksums
+(sha256 for LFS files, git blob ids for small ones), redundant-format skipping, sections and
+profiles, the offline verify, manifest merging, progress and cancellation, the hub host
+allowlist, and the three-part errors."""
 
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import io
 import json
 import re
-import sys
+import shutil
 import threading
+import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
 
+import slas_fetch.fetch as fm
+from slas_fetch.cli import main as fetch_main
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def load_script() -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        "fetch_models", REPO_ROOT / "scripts" / "fetch_models.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module  # slotted dataclasses look their module up here
-    spec.loader.exec_module(module)
-    return module
-
-
-fm = load_script()
 
 WEIGHTS = bytes(range(256)) * 4096  # 1 MiB, larger than one download chunk
 CONFIG = b'{"architectures": ["Demo"]}\n'
@@ -175,7 +166,7 @@ def hub(monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
 
 def run(*argv: str) -> tuple[int, str]:
     out = io.StringIO()
-    code = fm.main(list(argv), stdout=out)
+    code = fetch_main(list(argv), stdout=out)
     return code, out.getvalue()
 
 
@@ -229,7 +220,7 @@ def test_dry_run_lists_sizes_checks_the_disk_and_downloads_nothing(
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest), "--dry-run")
     assert code == 0 and "3 files, 1.0 MiB, 0 B still to fetch;" in out
 
-    monkeypatch.setattr(fm.shutil, "disk_usage", lambda _path: SimpleNamespace(free=1000))
+    monkeypatch.setattr(shutil, "disk_usage", lambda _path: SimpleNamespace(free=1000))
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(tmp_path / "small"))
     assert code == 1
     assert "Not enough free disk at" in out and "1000 B is free, 1,047,611 bytes short." in out
@@ -241,7 +232,7 @@ def test_a_cut_download_resumes_inside_the_run(
     hub: FakeHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pauses: list[float] = []
-    monkeypatch.setattr(fm.time, "sleep", pauses.append)
+    monkeypatch.setattr(time, "sleep", pauses.append)
     dest = tmp_path / "models"
     hub.cut_after = 300_000
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))
@@ -261,7 +252,7 @@ def test_a_link_that_stalls_without_progress_gives_up_and_the_disk_check_counts_
     hub: FakeHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pauses: list[float] = []
-    monkeypatch.setattr(fm.time, "sleep", pauses.append)
+    monkeypatch.setattr(time, "sleep", pauses.append)
     dest = tmp_path / "models"
     hub.cut_after = 300_000
     hub.stall_ranges = True
@@ -277,15 +268,15 @@ def test_a_link_that_stalls_without_progress_gives_up_and_the_disk_check_counts_
     hub.stall_ranges = False
     hub.requests.clear()
     remainder = 1_048_576 - 300_000 + len(CONFIG) + len(README)
-    real_disk_usage = fm.shutil.disk_usage
-    monkeypatch.setattr(fm.shutil, "disk_usage", lambda _path: SimpleNamespace(free=remainder + 10))
+    real_disk_usage = shutil.disk_usage
+    monkeypatch.setattr(shutil, "disk_usage", lambda _path: SimpleNamespace(free=remainder + 10))
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))
     assert code == 0, out
     assert "3 files, 1.0 MiB, 731.1 KiB still to fetch (293.0 KiB already here resumes)" in out
     assert (dest / "tiny" / "model.safetensors").read_bytes() == WEIGHTS
     ranges = [r for path, r in hub.requests if path.endswith("/model.safetensors") and r]
     assert ranges == ["bytes=300000-"]
-    monkeypatch.setattr(fm.shutil, "disk_usage", real_disk_usage)
+    monkeypatch.setattr(shutil, "disk_usage", real_disk_usage)
 
     hub.requests.clear()
     code, out = run("fetch", "--model", "tiny=demo/tiny", "--dest", str(dest))
@@ -494,13 +485,13 @@ def test_a_timeout_or_blocked_host_is_reported_in_three_parts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pauses: list[float] = []
-    monkeypatch.setattr(fm.time, "sleep", pauses.append)
+    monkeypatch.setattr(time, "sleep", pauses.append)
 
     def hanging_opener(_request: object, timeout: int = 0) -> object:
         raise TimeoutError("_ssl.c:983: The handshake operation timed out")
 
     out = io.StringIO()
-    code = fm.main(
+    code = fetch_main(
         ["fetch", "--model", "tiny=demo/tiny", "--dest", str(tmp_path)],
         stdout=out,
         opener=hanging_opener,
@@ -520,11 +511,11 @@ def test_a_timeout_or_blocked_host_is_reported_in_three_parts(
 
 
 def test_a_flaky_link_is_retried_and_an_http_answer_is_not(hub: FakeHub, tmp_path: Path) -> None:
-    real_open = fm.urllib.request.urlopen
+    real_open = urllib.request.urlopen
     failures = {"left": 2}
     pauses: list[float] = []
 
-    def flaky(request: object, timeout: int = 0) -> object:
+    def flaky(request: urllib.request.Request, timeout: int = 0) -> object:
         if failures["left"] > 0:
             failures["left"] -= 1
             raise TimeoutError("The handshake operation timed out")
@@ -594,3 +585,79 @@ def test_a_model_fetched_earlier_is_kept_without_asking_the_hub_or_hashing(
     assert code == 0, out
     assert "tiny: already complete at" in out
     assert "Done: 1 model, 1.0 MiB," in out and "1 already here, untouched." in out
+
+
+def test_progress_is_reported_per_chunk_and_per_file_and_cancel_stops_between_files(
+    hub: FakeHub, tmp_path: Path
+) -> None:
+    """The service's fetch record is fed from these callbacks (ADR-0018)."""
+    out = io.StringIO()
+    made = fm.Hub(endpoint=hub.endpoint)
+    plan = fm.plan_model(made, fm.Source.parse("tiny=demo/tiny"), tmp_path, log=out)
+    seen: list[fm.Progress] = []
+    fetched = fm.fetch_planned(made, plan, tmp_path, log=out, progress=seen.append)
+    assert fetched.bytes == plan.bytes_total
+    assert seen[-1].files_done == 3 and seen[-1].files_total == 3
+    assert seen[-1].bytes_done == seen[-1].bytes_total == plan.bytes_total
+    assert all(p.bytes_done <= p.bytes_total for p in seen), "never past the total"
+    assert [p.bytes_done for p in seen] == sorted(p.bytes_done for p in seen), "monotonic"
+    assert {p.file for p in seen} == {"model.safetensors", "config.json", "README.md"}
+
+    # Cancel after the first file: the finished file stays, the fetch says why it stopped.
+    fresh = tmp_path / "again"
+    plan = fm.plan_model(made, fm.Source.parse("tiny=demo/tiny"), fresh, log=out)
+    asked: list[int] = []
+
+    def cancel() -> bool:
+        asked.append(1)
+        return len(asked) > 1
+
+    with pytest.raises(fm.FetchCancelledError) as raised:
+        fm.fetch_planned(made, plan, fresh, log=out, cancel=cancel)
+    assert raised.value.what_happened == "The fetch of tiny was cancelled."
+    assert raised.value.what_to_do == "Start the same fetch again; it resumes where it stopped."
+    assert (fresh / "tiny" / plan.files[0].path).is_file(), "the first file was kept"
+    assert not (fresh / "tiny" / "SHA256SUMS").exists(), "an unfinished model has no checksums"
+    resumed = fm.plan_model(made, fm.Source.parse("tiny=demo/tiny"), fresh, log=out)
+    assert resumed.present == [plan.files[0].path]
+
+
+def test_the_hub_host_allowlist_refuses_other_hosts_and_off_list_redirects(
+    hub: FakeHub, tmp_path: Path
+) -> None:
+    assert fm.host_allowed("huggingface.co", fm.DEFAULT_HUB_HOSTS)
+    assert fm.host_allowed("cdn-lfs.huggingface.co", fm.DEFAULT_HUB_HOSTS)
+    assert fm.host_allowed("cas-bridge.hf.co", fm.DEFAULT_HUB_HOSTS)
+    assert not fm.host_allowed("hf.co", fm.DEFAULT_HUB_HOSTS), "`*.hf.co` needs a subdomain"
+    assert not fm.host_allowed("evil.example.com", fm.DEFAULT_HUB_HOSTS)
+    assert not fm.host_allowed("huggingface.co.evil.example", fm.DEFAULT_HUB_HOSTS)
+    assert fm.host_of("https://huggingface.co/Qwen/Qwen3.8-27B-FP8") == "huggingface.co"
+
+    out = io.StringIO()
+    allowed = fm.Hub(endpoint=hub.endpoint, opener=fm.allowlisted_opener(["127.0.0.1"]))
+    plan = fm.plan_model(allowed, fm.Source.parse("tiny=demo/tiny"), tmp_path, log=out)
+    assert len(plan.files) == 3, "loopback is on this allowlist"
+
+    refused = fm.Hub(endpoint=hub.endpoint, opener=fm.allowlisted_opener(fm.DEFAULT_HUB_HOSTS))
+    with pytest.raises(fm.FetchError) as raised:
+        fm.plan_model(refused, fm.Source.parse("tiny=demo/tiny"), tmp_path, log=out)
+    assert raised.value.what_happened == "127.0.0.1 is not an allowed model hub host."
+    assert "huggingface.co, cdn-lfs.huggingface.co, *.hf.co (ADR-0018)" in raised.value.likely_cause
+    assert "SLAS_HUB_HOSTS" in raised.value.what_to_do
+
+    # A redirect to a host outside the list is refused too, before a byte is fetched.
+    handler = fm._AllowlistedRedirects(fm.DEFAULT_HUB_HOSTS)
+    request = urllib.request.Request("https://huggingface.co/demo/tiny/resolve/main/x")
+    with pytest.raises(fm.FetchError, match=r"cdn\.example\.net is not an allowed model hub host"):
+        handler.redirect_request(request, None, 302, "Found", {}, "https://cdn.example.net/blob/x")
+    followed = handler.redirect_request(
+        request, None, 302, "Found", {}, "https://cdn-lfs.huggingface.co/blob/x"
+    )
+    assert followed is not None and followed.full_url == "https://cdn-lfs.huggingface.co/blob/x"
+
+
+def test_the_script_is_a_thin_wrapper_over_the_package() -> None:
+    text = (REPO_ROOT / "scripts" / "fetch_models.py").read_text(encoding="utf-8")
+    assert "import slas_fetch" in text and "main = slas_fetch.main" in text
+    assert "packages" in text and "slas-fetch" in text, "the bare host finds the source tree"
+    assert "urllib" not in text, "no download code lives in the script any more"

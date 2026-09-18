@@ -42,6 +42,7 @@ from the edge.
 | `SLAS_GIT_BROKER_URL` | `http://git-broker:8000` | api, orchestrator |
 | `SLAS_VALIDATION_EXECUTOR_URL` | `http://validation-executor:8000` | orchestrator |
 | `SLAS_FACTORY_EXECUTOR_URL` | `http://factory-executor:8000` | orchestrator, api |
+| `SLAS_MODEL_FETCHER_URL` | `http://model-fetcher:8000` | api (quickstart only, ADR-0018) |
 | `SLAS_BIND` | `0.0.0.0:8000` | every service |
 
 ### Identity between services
@@ -59,6 +60,7 @@ own (a reconcile loop, an MES poller) uses `Identity.system()`.
 |---|---|---|
 | llm-gateway | `slas-gateway` | `slas-gateway serve` |
 | model-manager | `slas-model-manager` | `slas-model-manager serve` |
+| model-fetcher | `slas-model-fetcher` | `slas-model-fetcher serve` |
 | sandbox-manager | `slas-sandbox-manager` | `slas-sandbox-manager serve` |
 | agent-core-orchestrator | `slas-orchestrator` | `slas-orchestrator serve` |
 | git-broker | `slas-git-broker` | `slas-git-broker serve` |
@@ -111,6 +113,7 @@ publishes the table to the gateway (`PUT /v1/instances`). The loop runs in a thr
 | `POST /v1/swap` | `{"role": str, "candidate": str}` → `SwapRecord.model_dump()`; 409 when a swap is in progress; capability `model:manage`. |
 | `POST /v1/rollback` | `{"role"}` → `SwapRecord`; `model:manage`. |
 | `GET /v1/fit` | `?model=<id>` → `{"fits": bool, "sentence": str}` (`fit.py`). |
+| `PUT /v1/roles` | `{"roles": {role: model_id}, "voters": [model_id]}`, both optional: only the keys given change (a role given as `null` is unassigned) → `{"sentence": str, "roles": {...}, "voters": [...], "models": [{"id", "display_name", "family", "quant", "roles", "present"}]}`, the registry as written. Validates that every id is in the registry and its weights are present (`Models/<path>/SHA256SUMS`), rewrites `Models/models.yaml` atomically keeping every other field and the header, and reconciles at once. 400 in three parts for an unknown role or id or a model without the weights; 409 while a swap is in flight; `model:manage`. Roles the model was not declared for are added to its `roles` list (the person's assignment is the declaration, INV-9). |
 
 Environment: `SLAS_RUNTIME_SOCKET` (in-container path `/run/podman/podman.sock`),
 `SLAS_GPU_IDS` (`0,1,2,3`), `SLAS_HOST_MODELS_DIR` (the host path bind-mounted into every
@@ -129,6 +132,53 @@ is reported `failed` with the fit sentence, never started. A crashed container's
 lines go into the `sentence`.
 
 Health check: `{"runtime": "ok"|"down"}` (ping of the socket).
+
+## 3b. model-fetcher (quickstart only, ADR-0018)
+
+The one component with a route out: sole member of `slas-egress`, to the hub allowlist
+(`SLAS_HUB_HOSTS`, default `huggingface.co,cdn-lfs.huggingface.co,*.hf.co`, plus the
+`HF_ENDPOINT` host), through `HTTPS_PROXY` when set. Behind "Add a model" on the Models
+page: it downloads the weights of a pasted link into `${SLAS_DATA_ROOT}/Models/<id>/` with
+`slas_fetch` (resume, sha256 or git blob id per file), writes `SHA256SUMS` and
+`manifest.json` as `scripts/fetch_models.py` does, then appends the entry to
+`Models/models.yaml` (validated with the model manager's loader; never an existing id;
+`roles` and `voters` untouched). The model manager picks the file up on its next tick. It
+starts nothing and mounts no socket. Behind the compose profile `fetch`, which the installer
+activates on quickstart and never on prod.
+
+Accepted links: `https://huggingface.co/<owner>/<repo>`, with `/tree/<revision>` or
+`/commit/<sha>`, `hf.co/<owner>/<repo>`, or a bare `<owner>/<repo>[@revision]`. Anything
+else is a 400 that names those forms. The registry id is the repository name as a slug
+(lowercase, `_` → `-`), made unique against the registry (`-2`, `-3`…) unless the body
+gives one; `path` = id; `family` from the owner (deepseek-ai → DeepSeek, Qwen, BAAI,
+MiniMaxAI → MiniMax, meta-llama → Meta, mistralai → Mistral…, else the owner); `quant` from
+the name (`fp8`, `awq` → `awq4`, else `bf16`; a GPTQ, FP4 or GGUF build is refused because
+the registry does not admit it); `context` from `config.json` `max_position_embeddings`
+(else 32768); `vram_gib` = ⌈bytes / GiB × 1.25⌉, an estimate the done sentence says so.
+
+| Route | Body → Answer |
+|---|---|
+| `POST /v1/fetches` | `{"link": str, "id": str\|null}` → 201 `FetchRecord`; the fetch runs in a background thread. 400 when the link is not accepted, its host is not on the allowlist, the id is not a registry id, or the build's quantisation is not admitted; 409 when that model id is registered already or being fetched; 503 when `models.yaml` is unusable. `model:manage`. |
+| `GET /v1/fetches` | `[FetchRecord]`, newest first (the fetcher's memory; a restart forgets finished records, the files stay). |
+| `GET /v1/fetches/{fetch_id}` | `FetchRecord`; 404 in three parts when unknown. |
+| `DELETE /v1/fetches/{fetch_id}` | A running fetch: sets the cancel flag, checked between files → `{"sentence"}`; the record ends `cancelled` and every finished file stays, so the same link fetched again resumes. A finished record: removed → `{"sentence"}`. `model:manage`. |
+
+`FetchRecord`: `{"id", "link", "model_id", "repo", "revision", "display_name", "state":
+"planning|downloading|importing|done|failed|cancelled", "bytes_done", "bytes_total",
+"files_done", "files_total", "sentence", "started_at", "finished_at": iso|null, "by",
+"problem": {what_happened, likely_cause, what_to_do}|null, "entry": the registry entry as
+written|null}`. Sentences: *"Downloading Qwen3.8-27B-FP8: 12.4 GiB of 29.0 GiB, 3 of 9
+files."* / *"Qwen3.8-27B-FP8 is here (29.0 GiB, 9 files) and registered as qwen3.8-27b-fp8;
+give it a role on this page to start it. Its GPU memory is estimated at 37 GiB from the file
+sizes; correct it in the registry if you know better."*
+
+Environment: `SLAS_MODELS_DIR` (`/data/Models`), `SLAS_HUB_HOSTS`, `HF_ENDPOINT`,
+`HTTPS_PROXY`, `HF_TOKEN_FILE` (`/run/secrets/hf_token`, created empty by install.sh; a
+token for gated repositories is sent as a header only, never logged, never in a URL,
+never returned), `SLAS_BIND`.
+
+Health check: `{"models_dir": "ok"|"unwritable", "hub": "not checked"}` — the hub is never
+called from a health probe.
 
 ## 4. sandbox-manager
 
@@ -327,7 +377,8 @@ answers pass through unchanged; a downstream three-part error is returned with i
 | `/api/v1/git/remotes*`, `/api/v1/git/hosts*`, `/api/v1/git/projects/*` | git-broker `/v1/remotes*`, `/v1/hosts*`, `/v1/projects/*` |
 | `/api/v1/git/projects/{slug}/terminal` | sandbox-manager `/v1/sessions/{session}/terminal` (the api looks the person's session up by slug via `GET /v1/sessions?user=&slug=`) |
 | `/api/v1/stations/*` | factory-executor `/v1/station-records/*` |
-| `/api/v1/models/status` | model-manager `/v1/status`; `POST /api/v1/models/swap`, `/rollback` |
+| `/api/v1/models/status` | model-manager `/v1/status`; `POST /api/v1/models/swap`, `/rollback`; `PUT /api/v1/models/roles` → `/v1/roles` (`model:manage`) |
+| `/api/v1/models/fetches*` | model-fetcher `/v1/fetches*` (§3b): `GET` list and one record for anyone signed in; `POST` and `DELETE` behind `model:manage`. On prod the fetcher is not running, so these answer the 503 that names it. |
 
 The round-1 stubs `GET /api/v1/coding/tasks`, `/validation/runs`, `/factory/jobs` now return
 the real lists. Home lists read them.
@@ -346,6 +397,12 @@ the real lists. Home lists read them.
   `Tickets/`, `Skills/`, `Validation/`, `Factory/`, `SOP/` volumes where the routes above read
   them; the git broker's data directory; `config/git-hosts.yaml` mounted `rw`.
 - Dockerfiles: CMD per §1; the sandbox images build on the connected path (§4).
+- model-fetcher (ADR-0018): first-party image for the quickstart profile only; compose
+  service behind the `fetch` profile on `slas-backend` and the new non-internal `slas-egress`
+  (its sole member), `${SLAS_DATA_ROOT}/Models` mounted rw, the `hf_token` secret (created
+  empty), `SLAS_HUB_HOSTS`, `HF_ENDPOINT` and `HTTPS_PROXY` from `.env`; `install.sh` adds
+  `fetch` to `COMPOSE_PROFILES` on quickstart, never on prod, and removes a leftover
+  container on prod; Prometheus scrapes it on quickstart only.
 - `install.sh --build`: builds the sandbox images (`python -m slas_sandbox_manager.images list`),
   writes the toolchain manifest, pulls the vLLM image, and the preflight says in a sentence
   which runtime serves `SLAS_RUNTIME_SOCKET`, whether `runsc` is registered and whether the

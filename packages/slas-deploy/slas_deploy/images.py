@@ -120,14 +120,21 @@ def _third(
     )
 
 
-def _first(name: str, *, prod_only: bool = False) -> LockedImage:
+def _first(name: str, *, prod_only: bool = False, quickstart_only: bool = False) -> LockedImage:
+    profiles: list[Profile]
+    if prod_only:
+        profiles = ["prod"]
+    elif quickstart_only:
+        profiles = ["quickstart"]
+    else:
+        profiles = ["quickstart", "prod"]
     return LockedImage(
         name=name,
         reference=f"slas/{name}:{VERSION}",
         upstream="built offline from images/ and the vendored caches",
         first_party=True,
         signed_by="slas-release",
-        profiles=["prod"] if prod_only else ["quickstart", "prod"],
+        profiles=profiles,
     )
 
 
@@ -184,6 +191,9 @@ DEFAULT_IMAGES: Final[tuple[LockedImage, ...]] = (
     _first("agent-core-orchestrator"),
     _first("llm-gateway"),
     _first("model-manager"),
+    # The only component with egress (ADR-0018): behind the compose profile `fetch`, which the
+    # installer turns on for quickstart and never for prod; prod keeps the signed bundle path.
+    _first("model-fetcher", quickstart_only=True),
     _first("sandbox-manager"),
     _first("screen-worker"),
     _first("git-broker"),
@@ -262,19 +272,57 @@ def images_off_for(agents: Sequence[str]) -> frozenset[str]:
     return frozenset(off)
 
 
-def services_off_for(agents: Sequence[str]) -> list[str]:
-    """Compose services an installation without these agents does not start, in start order."""
-    return [
+#: The model fetcher (ADR-0018): its compose profile, the service behind it, and the profile
+#: of the installation that starts it. Compose cannot remove a service in an override, so the
+#: prod profile simply never activates `fetch` and the installer removes a leftover container.
+FETCH_PROFILE: Final = "fetch"
+FETCH_SERVICES: Final[tuple[str, ...]] = ("model-fetcher",)
+FETCH_INSTALL_PROFILE: Final[Profile] = "quickstart"
+
+
+def fetcher_on(profile: Profile) -> bool:
+    return profile == FETCH_INSTALL_PROFILE
+
+
+def services_off_for(agents: Sequence[str], profile: Profile = "quickstart") -> list[str]:
+    """Compose services this installation does not start, in start order: the parts of the
+    agents that are off (ADR-0017) and, on prod, the model fetcher (ADR-0018)."""
+    off = [
         service
         for agent in AGENTS
         if agent in AGENT_SERVICES and agent not in agents
         for service in AGENT_SERVICES[agent]
     ]
+    if not fetcher_on(profile):
+        off.extend(FETCH_SERVICES)
+    return off
 
 
-def compose_profiles(agents: Sequence[str]) -> list[str]:
-    """The compose profiles (`COMPOSE_PROFILES`) the chosen agents need."""
-    return [agent for agent in AGENTS if agent in agents and agent in AGENT_IMAGES]
+def compose_profiles(agents: Sequence[str], profile: Profile = "quickstart") -> list[str]:
+    """The compose profiles (`COMPOSE_PROFILES`) the chosen agents need, plus `fetch` on
+    quickstart for the model fetcher (ADR-0018)."""
+    profiles = [agent for agent in AGENTS if agent in agents and agent in AGENT_IMAGES]
+    if fetcher_on(profile):
+        profiles.append(FETCH_PROFILE)
+    return profiles
+
+
+def profiles_sentence(profiles: Sequence[str]) -> str:
+    """What install.sh prints about `COMPOSE_PROFILES`; empty when there is none."""
+    if not profiles:
+        return ""
+    chosen = [p for p in profiles if p != FETCH_PROFILE]
+    listed = ",".join(profiles)
+    if chosen and FETCH_PROFILE in profiles:
+        why = (
+            "the parts you chose with --agents, and the model fetcher of the quickstart "
+            "profile, ADR-0018"
+        )
+    elif FETCH_PROFILE in profiles:
+        why = "the model fetcher of the quickstart profile, ADR-0018"
+    else:
+        why = "the parts you chose with --agents"
+    return f"Compose profiles: {listed} ({why})."
 
 
 class ImageLock(SlasModel):

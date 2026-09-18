@@ -37,7 +37,9 @@ from slas_model_manager.registry import (
     Registry,
     RegistryError,
     instance_name,
+    read_registry_file,
     registry_from_mapping,
+    write_registry_file,
 )
 from slas_model_manager.runtime import ContainerRef, ContainerRuntime, task_for_role, vllm_spec
 from slas_model_manager.swap import Clock, SmokeTester, SwapError, SwapManager, SwapRecord
@@ -155,6 +157,130 @@ class Controller:
 
     def registry(self) -> Registry | None:
         return self._registry
+
+    # --- roles and voters from the Models page (contract §3 PUT /v1/roles, INV-9) -------------
+
+    def weights_present(self, entry: ModelEntry) -> bool:
+        """`Models/<path>/SHA256SUMS` beside the registry file: what the fetch writes last."""
+        return (self.registry_path.parent / entry.path / "SHA256SUMS").is_file()
+
+    def set_roles(
+        self, roles: Mapping[str, str | None] | None, voters: Sequence[str] | None
+    ) -> dict[str, Any]:
+        """Change who serves which role and who votes; only the keys given change. The file
+        is rewritten atomically with every other field kept, then reconciled at once."""
+        with self._lock:
+            if roles is None and voters is None:
+                raise ServiceError(
+                    400,
+                    ThreePartMessage(
+                        "Nothing to change.",
+                        "The request named neither a role nor the voters.",
+                        "Pick a model for a role or tick the voters, then save.",
+                    ),
+                )
+            self._refuse_if_swapping()
+            try:
+                data, header = read_registry_file(self.registry_path)
+            except RegistryError as exc:
+                raise ServiceError(503, exc.message) from exc
+            registry = registry_from_mapping(data, source=str(self.registry_path))
+            models = [dict(m) for m in data.get("models", []) if isinstance(m, dict)]
+            by_id = {str(m.get("id")): m for m in models}
+            assigned: dict[str, str] = dict(data.get("roles") or {})
+            changed: list[str] = []
+            for role, model_id in (roles or {}).items():
+                if role not in ROLES:
+                    raise ServiceError(
+                        400,
+                        ThreePartMessage(
+                            f"{role} is not a role.",
+                            f"The roles are {', '.join(ROLES)}.",
+                            "Pick a role from the Models page.",
+                        ),
+                    )
+                if model_id is None:
+                    if assigned.pop(role, None) is not None:
+                        changed.append(f"{role} is no longer served")
+                    continue
+                entry = self._present_entry(registry, model_id)
+                assigned[role] = model_id
+                declared = list(by_id[model_id].get("roles") or [])
+                if role not in declared:
+                    by_id[model_id]["roles"] = [*declared, role]
+                changed.append(f"{role} → {entry.display_name}")
+            if voters is not None:
+                if len(set(voters)) != len(voters):
+                    raise ServiceError(
+                        400,
+                        ThreePartMessage(
+                            "A model is listed twice among the voters.",
+                            "Voters are distinct models, from different families where possible.",
+                            "Tick each model once.",
+                        ),
+                    )
+                names = [self._present_entry(registry, v).display_name for v in voters]
+                data["voters"] = list(voters)
+                changed.append(
+                    f"voters: {', '.join(names)}"
+                    if names
+                    else "no voters (cross-checks are flagged)"
+                )
+            data["roles"] = assigned
+            data["models"] = models
+            try:
+                written = write_registry_file(self.registry_path, data, header=header)
+            except RegistryError as exc:
+                raise ServiceError(400, exc.message) from exc
+            self.log.info("registry.roles_changed", changes=changed)
+            report = self.reconcile()
+            families = len(set(written.voter_families()))
+            sentence = (
+                f"Saved: {'; '.join(changed) or 'nothing changed'}. "
+                f"{len(written.voters)} {'voter' if len(written.voters) == 1 else 'voters'} from "
+                f"{families} {'family' if families == 1 else 'families'}. {report.sentence}"
+            )
+            return {
+                "sentence": sentence,
+                "roles": dict(written.roles),
+                "voters": list(written.voters),
+                "models": [
+                    {
+                        "id": m.id,
+                        "display_name": m.display_name,
+                        "family": m.family,
+                        "quant": m.quant,
+                        "roles": list(m.roles),
+                        "present": self.weights_present(m),
+                    }
+                    for m in written.models
+                ],
+            }
+
+    def _present_entry(self, registry: Registry, model_id: str) -> ModelEntry:
+        try:
+            entry = registry.model(model_id)
+        except KeyError:
+            raise ServiceError(
+                400,
+                ThreePartMessage(
+                    f"There is no model called {model_id} in the registry.",
+                    "The id is mistyped, or the entry was removed from Models/models.yaml.",
+                    "Pick a model from the Models page.",
+                ),
+            ) from None
+        if not self.weights_present(entry):
+            raise ServiceError(
+                400,
+                ThreePartMessage(
+                    f"The weights of {entry.display_name} are not here yet.",
+                    f"Models/{entry.path}/SHA256SUMS does not exist, so an instance could not "
+                    "start.",
+                    "Add the model from this page (or run ./install.sh --models) first, then "
+                    "assign it.",
+                ),
+            )
+        return entry
 
     # --- the loop -----------------------------------------------------------------------------
 

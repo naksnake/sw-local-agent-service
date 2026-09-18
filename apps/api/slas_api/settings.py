@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     slas_sandbox_manager_url: str = "http://sandbox-manager:8000"
     slas_factory_executor_url: str = "http://factory-executor:8000"
     slas_model_manager_url: str = "http://model-manager:8000"
+    slas_model_fetcher_url: str = "http://model-fetcher:8000"
 
     # --- derived ------------------------------------------------------------------------
 

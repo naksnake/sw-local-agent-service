@@ -101,6 +101,13 @@ PYTHON_SERVICES: Final[tuple[PythonService, ...]] = (
         command=("slas-model-manager", "serve"),
     ),
     PythonService(
+        "model-fetcher",
+        "slas-model-fetcher",
+        "the model fetcher: weights from a pasted hub link into Models/, quickstart only (ADR-0018)",
+        apt=("ca-certificates",),
+        command=("slas-model-fetcher", "serve"),
+    ),
+    PythonService(
         "sandbox-manager",
         "slas-sandbox-manager",
         "the sandbox manager for Zone A (CLAUDE.md §4.1)",

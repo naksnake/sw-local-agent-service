@@ -1,0 +1,16 @@
+[project]
+name = "slas-fetch"
+version = "0.0.1"
+description = "Resumable, checksummed model-weight fetches from the hub: the library behind scripts/fetch_models.py and the model-fetcher service (ADR-0014, ADR-0018)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+# Standard library only, on purpose: scripts/fetch_models.py imports this package from the
+# source tree on a bare host with no virtualenv (tests/unit/test_host_cli_is_stdlib_only.py).
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""

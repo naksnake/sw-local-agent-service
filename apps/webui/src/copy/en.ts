@@ -434,7 +434,7 @@ export const settings = {
 
 export const models = {
   heading: "Models",
-  lede: "Which model serves each role, and the cross-check voters.",
+  lede: "Which model serves each role, the cross-check voters, and adding a model from a link.",
   loading: "Loading models…",
   failedToLoad: {
     whatHappened: "The model registry didn't load.",
@@ -454,12 +454,63 @@ export const models = {
   vram: (gib: number) => `${gib % 1 === 0 ? gib.toFixed(0) : gib.toFixed(1)} GiB of GPU memory`,
   context: (tokens: number) => `${tokens.toLocaleString("en-US")} tokens of context`,
   roles: (roles: readonly string[]) => (roles.length === 0 ? "serves no role" : `may serve ${roles.join(", ")}`),
-  roleLine: (role: string, modelName: string) => `${role} → ${modelName}`,
   voterLine: (modelName: string, family: string) => `${modelName} (${family})`,
   voterCount: (n: number, families: number) =>
     `${n} ${n === 1 ? "voter" : "voters"} from ${families} model ${families === 1 ? "family" : "families"}.`,
   quant: { fp8: "FP8", awq4: "AWQ 4-bit", bf16: "BF16" } as Record<string, string>,
-  readOnly: "Swapping and rolling back models arrives with the Models service; until then, edit Models/models.yaml on the host and run `slas model fit` before a load.",
+  footer:
+    "Changes save to Models/models.yaml on the host; the model manager starts and stops instances to match within about 30 seconds, no restart needed.",
+
+  /** "Add a model" (ADR-0018): a pasted link, the model fetcher, a card. */
+  add: {
+    heading: "Add a model",
+    linkLabel: "Paste a Hugging Face link",
+    linkPlaceholder: "https://huggingface.co/Qwen/Qwen3.8-27B-FP8",
+    idLabel: "Registry id (optional)",
+    idHelp: "Empty means the repository name in lowercase, made unique.",
+    whatHappens:
+      "The weights download onto this host through the model fetcher and the model appears on this page; give it a role to start it.",
+    button: "Download and import",
+    starting: "Starting…",
+    notAllowed: "Adding a model needs the model:manage capability. Ask an administrator to add it, or to give you a role that includes it.",
+    fetchesHeading: "Downloads",
+    cancel: "Cancel",
+    remove: "Remove",
+    notStarted: {
+      whatHappened: "The download didn't start.",
+      likelyCause: "The api service didn't answer.",
+      whatToDo: `Press Download and import again; ${LOGS_API}`,
+    } satisfies ThreePart,
+    notCancelled: {
+      whatHappened: "The download wasn't cancelled.",
+      likelyCause: "The api service didn't answer.",
+      whatToDo: `Press Cancel again; ${LOGS_API}`,
+    } satisfies ThreePart,
+    progressLabel: (done: string, total: string) => `${done} of ${total} downloaded`,
+    state: {
+      planning: "Planning",
+      downloading: "Downloading",
+      importing: "Importing",
+      done: "Done",
+      failed: "Failed",
+      cancelled: "Cancelled",
+    } as Record<string, string>,
+  },
+
+  /** The Roles and Voters panels as a form (PUT /models/roles, INV-9). */
+  edit: {
+    noModel: "— no model —",
+    notHere: (modelName: string) => `${modelName} (weights not here yet)`,
+    voterHelp: "Pick models from different families so their errors decorrelate (CLAUDE.md §5.3).",
+    save: "Save roles",
+    saving: "Saving…",
+    notAllowed: "Changing roles and voters needs the model:manage capability. Ask an administrator to change them, or to give you a role that includes it.",
+    notSaved: {
+      whatHappened: "The roles weren't saved.",
+      likelyCause: "The api service didn't answer.",
+      whatToDo: `Press Save roles again; ${LOGS_API}`,
+    } satisfies ThreePart,
+  },
 };
 
 // --- The agent pages on the real api (docs/api-contract-round-2.md §5, §7) -------------------
