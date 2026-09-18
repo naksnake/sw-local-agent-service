@@ -691,6 +691,8 @@ def test_instances_already_loading_beside_the_coder_are_paused_until_it_answers(
     assert rows["vllm-planner"]["state"] == "starting"
     assert "waits its turn" in rows["vllm-planner"]["sentence"]
     assert [e["instance"] for e in h.events("instance.paused")] == sorted(paused)
+    # A loading vLLM ignores SIGTERM; the first host waited 30 s per pause. A pause kills fast.
+    assert {h.api.stop_timeouts[name] for name in paused} == {2}
 
     h.prober.healthy = {"vllm-coder"}
     h.controller.reconcile()

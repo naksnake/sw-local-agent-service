@@ -56,6 +56,9 @@ CODER_ROLE: Final = "coder"
 #: A running container the restart policy has started this many times after failed exits
 #: is a crash loop, reported `failed` with its log tail, not "loading".
 CRASH_LOOP_RESTARTS: Final = 3
+#: A vLLM instance that is still loading ignores SIGTERM until the runtime kills it, and it
+#: has nothing to lose; pausing one waits this long, not the 30 s a serving instance gets.
+PAUSE_STOP_TIMEOUT_S: Final = 2
 
 
 class SystemClock:
@@ -417,6 +420,7 @@ class Controller:
         # manager started) are paused the same way: stopped now, started when the coder
         # answers. Otherwise a manager restart on a host where all seven load at once would
         # leave the coder competing for the disk exactly as before.
+        paused: set[str] = set()
         for name in sorted(statuses):
             if (
                 gate
@@ -436,6 +440,7 @@ class Controller:
                     )
                 )
                 deferred.add(name)
+                paused.add(name)
                 self.log.info("instance.paused", instance=name, reason=waiting_reason)
         touched = {a.name for a in actions if a.kind != "keep"}
         pinned = {
@@ -475,7 +480,8 @@ class Controller:
                 ref = refs.pop(action.name) if action.name in refs else None
                 statuses.pop(action.name, None)
                 if ref is not None:
-                    self.runtime.stop(ref)
+                    timeout_s = PAUSE_STOP_TIMEOUT_S if action.name in paused else 30
+                    self.runtime.stop(ref, timeout_s=timeout_s)
                     self.log.info("instance.stopped", instance=action.name, reason=action.reason)
                 self._ever_healthy.discard(action.name)
         for action in starting:

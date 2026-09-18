@@ -202,8 +202,8 @@ class ContainerApiRuntime:
         self._specs[spec.name] = spec
         return ContainerRef(id=container_id or f"name:{spec.name}", spec=spec)
 
-    def stop(self, ref: ContainerRef) -> None:
-        self.api.stop(ref.name)
+    def stop(self, ref: ContainerRef, *, timeout_s: int = 30) -> None:
+        self.api.stop(ref.name, timeout_s=timeout_s)
         self.api.remove(ref.name, force=True)
         self._specs.pop(ref.name, None)
 
@@ -266,8 +266,8 @@ class PatientRuntime:
     def start(self, spec: ContainerSpec) -> ContainerRef:
         return self.inner.start(spec)
 
-    def stop(self, ref: ContainerRef) -> None:
-        self.inner.stop(ref)
+    def stop(self, ref: ContainerRef, *, timeout_s: int = 30) -> None:
+        self.inner.stop(ref, timeout_s=timeout_s)
 
     def running(self) -> list[ContainerRef]:
         return self.inner.running()

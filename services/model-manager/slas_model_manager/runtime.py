@@ -91,7 +91,7 @@ class ContainerRef(SlasModel):
 class ContainerRuntime(Protocol):
     def start(self, spec: ContainerSpec) -> ContainerRef: ...
 
-    def stop(self, ref: ContainerRef) -> None: ...
+    def stop(self, ref: ContainerRef, *, timeout_s: int = 30) -> None: ...
 
     def is_healthy(self, ref: ContainerRef) -> bool: ...
 
@@ -169,7 +169,7 @@ class FakeRuntime:
         self.started.append(spec.name)
         return ref
 
-    def stop(self, ref: ContainerRef) -> None:
+    def stop(self, ref: ContainerRef, *, timeout_s: int = 30) -> None:
         self._running.pop(ref.name, None)
         self.stopped.append(ref.name)
 

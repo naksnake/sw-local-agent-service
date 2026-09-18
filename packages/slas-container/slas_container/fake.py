@@ -32,6 +32,7 @@ class FakeContainerApi:
         self.logs_text: dict[str, str] = {}
         self.restart_counts: dict[str, int] = {}
         self.exit_codes: dict[str, int] = {}
+        self.stop_timeouts: dict[str, int] = {}
         self._handler: ExecHandler | None = None
         self.down = False
 
@@ -157,6 +158,7 @@ class FakeContainerApi:
 
     def stop(self, name: str, *, timeout_s: int = 30) -> None:
         self._require_up()
+        self.stop_timeouts[name] = timeout_s
         if name in self.specs:
             self.states[name] = "exited"
 
