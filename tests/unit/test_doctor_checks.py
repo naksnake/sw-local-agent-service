@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 
 import pytest
@@ -575,3 +576,30 @@ def test_web_port(in_use: bool | None, status: str, summary: str) -> None:
     result = checks.check_web_port(host, SETTINGS)
     assert result.status == status
     assert result.summary == summary
+    if status == "fail":
+        assert result.detail is not None
+        assert "docker compose -p slas down" in result.detail.what_to_do
+
+
+def test_web_port_held_by_our_own_edge_is_fine() -> None:
+    """A second ./install.sh while the first stack is up: the listener on 443 is our edge."""
+    host = FakeHost.healthy()
+    host.ports[443] = True
+    query = checks.OWN_EDGE_QUERY
+    assert query.startswith("/containers/json?filters=") and "%22" in query and " " not in query
+    host.http[("/var/run/docker.sock", query)] = json.dumps(
+        [{"Id": "abc", "Names": ["/slas-edge-1"], "State": "running"}]
+    )
+    result = checks.check_web_port(host, SETTINGS)
+    assert result.status == "ok"
+    assert result.summary == (
+        "Port 443 is held by this installation's own edge container; the install keeps it."
+    )
+    assert ("/var/run/docker.sock", query) in host.http_calls
+
+    # No edge of ours behind the socket: the port belongs to something else.
+    host.http[("/var/run/docker.sock", query)] = "[]"
+    assert checks.check_web_port(host, SETTINGS).status == "fail"
+    # No engine answers at all: the check cannot tell whose the listener is, so it fails.
+    host.sockets.clear()
+    assert checks.check_web_port(host, SETTINGS).status == "fail"

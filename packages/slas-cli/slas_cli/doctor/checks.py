@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.parse
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -736,6 +737,34 @@ def check_disk_space(host: Host, settings: DoctorSettings) -> CheckResult:
     )
 
 
+#: `GET /containers/json` narrowed to this installation's running edge container: the compose
+#: project is `slas` (install.sh's --project-name) and the service is `edge`, the one service
+#: that publishes a port (CLAUDE.md §12).
+OWN_EDGE_QUERY = "/containers/json?filters=" + urllib.parse.quote(
+    json.dumps(
+        {"label": ["com.docker.compose.project=slas", "com.docker.compose.service=edge"]},
+        separators=(",", ":"),
+    ),
+    safe="",
+)
+
+
+def own_edge_running(host: Host, settings: DoctorSettings) -> bool | None:
+    """Whether this installation's own edge container is running, asked of the runtime
+    socket; None when no engine answers."""
+    engine = find_runtime_engine(host, settings)
+    if engine is None:
+        return None
+    body = host.http_get_unix(engine.socket_path, OWN_EDGE_QUERY)
+    if body is None:
+        return None
+    try:
+        rows = json.loads(body)
+    except ValueError:
+        return None
+    return isinstance(rows, list) and any(isinstance(row, dict) for row in rows)
+
+
 def check_web_port(host: Host, settings: DoctorSettings) -> CheckResult:
     check_id, title = "web_port", "Web port"
     port = settings.web_port
@@ -744,14 +773,23 @@ def check_web_port(host: Host, settings: DoctorSettings) -> CheckResult:
         return _skip(check_id, title, f"Could not check whether port {port} is free.")
     if not in_use:
         return _ok(check_id, title, f"Port {port} is free for the web interface.")
+    # A second ./install.sh runs while the stack from the first one is up: the listener is
+    # then our own edge, which `docker compose up` keeps or recreates. That is not a problem.
+    if own_edge_running(host, settings):
+        return _ok(
+            check_id,
+            title,
+            f"Port {port} is held by this installation's own edge container; the install keeps it.",
+        )
     return _problem(
         check_id,
         title,
         "fail",
         f"Something is already listening on port {port}.",
         "Another web server or an earlier installation is using the port the web interface needs.",
-        "Stop the other service, or set SLAS_HTTPS_PORT to a free port in .env, then run "
-        "./install.sh again.",
+        "Stop the other service (an earlier installation of this platform stops with "
+        "`docker compose -p slas down`), or set SLAS_HTTPS_PORT to a free port in .env, then "
+        "run ./install.sh again.",
     )
 
 
