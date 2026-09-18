@@ -3,13 +3,15 @@ import { useCallback, useEffect, useState } from "react";
 import { isLive, POLL_INTERVAL_MS, usePolling } from "../api/polling";
 import type { GitApi } from "../git/api";
 import { GitPanel } from "../git/GitPanel";
-import type { CodingApi, CodingTask, StepStatus } from "./api";
+import { type CodingApi, type CodingTask, isFinished, type StepStatus } from "./api";
 import { NewCodingTaskWizard } from "./NewCodingTaskWizard";
 
 // The Coding page (CLAUDE.md §9): tasks with their plan checklist and activity feed, and
 // one primary action — New coding task. Each task can open its project's Git panel
-// (Status · Commit · History · Push/Pull · Bundle · Terminal). The list is re-read every
-// few seconds while a task is still running (live progress). Copy: docs/ui/coding.md.
+// (Status · Commit · History · Push/Pull · Bundle · Terminal). A finished task can be
+// removed (its ticket, SOP and artifacts; the project's repository stays), one at a time or
+// all at once with "Clear finished tasks". The list is re-read every few seconds while a
+// task is still running (live progress). Copy: docs/ui/coding.md.
 
 interface Props {
   api: CodingApi;
@@ -34,6 +36,9 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
   const [tasks, setTasks] = useState<CodingTask[] | null>(null);
   const [wizardOpen, setWizardOpen] = useState(startWizardOpen);
   const [gitOpenFor, setGitOpenFor] = useState<string | null>(null);
+  /** The last removal's sentence, or what went wrong; shown above the list. */
+  const [notice, setNotice] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   const refresh = useCallback(async () => setTasks(await api.listTasks()), [api]);
 
@@ -43,6 +48,32 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
     });
   }, [refresh]);
   usePolling(refresh, tasks?.some((task) => isLive(task.state)) === true ? POLL_INTERVAL_MS : null);
+
+  const finished = (tasks ?? []).filter(isFinished);
+
+  const remove = async (targets: CodingTask[]) => {
+    setRemoving(true);
+    const sentences: string[] = [];
+    try {
+      for (const task of targets) {
+        try {
+          sentences.push(await api.remove(task.ticketId));
+          setTasks((current) => (current ?? []).filter((t) => t.ticketId !== task.ticketId));
+        } catch (error: unknown) {
+          sentences.push(
+            `${task.ticketId} was not removed: ${error instanceof Error ? error.message : "the service did not answer."}`,
+          );
+        }
+      }
+      setNotice(
+        targets.length > 1
+          ? `${targets.length - sentences.filter((s) => s.includes("was not removed")).length} of ${targets.length} finished tasks were removed. ${sentences.filter((s) => s.includes("was not removed")).join(" ")}`.trim()
+          : (sentences[0] ?? null),
+      );
+    } finally {
+      setRemoving(false);
+    }
+  };
 
   return (
     <div className="space-y-8">
@@ -77,9 +108,27 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
       )}
 
       <section aria-labelledby="tasks-heading">
-        <h2 id="tasks-heading" className="text-lg font-medium">
-          Tasks
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="tasks-heading" className="text-lg font-medium">
+            Tasks
+          </h2>
+          {finished.length > 0 && (
+            <button
+              type="button"
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700"
+              disabled={removing}
+              title="Removes every task that is done, failed or waiting for review; the projects' repositories stay."
+              onClick={() => void remove(finished)}
+            >
+              Clear finished tasks
+            </button>
+          )}
+        </div>
+        {notice !== null && (
+          <p className="mt-2 text-sm text-slate-700 dark:text-slate-300" role="status">
+            {notice}
+          </p>
+        )}
         {tasks === null ? (
           <p className="text-sm text-slate-600 dark:text-slate-400">Loading tasks…</p>
         ) : tasks.length === 0 ? (
@@ -125,8 +174,8 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
                   Open the Terminal tab to inspect the branch; push happens from the Git panel,
                   which uses your saved remote.
                 </p>
-                {gitApi !== undefined && (
-                  <div className="mt-3">
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {gitApi !== undefined && (
                     <button
                       type="button"
                       className="rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700"
@@ -134,11 +183,23 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
                     >
                       {gitOpenFor === task.ticketId ? "Hide Git panel" : "Git panel"}
                     </button>
-                    {gitOpenFor === task.ticketId && (
-                      <div className="mt-3">
-                        <GitPanel api={gitApi} slug={slugOf(task.title)} />
-                      </div>
-                    )}
+                  )}
+                  {isFinished(task) && (
+                    <button
+                      type="button"
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700"
+                      disabled={removing}
+                      aria-label={`Remove ${task.ticketId}`}
+                      title="Removes this task's ticket, SOP and artifacts; the project's repository stays."
+                      onClick={() => void remove([task])}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                {gitApi !== undefined && gitOpenFor === task.ticketId && (
+                  <div className="mt-3">
+                    <GitPanel api={gitApi} slug={slugOf(task.title)} />
                   </div>
                 )}
               </li>

@@ -152,6 +152,7 @@ Service URLs on the api (round-2 §1, set by compose): `SLAS_ORCHESTRATOR_URL`,
 | `POST /api/v1/coding/tasks` | orchestrator `/v1/coding/tasks` | signed in |
 | `GET /api/v1/coding/tasks` | orchestrator `/v1/coding/tasks` | signed in |
 | `GET /api/v1/coding/tasks/{ticket_id}` | orchestrator `/v1/coding/tasks/{ticket_id}` | signed in |
+| `DELETE /api/v1/coding/tasks/{ticket_id}` | orchestrator `/v1/coding/tasks/{ticket_id}` (remove a finished task) | signed in |
 | `POST /api/v1/validation/suites/parse` | orchestrator `/v1/validation/suites/parse` | signed in |
 | `GET /api/v1/validation/targets` | orchestrator `/v1/validation/targets` | signed in |
 | `POST /api/v1/validation/preview` | orchestrator `/v1/validation/preview` | signed in |

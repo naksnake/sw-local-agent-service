@@ -107,6 +107,16 @@ describe("HttpCodingApi (contract §5 Coding, §8)", () => {
     }
   });
 
+  it("removes a finished task with a DELETE and returns the service's sentence", async () => {
+    const fake = fetchWith(() => ({ sentence: "T-coding-0003 and its files were removed. The project's repository stays." }));
+    const sentence = await new HttpCodingApi(fake.http).remove("T-coding-0003");
+    const call = fake.only();
+    expect(call.method).toBe("DELETE");
+    expect(call.url).toBe("/api/v1/coding/tasks/T-coding-0003");
+    expectRequestedWith(call);
+    expect(sentence).toBe("T-coding-0003 and its files were removed. The project's repository stays.");
+  });
+
   it("starts a task with the snake_case breakdown, the plan and the filename, and maps the CodingTask", async () => {
     const fake = fetchWith(() => TASK_WIRE);
     const task = await new HttpCodingApi(fake.http).start(BREAKDOWN, "# Fan controller", "fan-plan.md");

@@ -182,6 +182,7 @@ ticket with the executor's state.
 | `POST /v1/coding/tasks` | `{"breakdown": Breakdown, "plan": str, "filename": str}` → `CodingTask` (below); starts the kernel run. |
 | `GET /v1/coding/tasks` | `[CodingTask]`, newest first, the person's own unless `admin:people`. |
 | `GET /v1/coding/tasks/{ticket_id}` | `CodingTask`. |
+| `DELETE /v1/coding/tasks/{ticket_id}` | Remove a finished task (Done, Failed or Needs review): the ticket and its journal, its SOP, its artifacts and any sandbox session still open for it → `{"sentence"}`. 409 while the task is running; 404 for a task the person may not see. The project directory under `Coding/<user>/Projects/<slug>` stays: it is the person's repository. |
 
 `CodingTask`: `{"ticket_id", "title", "state", "sentence", "steps": [{"n", "title", "status":
 "pending|running|done|failed|skipped"}], "feed": [str]}`. `steps` come from the plan and the

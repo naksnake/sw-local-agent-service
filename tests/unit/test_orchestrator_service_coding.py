@@ -401,6 +401,9 @@ class Harness:
     def post(self, path: str, body: dict[str, Any], identity: Identity = PAT) -> Any:
         return self.client.post(path, json=body, headers=identity.headers())
 
+    def delete(self, path: str, identity: Identity = PAT) -> Any:
+        return self.client.delete(path, headers=identity.headers())
+
     def start(self, breakdown: dict[str, Any], identity: Identity = PAT) -> dict[str, Any]:
         response = self.post(
             "/v1/coding/tasks", {"breakdown": breakdown, "plan": PLAN, "filename": "plan.md"}
@@ -587,6 +590,34 @@ def test_a_task_runs_over_http_to_done_with_zip_votes_and_feed(tmp_path: Path) -
     full = harness.get(f"/v1/tickets/{ticket_id}").json()
     assert full["id"] == ticket_id and full["plan"]["steps"][0]["primitive"] == "toolchain"
     assert harness.get("/v1/tickets/T-coding-9999").status_code == 404
+
+    # Clean task: a stranger cannot remove it; the owner can once it is done. The ticket, its
+    # SOP and artifacts go; the project's repository and the sandbox session's TTL are not
+    # this route's business, and the run registry forgets the finished run.
+    assert harness.delete(f"/v1/coding/tasks/{ticket_id}", STRANGER).status_code == 404
+    still_running = make_ticket("T-coding-0042").model_copy(update={"state": TicketState.RUNNING})
+    FileTicketStore(tmp_path).save(still_running)
+    refused = harness.delete("/v1/coding/tasks/T-coding-0042")
+    assert refused.status_code == 409
+    assert (
+        refused.json()["what_happened"]
+        == "T-coding-0042 is still running, so it cannot be removed."
+    )
+    removed = harness.delete(f"/v1/coding/tasks/{ticket_id}")
+    assert removed.status_code == 200, removed.text
+    assert removed.json() == {
+        "sentence": f"{ticket_id} and its files were removed. The project's repository stays."
+    }
+    assert not (tmp_path / "Tickets" / ticket_id).exists()
+    assert not (tmp_path / "SOP" / ticket_id).exists() and not artifacts.exists()
+    assert (tmp_path / "Coding" / "pat" / "Projects" / "fan-controller").is_dir(), "the repo stays"
+    assert harness.get(f"/v1/coding/tasks/{ticket_id}").status_code == 404
+    assert harness.delete(f"/v1/coding/tasks/{ticket_id}").status_code == 404
+    assert [t["ticket_id"] for t in harness.get("/v1/coding/tasks", ADMIN).json()] == [
+        "T-coding-0042"
+    ]
+    assert any(e["event"] == "coding.task_removed" for e in harness.sink.records())
+    (tmp_path / "Tickets" / "T-coding-0042").rename(tmp_path / "Tickets" / "gone-0042")
 
 
 @needs_git

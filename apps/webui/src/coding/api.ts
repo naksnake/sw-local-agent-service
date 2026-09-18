@@ -98,6 +98,13 @@ export interface CodingApi {
   /** `filename` is the plan file's name (default plan.md); the api records it on the ticket. */
   start(breakdown: Breakdown, plan: string, filename?: string): Promise<CodingTask>;
   listTasks(): Promise<CodingTask[]>;
+  /** Remove a finished task and its files; resolves to the sentence the service answers. */
+  remove(ticketId: string): Promise<string>;
+}
+
+/** A task that has stopped: Done, Failed or Needs review. Only these can be removed. */
+export function isFinished(task: CodingTask): boolean {
+  return ["Done", "Failed", "Needs review"].includes(task.state);
 }
 
 export function labelOf(language: LanguageId): string {
@@ -341,5 +348,18 @@ export class FakeCodingApi implements CodingApi {
 
   async listTasks(): Promise<CodingTask[]> {
     return [...this.tasks];
+  }
+
+  async remove(ticketId: string): Promise<string> {
+    const index = this.tasks.findIndex((task) => task.ticketId === ticketId);
+    if (index === -1) {
+      throw new Error(`There is no ticket ${ticketId}.`);
+    }
+    const task = this.tasks[index];
+    if (task !== undefined && !isFinished(task)) {
+      throw new Error(`${ticketId} is still running.`);
+    }
+    this.tasks.splice(index, 1);
+    return `${ticketId} and its files were removed.`;
   }
 }

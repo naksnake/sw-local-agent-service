@@ -67,6 +67,9 @@ ROUTES: Final[tuple[ProxyRoute, ...]] = (
     ProxyRoute("POST", "/coding/tasks", "orchestrator", "/v1/coding/tasks"),
     ProxyRoute("GET", "/coding/tasks", "orchestrator", "/v1/coding/tasks"),
     ProxyRoute("GET", "/coding/tasks/{ticket_id}", "orchestrator", "/v1/coding/tasks/{ticket_id}"),
+    ProxyRoute(
+        "DELETE", "/coding/tasks/{ticket_id}", "orchestrator", "/v1/coding/tasks/{ticket_id}"
+    ),
     # --- Validation (orchestrator §5) -----------------------------------------------------
     ProxyRoute("POST", "/validation/suites/parse", "orchestrator", "/v1/validation/suites/parse"),
     ProxyRoute("GET", "/validation/targets", "orchestrator", "/v1/validation/targets"),

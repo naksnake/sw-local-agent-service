@@ -246,6 +246,13 @@ class CodingExecutor:
     def session_for(self, ticket_id: str) -> Session | None:
         return self._sessions.get(ticket_id)
 
+    def forget(self, ticket_id: str) -> Session | None:
+        """Drop what the executor remembers of a removed ticket; returns the session it held,
+        if any, so the caller can close it."""
+        self._base.pop(ticket_id, None)
+        self._branches.pop(ticket_id, None)
+        return self._sessions.pop(ticket_id, None)
+
     def _workspace(self, session: Session, user: str) -> GitWorkspace:
         exec_, cwd = self._git_access(session)
         identity = Identity.for_user(user, self.display_names.get(user, user))

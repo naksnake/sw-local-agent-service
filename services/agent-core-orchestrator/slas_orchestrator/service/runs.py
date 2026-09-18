@@ -128,6 +128,18 @@ class RunRegistry:
         with self._lock:
             return [t for t, run in self._by_ticket.items() if run.running]
 
+    def forget(self, ticket_id: str) -> bool:
+        """Drop the finished run of a ticket that was removed; False while it is still running."""
+        with self._lock:
+            state = self._by_ticket.get(ticket_id)
+            if state is None:
+                return True
+            if state.running:
+                return False
+            del self._by_ticket[ticket_id]
+            self._by_job.pop(state.job_id, None)
+            return True
+
     def start(
         self,
         job_id: str,

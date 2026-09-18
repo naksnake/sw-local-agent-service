@@ -140,6 +140,11 @@ export class HttpCodingApi implements CodingApi {
     return recordList(await this.http.get<unknown>("/coding/tasks")).map(taskFromWire);
   }
 
+  async remove(ticketId: string): Promise<string> {
+    const answer = await this.http.del<unknown>(`/coding/tasks/${seg(ticketId)}`);
+    return str(asRecord(answer)["sentence"], `${ticketId} was removed.`);
+  }
+
   /** One task, for a page that follows a ticket; not part of `CodingApi` yet. */
   async getTask(ticketId: string): Promise<CodingTask> {
     return taskFromWire(await this.http.get<unknown>(`/coding/tasks/${seg(ticketId)}`));

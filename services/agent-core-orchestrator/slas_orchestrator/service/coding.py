@@ -2,7 +2,8 @@
 
     detect · propose · resolve        the wizard's three steps, nothing runs
     remotes · skills                  what the person may pick: saved remotes, enabled skills
-    tasks                             Start task → ticket → the kernel runs in a thread
+    tasks                             Start task → ticket → the kernel runs in a thread;
+                                      DELETE removes a finished task and its files
 
 The wire spells the export choice `export_target`; the `Breakdown` model calls it `export`.
 The two adapters below translate, so the model stays as the agent tests know it.
@@ -10,6 +11,7 @@ The two adapters below translate, so the model stays as the agent tests know it.
 
 from __future__ import annotations
 
+import shutil
 from typing import Any, Final
 
 from fastapi import APIRouter, Request
@@ -35,6 +37,7 @@ from slas_sandbox_manager.toolchains import ToolchainError
 from slas_schemas.common import validation_sentence
 from slas_schemas.errors import ThreePartMessage
 from slas_schemas.job import Upload
+from slas_schemas.ticket import TicketState
 
 router = APIRouter(prefix="/v1/coding")
 
@@ -211,3 +214,60 @@ def list_tasks(request: Request) -> list[dict[str, Any]]:
 def get_task(request: Request, ticket_id: str = PathParam()) -> dict[str, Any]:
     identity = identity_of(request)
     return _view(deps_of(request), ticket_id, identity)
+
+
+#: A task may be removed once it has stopped: it is done, it failed, or it waits for review.
+REMOVABLE_STATES: Final = frozenset(
+    {TicketState.DONE, TicketState.FAILED, TicketState.NEEDS_REVIEW}
+)
+
+
+@router.delete("/tasks/{ticket_id}")
+def remove_task(request: Request, ticket_id: str = PathParam()) -> dict[str, Any]:
+    """Remove a finished task: its ticket and journal, SOP, artifacts, any open sandbox
+    session, and the child tickets spawned from it. The project directory stays: it is the
+    person's repository (CLAUDE.md §4.4)."""
+    identity = identity_of(request)
+    deps = deps_of(request)
+    ticket = load_ticket(deps, identity, ticket_id)
+    state = deps.registry.state_of(ticket.id)
+    if (state is not None and state.running) or ticket.state not in REMOVABLE_STATES:
+        raise ServiceError(
+            409,
+            ThreePartMessage(
+                f"{ticket.id} is still running, so it cannot be removed.",
+                f"Its state is {ticket.state.value}; only a task that is done, failed or "
+                "waiting for review can be removed.",
+                "Wait until the task stops, then remove it; the Coding page shows when.",
+            ),
+        )
+    deps.registry.forget(ticket.id)
+    session = deps.coding_executor.forget(ticket.id)
+    if session is not None:
+        try:
+            deps.sandbox.close_session(session.id)
+        except ServiceError as exc:
+            # The sandbox manager reaps sessions on their TTL; a close that fails now is
+            # not a reason to keep the ticket.
+            deps.log.warning("coding.session_close_failed", ticket_id=ticket.id, why=str(exc))
+    removed: list[str] = []
+    children = [child for child in deps.tickets() if child.parent == ticket.id]
+    for gone in (*children, ticket):
+        for path in (
+            deps.data_root / "Tickets" / gone.id,
+            deps.data_root / "SOP" / gone.id,
+            deps.data_root / "Coding" / gone.user / "Artifacts" / gone.id,
+        ):
+            if path.is_dir():
+                shutil.rmtree(path)
+                removed.append(str(path.relative_to(deps.data_root)))
+    deps.log.info(
+        "coding.task_removed", ticket_id=ticket.id, user=identity.user, removed=len(removed)
+    )
+    what = "and its files were" if removed else "was"
+    tail = (
+        f" {len(children)} child ticket{'s' if len(children) != 1 else ''} went with it."
+        if children
+        else ""
+    )
+    return {"sentence": f"{ticket.id} {what} removed.{tail} The project's repository stays."}

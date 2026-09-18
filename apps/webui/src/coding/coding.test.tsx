@@ -79,6 +79,41 @@ describe("New coding task wizard", () => {
     expect(api.tasks[0]?.title).toBe("Fan controller");
   });
 
+  it("removes finished tasks one at a time or all at once, never a running one", async () => {
+    const api = new FakeCodingApi();
+    const finished = (ticketId: string, state: string) => ({
+      ticketId,
+      title: `Plan ${ticketId}`,
+      state,
+      sentence: `${ticketId} ${state === "Done" ? "is done." : "failed: the sandbox did not open."}`,
+      steps: [],
+      feed: [],
+    });
+    api.tasks.push(finished("T-coding-0003", "Failed"), finished("T-coding-0002", "Done"), {
+      ticketId: "T-coding-0001",
+      title: "Running one",
+      state: "Running",
+      sentence: "T-coding-0001 is running: step 2 of 6.",
+      steps: [],
+      feed: [],
+    });
+    render(<CodingPage api={api} />);
+    const failed = await screen.findByLabelText("T-coding-0003");
+    expect(screen.queryByRole("button", { name: "Remove T-coding-0001" })).toBeNull();
+    fireEvent.click(within(failed).getByRole("button", { name: "Remove T-coding-0003" }));
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "T-coding-0003 and its files were removed.",
+    );
+    await waitFor(() => expect(screen.queryByLabelText("T-coding-0003")).toBeNull());
+    expect(api.tasks.map((t) => t.ticketId)).toEqual(["T-coding-0002", "T-coding-0001"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear finished tasks" }));
+    await waitFor(() => expect(screen.queryByLabelText("T-coding-0002")).toBeNull());
+    expect(screen.getByLabelText("T-coding-0001")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Clear finished tasks" })).toBeNull();
+    expect(api.tasks.map((t) => t.ticketId)).toEqual(["T-coding-0001"]);
+  });
+
   it("keeps pinned versions the bundle has and says so", async () => {
     const api = new FakeCodingApi();
     const [exact, prefix] = await api.resolveToolchains([
