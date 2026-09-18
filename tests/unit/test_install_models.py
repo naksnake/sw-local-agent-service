@@ -160,7 +160,10 @@ def test_dry_run_checks_the_weights_and_says_what_it_would_copy_and_write(tmp_pa
         < out.index("Would run: docker compose")
     )
     assert not data_root.exists(), "a dry run writes nothing"
-    assert not calls, "docker is only described in a dry run"
+    # Docker is only asked read-only questions in a dry run (whether an earlier install left
+    # a container of a part that is off, ADR-0017); nothing is loaded, removed or started.
+    assert all(c.startswith("docker ps -aq --filter ") for c in calls), calls
+    assert not any(c.startswith(("docker load", "docker rm", "docker compose")) for c in calls)
 
 
 def test_install_links_the_weights_on_one_volume_writes_models_yaml_once_and_is_idempotent(
