@@ -150,16 +150,42 @@ def _fail(step: Step, verb: str, result: Completed) -> BuildError:
     detail = (result.stderr or result.stdout).strip().splitlines()
     tail = " ".join(detail[-3:]) if detail else "no output"
     subject = step.reference if step.first_party else step.image.pull_reference
+    refused = any(marker in tail for marker in ("401", "UNAUTHORIZED", "denied", "not found"))
+    if step.first_party:
+        cause = (
+            "A build step failed: a base image could not be pulled, a dependency could not be "
+            "fetched, or the Dockerfile and the source tree disagree."
+        )
+        what_to_do = (
+            "Read docker's messages above, fix what they name, then run ./install.sh --build "
+            "again; images already built or pulled are kept."
+        )
+    elif verb == "Pulling" and refused:
+        cause = (
+            "The registry refused the reference: the tag was removed or renamed upstream, or "
+            "the registry now wants a login for it (quay.io answers 401 to both). Nothing on "
+            "this host is at fault."
+        )
+        what_to_do = (
+            "On a host that pulled this image before, the copy in Docker's store is reused "
+            "and the install goes on; here there is none. Load the image from the bundle or "
+            "another host (docker save | docker load), or pin a tag the registry still serves "
+            "in slas_deploy.images (a reviewed change), then run ./install.sh --build again."
+        )
+    else:
+        cause = (
+            "The host lost its route to the registry, the build context is incomplete, or the "
+            "Docker daemon is not running."
+        )
+        what_to_do = (
+            "Read docker's messages above, fix what they name, then run ./install.sh --build "
+            "again; images already built or pulled are kept."
+        )
     return BuildError(
         ThreePartMessage(
             f"{verb} {subject} did not finish (docker exited {result.exit_code}: {tail}).",
-            "The host lost its route to the registry, the build context is incomplete, or the "
-            "Docker daemon is not running."
-            if not step.first_party
-            else "A build step failed: a base image could not be pulled, a dependency could not "
-            "be fetched, or the Dockerfile and the source tree disagree.",
-            "Read docker's messages above, fix what they name, then run ./install.sh --build "
-            "again; images already built or pulled are kept.",
+            cause,
+            what_to_do,
         )
     )
 
@@ -205,7 +231,19 @@ def build_images(
         else:
             pull = runner.run(step.argv[0], capture=False)
             if not pull.ok:
-                raise _fail(step, "Pulling", pull)
+                # The first host: quay.io answered 401 for the MinIO tag it had served a day
+                # earlier, and the install stopped although Docker's store still held that
+                # very image. A copy already in the store is what the lock asks for (by
+                # digest when it knows one), so it is used and the pull's failure is said.
+                present = runner.run(step.argv[2])
+                if not present.ok or _digest_from(present.stdout) is None:
+                    raise _fail(step, "Pulling", pull)
+                detail = (pull.stderr or pull.stdout).strip().splitlines()
+                tail = " ".join(detail[-2:]) if detail else "no output"
+                out.write(
+                    f"Pulling {image.pull_reference} did not finish (docker exited "
+                    f"{pull.exit_code}: {tail}); the copy already in Docker's store is used.\n"
+                )
             repo_digest = runner.run(step.argv[1])
             digest = _digest_from(repo_digest.stdout)
             if not repo_digest.ok or digest is None:

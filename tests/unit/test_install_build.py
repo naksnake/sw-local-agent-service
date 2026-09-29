@@ -702,16 +702,33 @@ def test_unhealthy_services_reads_both_compose_ps_formats() -> None:
 
 
 class FakeDocker:
-    """Answers docker like the stub does; fails the argv whose prefix is in `failing`."""
+    """Answers docker like the stub does; fails the argv whose prefix is in `failing` with
+    `failure`. With `store` given, it is Docker's image store: inspect answers only for a
+    reference in it, and a pull, build or tag that succeeds adds its reference."""
 
-    def __init__(self, failing: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        failing: tuple[str, ...] = (),
+        *,
+        failure: str = "Error response from daemon: manifest unknown",
+        store: set[str] | None = None,
+    ) -> None:
         self.calls: list[list[str]] = []
         self.failing = failing
+        self.failure = failure
+        self.store = store
 
     def run(self, argv: Sequence[str], *, capture: bool = True) -> build.Completed:
         self.calls.append(list(argv))
         if any(" ".join(argv).startswith(prefix) for prefix in self.failing):
-            return build.Completed(1, "", "Error response from daemon: manifest unknown")
+            return build.Completed(1, "", self.failure)
+        if self.store is not None:
+            if argv[1] in ("pull", "tag", "build"):
+                self.store.add(argv[-1] if argv[1] != "build" else argv[argv.index("--tag") + 1])
+            elif argv[1] == "image" and argv[-1] not in self.store:
+                return build.Completed(
+                    1, "", f"Error response from daemon: No such image: {argv[-1]}"
+                )
         if "{{index .RepoDigests 0}}" in argv:
             if "@sha256:" in argv[-1]:
                 return build.Completed(0, argv[-1] + "\n")  # pulled by digest: that digest
@@ -806,7 +823,7 @@ def test_a_failing_docker_step_is_a_three_part_error() -> None:
     assert "A build step failed" in message.likely_cause
     assert "./install.sh --build" in message.what_to_do
 
-    docker = FakeDocker(failing=("docker pull",))
+    docker = FakeDocker(failing=("docker pull",), store=set())  # nothing pulled before
     with pytest.raises(build.BuildError) as exc:
         build.build_images(
             default_lock(),
@@ -821,6 +838,62 @@ def test_a_failing_docker_step_is_a_three_part_error() -> None:
         "Pulling docker.io/library/postgres:16.6 did not finish"
     )
     assert "route to the registry" in exc.value.message.likely_cause
+
+
+def test_a_pull_the_registry_refuses_falls_back_to_the_copy_in_the_store(tmp_path: Path) -> None:
+    """The first host: quay.io answered 401 for the MinIO tag it had served the day before,
+    and the install stopped although Docker's store still held that image from the earlier
+    install. A copy already in the store is used; without one, the error says what a 401
+    means and what to do."""
+    refused = (
+        'Error response from daemon: unknown: failed to resolve reference "quay.io/minio/minio:'
+        'RELEASE.2025-04-22T22-12-26Z": unexpected status from HEAD request to https://quay.io/'
+        "v2/minio/minio/manifests/RELEASE.2025-04-22T22-12-26Z: 401 UNAUTHORIZED"
+    )
+    minio = next(i for i in default_lock().images if i.name == "minio")
+    # Pulled on an earlier install: the store has it.
+    docker = FakeDocker(
+        failing=(f"docker pull --quiet {minio.pull_reference}",),
+        failure=refused,
+        store={minio.pull_reference},
+    )
+    out = io.StringIO()
+    filled = build.build_images(
+        default_lock(),
+        "quickstart",
+        registry="local",
+        version="1",
+        repo=tmp_path,
+        runner=docker,
+        out=out,
+    )
+    text = out.getvalue()
+    assert (
+        f"Pulling {minio.pull_reference} did not finish (docker exited 1: " in text
+        and "401 UNAUTHORIZED); the copy already in Docker's store is used." in text
+    )
+    assert f"and tagged it local/{minio.reference}" in text
+    assert next(i for i in filled.images if i.name == "minio").pinned
+    assert ["docker", "tag", minio.pull_reference, f"local/{minio.reference}"] in docker.calls
+
+    # A fresh host without the image: the three parts name the registry's refusal.
+    docker = FakeDocker(
+        failing=(f"docker pull --quiet {minio.pull_reference}",), failure=refused, store=set()
+    )
+    with pytest.raises(build.BuildError) as exc:
+        build.build_images(
+            default_lock(),
+            "quickstart",
+            registry="local",
+            version="1",
+            repo=tmp_path,
+            runner=docker,
+            out=io.StringIO(),
+        )
+    message = exc.value.message
+    assert message.what_happened.startswith(f"Pulling {minio.pull_reference} did not finish")
+    assert "The registry refused the reference" in message.likely_cause
+    assert "docker save | docker load" in message.what_to_do
 
 
 def test_a_first_party_image_counts_as_pinned_by_its_image_id_alone() -> None:
