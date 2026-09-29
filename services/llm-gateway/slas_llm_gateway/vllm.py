@@ -142,7 +142,14 @@ def chat_body(request: CompletionRequest, model: str) -> dict[str, Any]:
         "temperature": request.temperature,
     }
     if request.guided_json is not None:
-        body["guided_json"] = request.guided_json
+        # The OpenAI-standard shape. vLLM's own `guided_json` request field went the way of
+        # its `--guided-decoding-backend` flag (removed; an instance answers 400 to it), and
+        # `response_format: json_schema` is what every vLLM since 0.6 and the xgrammar
+        # backend the instances run with (CLAUDE.md §7) enforce.
+        body["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": "answer", "strict": True, "schema": request.guided_json},
+        }
     return body
 
 
@@ -175,7 +182,7 @@ def response_from_payload(request: CompletionRequest, payload: Any) -> Completio
 class UrllibVllmClient:
     """vLLM's OpenAI-compatible chat API over the standard library, one base URL per
     instance (`http://vllm-coder:8000`). Forwards the trace id as `traceparent` and
-    `X-Slas-Trace-Id`; guided decoding travels as vLLM's `guided_json` field."""
+    `X-Slas-Trace-Id`; the schema travels as the OpenAI-standard `response_format`."""
 
     def __init__(self, base_urls: Mapping[str, str], *, timeout_s: float = 120.0) -> None:
         self.base_urls = {k: v.rstrip("/") for k, v in base_urls.items()}

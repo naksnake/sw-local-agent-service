@@ -81,7 +81,7 @@ coder yet" in three parts.
 
 | Route | Body → Answer |
 |---|---|
-| `POST /v1/complete` | `{"role": str, "messages": [{"role": "system\|user\|assistant", "content": str}], "max_tokens": int, "temperature": float, "guided_json": object\|null}` → `CompletionResponse` as JSON (`slas_llm_gateway.vllm.CompletionResponse.model_dump()`). |
+| `POST /v1/complete` | `{"role": str, "messages": [{"role": "system\|user\|assistant", "content": str}], "max_tokens": int, "temperature": float, "guided_json": object\|null}` → `CompletionResponse` as JSON (`slas_llm_gateway.vllm.CompletionResponse.model_dump()`). The gateway forwards `guided_json` to vLLM as the OpenAI-standard `response_format: {"type": "json_schema", …}`; vLLM removed its own `guided_json` request field. |
 | `POST /v1/generate` | `{"role", "messages", "schema": object, "max_tokens"}` → `{"object": <validated JSON>, "tier": int, "response": CompletionResponse}`. Tiers 0–1 from `structured.py`; a failure after the retries is a 422 in three parts. |
 | `POST /v1/cross-check` | `{"decision": str, "evidence": [Message]}` → `ConsensusVerdict.model_dump()` (`slas_schemas.vote`). |
 | `GET /v1/routes` | `{"roles": {role: instance}, "voters": [instance], "instances": {instance: {"url": str, "model_id": str, "healthy": bool, "last_seen": iso}}}`. |

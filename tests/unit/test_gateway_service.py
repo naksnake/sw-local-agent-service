@@ -557,7 +557,7 @@ def test_put_then_a_completion_reaches_the_announced_url_with_the_model_id(tmp_p
     assert str(sent.url) == "http://vllm-coder:8000/v1/chat/completions"
     body = json.loads(sent.content)
     assert body["model"] == "qwen3-coder" and body["messages"] == USER
-    assert "guided_json" not in body
+    assert "guided_json" not in body and "response_format" not in body
     assert sent.headers["traceparent"].startswith("00-4bf92f3577b34da6a3ce929d0e0e4736-")
     assert sent.headers["X-Slas-Trace-Id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
 
@@ -596,7 +596,14 @@ def test_httpx_client_turns_every_failure_into_instance_unavailable() -> None:
     response = client.complete(request)
     assert response.text == "ok" and response.finish_reason == "stop"
     assert response.prompt_tokens > 0 and response.completion_tokens > 0, "estimated"
-    assert json.loads(double.requests[-1].content)["guided_json"] == {"type": "object"}
+    # The schema travels in the OpenAI-standard `response_format`, never as vLLM's removed
+    # `guided_json` field (the first host's vLLM 0.29 answers 400 to that one).
+    wire = json.loads(double.requests[-1].content)
+    assert "guided_json" not in wire
+    assert wire["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "answer", "strict": True, "schema": {"type": "object"}},
+    }
     client.close()
 
 
