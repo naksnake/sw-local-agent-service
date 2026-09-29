@@ -123,6 +123,11 @@ def plan(
                 if image.started_by == "model-manager"
                 else ""
             )
+            if image.mirrors:
+                note += (
+                    f" Should {pulled.split('/', 1)[0]} refuse it, would pull the same release "
+                    f"from {', '.join(image.mirrors)}."
+                )
             steps.append(
                 Step(
                     image,
@@ -147,10 +152,11 @@ def plan(
 
 
 def _fail(step: Step, verb: str, result: Completed) -> BuildError:
-    detail = (result.stderr or result.stdout).strip().splitlines()
-    tail = " ".join(detail[-3:]) if detail else "no output"
+    tail = _tail(result, 3)
     subject = step.reference if step.first_party else step.image.pull_reference
-    refused = any(marker in tail for marker in ("401", "UNAUTHORIZED", "denied", "not found"))
+    refused = any(
+        marker in tail.lower() for marker in ("401", "unauthorized", "denied", "not found")
+    )
     if step.first_party:
         cause = (
             "A build step failed: a base image could not be pulled, a dependency could not be "
@@ -195,6 +201,22 @@ def _digest_from(text: str) -> str | None:
     return match.group(0) if match else None
 
 
+def _tail(result: Completed, lines: int) -> str:
+    detail = (result.stderr or result.stdout).strip().splitlines()
+    return " ".join(detail[-lines:]) if detail else "no output"
+
+
+def _echo(out: TextIO, result: Completed) -> None:
+    """docker's own words, as a run without capture would have shown them."""
+    for text in (result.stdout, result.stderr):
+        if text.strip():
+            out.write(text if text.endswith("\n") else text + "\n")
+
+
+def _inspect_id(reference: str) -> tuple[str, ...]:
+    return ("docker", "image", "inspect", "--format", "{{.Id}}", reference)
+
+
 def build_images(
     lock: ImageLock,
     profile: Profile,
@@ -229,32 +251,58 @@ def build_images(
                 f"(image ID {image_id[:19]}…).\n"
             )
         else:
-            pull = runner.run(step.argv[0], capture=False)
-            if not pull.ok:
-                # The first host: quay.io answered 401 for the MinIO tag it had served a day
-                # earlier, and the install stopped although Docker's store still held that
-                # very image. A copy already in the store is what the lock asks for (by
-                # digest when it knows one), so it is used and the pull's failure is said.
-                present = runner.run(step.argv[2])
-                if not present.ok or _digest_from(present.stdout) is None:
-                    raise _fail(step, "Pulling", pull)
-                detail = (pull.stderr or pull.stdout).strip().splitlines()
-                tail = " ".join(detail[-2:]) if detail else "no output"
+            # The first host: quay.io answered 401 for the MinIO tag it had served a day
+            # earlier, and the install stopped although the same release sits on docker.io
+            # and Docker's store still held the image from the previous install. So: the
+            # upstream, then each mirror, then the copy already in the store (under the
+            # upstream's name, or under the compose name a pull by digest left it with).
+            # docker's output is captured so the sentence can carry the registry's answer,
+            # and echoed so the person still sees it.
+            pulled: str | None = None
+            attempts: list[Completed] = []
+            for candidate in image.pull_candidates:
+                pull = runner.run(("docker", "pull", "--quiet", candidate))
+                _echo(out, pull)
+                if pull.ok:
+                    pulled = candidate
+                    break
+                attempts.append(pull)
+            from_store = False
+            tag_needed = True
+            if pulled is None:
+                for present in (image.pull_reference, step.reference):
+                    found = runner.run(_inspect_id(present))
+                    if found.ok and _digest_from(found.stdout) is not None:
+                        pulled, from_store = present, True
+                        tag_needed = present != step.reference
+                        break
+            if pulled is None:
+                raise _fail(step, "Pulling", attempts[-1])
+            if attempts:
+                failed = attempts[0]
+                how = (
+                    "the copy already in Docker's store is used"
+                    if from_store
+                    else f"pulled the same release from its mirror {pulled} instead"
+                )
                 out.write(
                     f"Pulling {image.pull_reference} did not finish (docker exited "
-                    f"{pull.exit_code}: {tail}); the copy already in Docker's store is used.\n"
+                    f"{failed.exit_code}: {_tail(failed, 2)}); {how}.\n"
                 )
-            repo_digest = runner.run(step.argv[1])
+            repo_digest = runner.run(
+                ("docker", "image", "inspect", "--format", "{{index .RepoDigests 0}}", pulled)
+            )
             digest = _digest_from(repo_digest.stdout)
             if not repo_digest.ok or digest is None:
                 raise _fail(step, "Inspecting", repo_digest)
-            inspect = runner.run(step.argv[2])
+            inspect = runner.run(_inspect_id(pulled))
             image_id = _digest_from(inspect.stdout)
             if not inspect.ok or image_id is None:
                 raise _fail(step, "Inspecting", inspect)
-            tag = runner.run(step.argv[3])
-            if not tag.ok:
-                raise _fail(step, "Tagging", tag)
+            if tag_needed:
+                tag = runner.run(("docker", "tag", pulled, step.reference))
+                if not tag.ok:
+                    raise _fail(step, "Tagging", tag)
             if image.digest and digest != image.digest:
                 raise BuildError(
                     ThreePartMessage(
@@ -266,9 +314,11 @@ def build_images(
                     )
                 )
             filled.append(image.model_copy(update={"digest": digest, "image_id": image_id}))
-            out.write(
-                f"Pulled {image.pull_reference} ({digest[:19]}…) and tagged it {step.reference}.\n"
-            )
+            if not tag_needed:
+                out.write(f"Kept {pulled} ({digest[:19]}…) from Docker's store.\n")
+            else:
+                verb = "Kept" if from_store else "Pulled"
+                out.write(f"{verb} {pulled} ({digest[:19]}…) and tagged it {step.reference}.\n")
         out.flush()
     return lock.model_copy(update={"images": filled})
 

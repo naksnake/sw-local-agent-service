@@ -45,6 +45,10 @@ class LockedImage(SlasModel):
     reference: str = Field(min_length=3)
     #: Upstream source the build host pulls from, for the record.
     upstream: str = Field(min_length=3)
+    #: The same release on other registries, tried in order when the upstream refuses the
+    #: pull (a registry that removed the tag or now wants a login answers 401; quay.io did
+    #: that for MinIO on the first host). Same immutable tag, so the same image (INV-8).
+    mirrors: list[str] = Field(default_factory=list)
     first_party: bool = False
     #: Upstream manifest digest; None until the lock is filled on a build host. An image whose
     #: digest is known up front is pulled by that digest, never by its tag alone (INV-8).
@@ -67,6 +71,19 @@ class LockedImage(SlasModel):
             repository = self.upstream.split("@", 1)[0].rsplit(":", 1)[0]
             return f"{repository}@{self.digest}"
         return self.upstream
+
+    @property
+    def pull_candidates(self) -> list[str]:
+        """What to pull, in order: the upstream, then each mirror (by the same digest when the
+        lock knows one, since a manifest digest names the same image on every registry)."""
+        candidates = [self.pull_reference]
+        for mirror in self.mirrors:
+            if self.digest:
+                repository = mirror.split("@", 1)[0].rsplit(":", 1)[0]
+                candidates.append(f"{repository}@{self.digest}")
+            else:
+                candidates.append(mirror)
+        return candidates
 
     @property
     def pinned(self) -> bool:
@@ -109,11 +126,13 @@ def _third(
     prod_only: bool = False,
     digest: str | None = None,
     started_by: StartedBy = "compose",
+    mirrors: Sequence[str] = (),
 ) -> LockedImage:
     return LockedImage(
         name=name,
         reference=reference,
         upstream=upstream,
+        mirrors=list(mirrors),
         digest=digest,
         profiles=["prod"] if prod_only else ["quickstart", "prod"],
         started_by=started_by,
@@ -147,12 +166,14 @@ DEFAULT_IMAGES: Final[tuple[LockedImage, ...]] = (
         "minio",
         "minio/minio:RELEASE.2025-04-22T22-12-26Z",
         "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z",
+        mirrors=["docker.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"],
     ),
     _third(
         "mc",
         "minio/mc:RELEASE.2025-04-16T18-13-26Z",
         "quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z",
         prod_only=True,
+        mirrors=["docker.io/minio/mc:RELEASE.2025-04-16T18-13-26Z"],
     ),
     _third("qdrant", "qdrant/qdrant:v1.13.4", "docker.io/qdrant/qdrant:v1.13.4"),
     _third("prometheus", "prom/prometheus:v3.2.1", "quay.io/prometheus/prometheus:v3.2.1"),

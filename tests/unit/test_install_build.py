@@ -840,60 +840,89 @@ def test_a_failing_docker_step_is_a_three_part_error() -> None:
     assert "route to the registry" in exc.value.message.likely_cause
 
 
-def test_a_pull_the_registry_refuses_falls_back_to_the_copy_in_the_store(tmp_path: Path) -> None:
+def test_a_pull_the_registry_refuses_comes_from_a_mirror_or_from_the_store(tmp_path: Path) -> None:
     """The first host: quay.io answered 401 for the MinIO tag it had served the day before,
-    and the install stopped although Docker's store still held that image from the earlier
-    install. A copy already in the store is used; without one, the error says what a 401
-    means and what to do."""
+    and the install stopped, although docker.io carries the same release and Docker's store
+    still held the image from the earlier install. The upstream is tried first, then each
+    mirror, then the store; without any of them the error says what a 401 means."""
     refused = (
         'Error response from daemon: unknown: failed to resolve reference "quay.io/minio/minio:'
         'RELEASE.2025-04-22T22-12-26Z": unexpected status from HEAD request to https://quay.io/'
         "v2/minio/minio/manifests/RELEASE.2025-04-22T22-12-26Z: 401 UNAUTHORIZED"
     )
     minio = next(i for i in default_lock().images if i.name == "minio")
-    # Pulled on an earlier install: the store has it.
-    docker = FakeDocker(
-        failing=(f"docker pull --quiet {minio.pull_reference}",),
-        failure=refused,
-        store={minio.pull_reference},
-    )
+    upstream = minio.pull_reference
+    mirror = minio.mirrors[0]
+    assert upstream.startswith("quay.io/") and mirror.startswith("docker.io/")
+    assert minio.pull_candidates == [upstream, mirror]
+
+    # 1. quay.io refuses; the same release comes from docker.io, tagged as compose expects.
+    docker = FakeDocker(failing=(f"docker pull --quiet {upstream}",), failure=refused, store=set())
     out = io.StringIO()
     filled = build.build_images(
-        default_lock(),
-        "quickstart",
-        registry="local",
-        version="1",
-        repo=tmp_path,
-        runner=docker,
-        out=out,
-    )
+        default_lock(), "quickstart", registry="local", version="1", repo=tmp_path,
+        runner=docker, out=out,
+    )  # fmt: skip
     text = out.getvalue()
+    assert refused in text, "docker's own words are still shown"
     assert (
-        f"Pulling {minio.pull_reference} did not finish (docker exited 1: " in text
-        and "401 UNAUTHORIZED); the copy already in Docker's store is used." in text
+        f"Pulling {upstream} did not finish (docker exited 1: " in text
+        and f"401 UNAUTHORIZED); pulled the same release from its mirror {mirror} instead." in text
     )
-    assert f"and tagged it local/{minio.reference}" in text
+    assert f"Pulled {mirror} (sha256:" in text and f"and tagged it local/{minio.reference}" in text
+    assert ["docker", "tag", mirror, f"local/{minio.reference}"] in docker.calls
     assert next(i for i in filled.images if i.name == "minio").pinned
-    assert ["docker", "tag", minio.pull_reference, f"local/{minio.reference}"] in docker.calls
 
-    # A fresh host without the image: the three parts name the registry's refusal.
-    docker = FakeDocker(
-        failing=(f"docker pull --quiet {minio.pull_reference}",), failure=refused, store=set()
+    # 2. Both registries refuse; an earlier install left the image under the compose name
+    #    (a pull by digest leaves no upstream tag): it is kept, nothing is re-tagged.
+    both = (f"docker pull --quiet {upstream}", f"docker pull --quiet {mirror}")
+    docker = FakeDocker(failing=both, failure=refused, store={f"local/{minio.reference}"})
+    out = io.StringIO()
+    filled = build.build_images(
+        default_lock(), "quickstart", registry="local", version="1", repo=tmp_path,
+        runner=docker, out=out,
+    )  # fmt: skip
+    text = out.getvalue()
+    assert "401 UNAUTHORIZED); the copy already in Docker's store is used." in text
+    assert f"Kept local/{minio.reference} (sha256:" in text
+    assert not any(
+        c[:2] == ["docker", "tag"] and c[-1] == f"local/{minio.reference}" for c in docker.calls
     )
+    assert next(i for i in filled.images if i.name == "minio").pinned
+
+    # 3. The store holds it under the upstream name: kept and tagged for compose.
+    docker = FakeDocker(failing=both, failure=refused, store={upstream})
+    out = io.StringIO()
+    build.build_images(
+        default_lock(), "quickstart", registry="local", version="1", repo=tmp_path,
+        runner=docker, out=out,
+    )  # fmt: skip
+    assert f"Kept {upstream} (sha256:" in out.getvalue()
+    assert ["docker", "tag", upstream, f"local/{minio.reference}"] in docker.calls
+
+    # 4. A fresh host without the image: the three parts name the registry's refusal.
+    docker = FakeDocker(failing=both, failure=refused, store=set())
     with pytest.raises(build.BuildError) as exc:
         build.build_images(
-            default_lock(),
-            "quickstart",
-            registry="local",
-            version="1",
-            repo=tmp_path,
-            runner=docker,
-            out=io.StringIO(),
-        )
+            default_lock(), "quickstart", registry="local", version="1", repo=tmp_path,
+            runner=docker, out=io.StringIO(),
+        )  # fmt: skip
     message = exc.value.message
-    assert message.what_happened.startswith(f"Pulling {minio.pull_reference} did not finish")
+    assert message.what_happened.startswith(f"Pulling {upstream} did not finish")
+    assert "401 UNAUTHORIZED" in message.what_happened, "captured, not lost to the terminal"
     assert "The registry refused the reference" in message.likely_cause
     assert "docker save | docker load" in message.what_to_do
+
+    # The dry run says where the release would come from should quay.io refuse.
+    described = io.StringIO()
+    build.describe(
+        build.plan(default_lock(), "quickstart", registry="r", version="1", repo=tmp_path),
+        out=described, lock_path=tmp_path / "l.json",
+    )  # fmt: skip
+    assert (
+        f"Should quay.io refuse it, would pull the same release from {mirror}."
+        in described.getvalue()
+    )
 
 
 def test_a_first_party_image_counts_as_pinned_by_its_image_id_alone() -> None:
