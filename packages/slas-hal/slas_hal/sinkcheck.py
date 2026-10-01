@@ -1,6 +1,7 @@
-"""The CI grep over log sinks (CLAUDE.md §5.7 audit, INV-5): every file under a directory is
-searched for credential shapes and for the actual secrets a test used. Standard library only
-so CI can run it as `python -m slas_hal.sinkcheck <dir> [--known SECRET …]`.
+"""The credential grep over log sinks (CLAUDE.md §5.7 audit, INV-5): every file under a
+directory is searched for credential shapes and for the actual secrets a test used. Standard
+library only, so the checks before a push (README, ADR-0019) run it as
+`python -m slas_hal.sinkcheck <dir> [--known SECRET …]`.
 """
 
 from __future__ import annotations

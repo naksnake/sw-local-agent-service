@@ -1,6 +1,6 @@
 # ADR-0004: Proving INV-10 in CI on a GPU-less, egress-blocked runner
 
-Status: proposed
+Status: superseded by ADR-0019
 Date: 2026-09-14
 
 ## Context

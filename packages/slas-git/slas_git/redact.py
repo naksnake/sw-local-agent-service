@@ -1,7 +1,7 @@
 """Credential redaction at the logging boundary (CLAUDE.md §5.7 audit, INV-5, INV-14).
 
 Every string that reaches an audit row, a log line, a terminal transcript or a model goes
-through `redact()`. `find_secrets()` is the CI grep: given the actual secrets a test used,
+through `redact()`. `find_secrets()` is the credential grep: given the actual secrets a test used,
 it reports every sink that still contains one of them, or any text matching a token or
 private-key shape.
 """

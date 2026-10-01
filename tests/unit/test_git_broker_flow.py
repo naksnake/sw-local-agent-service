@@ -232,7 +232,7 @@ def test_full_push_flow_over_the_fake_host_with_a_hostile_hook(tmp_path: Path) -
         )
         assert rows[-1].detail == f"{server.state.base_url}/-/merge_requests/1"
 
-        # The CI grep: the token is in no sink, and nothing token- or key-shaped is either.
+        # The credential grep: the token is in no sink, and nothing token- or key-shaped is either.
         for name, text in bench.sinks().items():
             assert find_secrets(text, [TOKEN]) == [], f"{name} leaks a credential"
         # The fd number reaches git through the environment; the token itself never does.

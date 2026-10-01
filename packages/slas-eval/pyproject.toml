@@ -1,7 +1,7 @@
 [project]
 name = "slas-eval"
 version = "0.0.1"
-description = "Eval harness against local judges only; CI asserts no cloud endpoints"
+description = "Eval harness against local judges only; a unit test asserts no cloud endpoints"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = ["slas-schemas", "slas-sop"]

@@ -43,9 +43,10 @@ session give: the deliverable, files created or changed, the tests that prove it
 ```
 <preamble>
 Task: create the repository skeleton from CLAUDE.md §13 with uv, pnpm, ruff, mypy --strict,
-pytest, vitest and Playwright configured; a CI workflow with lint, typecheck, unit tests, and
-an egress-DROP job that runs the test suite with all outbound network blocked; install.sh
-with the preflight step only (slas doctor), printing a plain-language report as in §3.
+pytest, vitest and Playwright configured; local checks (no hosted CI, ADR-0019) for lint,
+typecheck and unit tests, and an egress-DROP check that runs the test suite with all
+outbound network blocked; install.sh with the preflight step only (slas doctor), printing
+a plain-language report as in §3.
 Also write docs/adr/0001-agent-kernel.md and docs/adr/0002-screen-worker-not-host-x11.md
 as accepted ADRs using the template in §15.
 ```
@@ -142,7 +143,7 @@ GitHub APIs; git bundle export/import; one audit row per operation. Build Settin
 remotes (paste-only fields, fingerprint after save, Test connection), Admin → Git hosts, the
 per-project Git panel (Status, Commit, History, Push/Pull, Bundle) and the Terminal tab that
 runs inside the sandbox over WebSocket. Tests: a fake Git server, a repo with a malicious
-pre-push hook that must not execute, and a CI check that greps every log sink for token and
+pre-push hook that must not execute, and a test that greps every log sink for token and
 private-key patterns after a full push flow.
 ```
 
@@ -166,7 +167,7 @@ degradation at cycle 14 in the fake and prove one deduplicated ticket results.
 <preamble>
 Task: implement the real Redfish, IPMI and SSH drivers in slas_hal behind the same
 interface as the fakes, SOL capture, the syslog receiver, and the PDU driver for
-<PDU model>. Add a quirk-shim layer keyed by BMC vendor/firmware. Add a CI check that greps
+<PDU model>. Add a quirk-shim layer keyed by BMC vendor/firmware. Add a test that greps
 redacted log bundles for any credential pattern. I will provide one target: <alias>. Do not
 run any power action until I confirm the target is free.
 ```

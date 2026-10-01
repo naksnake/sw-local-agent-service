@@ -4,7 +4,7 @@
 > this file first and treats it as authoritative. Where this file conflicts with a
 > request, surface the conflict; never resolve it silently.
 >
-> **Version 3.6 · 2026-09-18** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
+> **Version 3.7 · 2026-10-01** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
 > (phases, done criteria) and `docs/PROMPTS.md` (copy-paste session prompts).
 > 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14). 3.2 records open decisions
 > 12–14 (model weights and voters) raised by the shipped model registries. 3.3 accepts the
@@ -22,6 +22,9 @@
 > 3.6 records ADR-0018, the one recorded quickstart exception to INV-1 beside ADR-0014: the
 > `model-fetcher` service downloads weights from a pasted hub link on the Models page and
 > imports them into the registry; roles and voters change on that page (§4.1 zone F, §11).
+> 3.7 records ADR-0019: the repository has no hosted CI. The checks the removed workflow ran
+> run locally before every push (README, "Developing") and egress-DROP before a release;
+> INV-10, §5.7, §8.1 and §11 say so.
 
 ---
 
@@ -128,7 +131,7 @@ desktop. Nothing in §1.1, §2 or §4 changes; this is scope, not architecture.
 | **INV-7** | Destructive actions need per-run human approval: firmware flash, secure erase, BIOS reset, AC cycle, RAID change, factory PASS/FAIL override, station config change. |
 | **INV-8** | No `latest` tags, no unpinned deps; builds succeed with networking disabled. |
 | **INV-9** | Model and user changes never require config edits or restarts. |
-| **INV-10** | `./install.sh` on a fresh GPU host reaches a working login page with no manual steps. CI enforces it. |
+| **INV-10** | `./install.sh` on a fresh GPU host reaches a working login page with no manual steps. The install tests and the installer preflight run before every push (ADR-0019). |
 | **INV-11** | **Cross-check never authorises.** A consensus of models is an extra check on judgement outputs; it never substitutes for INV-3, INV-6 or INV-7, and cannot trigger a hardware or GUI action by itself. |
 | **INV-12** | **Skills are data.** A skill file is validated against the schema, may only use whitelisted primitives, runs with the importing user's capabilities, and cannot escalate them. There is no `shell` primitive. |
 | **INV-13** | **Both languages or neither.** Every SOP, report and ticket export produces English and Chinese together from one structured source. Identifiers, commands, numbers and versions are copied by code, never translated by a model. |
@@ -456,7 +459,7 @@ and never has a route to a remote** (INV-14). Both methods operate on the same
 | Push policy | Default: push to a branch, open a PR/MR when the host API is known (GitLab, Gitea, GitHub). Direct push to a protected branch needs `git:push_protected` (off by default). |
 | Validation gate (every push) | changes inside the project path · secret scan (gitleaks) · no new hooks, submodules, or symlinks escaping the tree · size and file-count sane · LFS off unless enabled · **agent-authored diffs also pass the Consensus Router** (§5.3) |
 | UI | Paste-only fields, never echoed back; after save the UI shows only the SSH fingerprint or PAT last-4. "Test connection" runs `ls-remote`. Rotate / delete / expiry. Recommend deploy keys or project tokens over personal credentials. |
-| Audit | One row per operation: user, remote, op, branch, commit SHA, result, duration. Credentials are redacted at the logging boundary; a CI check greps every log sink for token/key patterns. |
+| Audit | One row per operation: user, remote, op, branch, commit SHA, result, duration. Credentials are redacted at the logging boundary; the credential grep over every log sink for token/key patterns runs with the tests before every push (ADR-0019). |
 
 **Method 2 — Workspace-local Git (inside the sandbox)**
 
@@ -597,7 +600,7 @@ the engine died in and its last lines.
 
 ## §8 LLMOps
 **8.1 Eval** — Ragas/TruLens configured against local vLLM only (`slas_eval/judges.py` is
-the single construction site; CI asserts no `api.openai.com`). Gates (prod): tool-call
+the single construction site; a unit test asserts no `api.openai.com`). Gates (prod): tool-call
 schema validity ≥ 98%, plan validity ≥ 99%, RAG faithfulness ≥ 0.90, triage recall ≥ 0.95,
 consensus agreement with golden labels ≥ 90%, SOP terminology consistency 100%, destructive
 refusal without approval 100%. Golden set of labelled failures lives in `docs/golden-set/`.
@@ -733,11 +736,11 @@ nightly · `e2e/` Playwright · `deploy/` fresh-VM `install.sh` under egress-DRO
 ≥ 85% on `slas-kernel`, `slas-hal`, `slas-skills`, `slas-authz`. No test needs real
 hardware, a real display, or a live model.
 
-**Definition of done:** tests + coverage · ruff/mypy clean · egress-DROP green ·
-trace_id + metrics · typed three-part errors · secrets via .env/Vault · authz at executor
-· hardware via HAL, GUI via screen driver · kernel-only for tickets/RCA/SOP/skills · UI copy
-per §9 · both-language export produced · install.sh still green · ADR if a boundary moved
-· this file updated if an invariant or interface changed.
+**Definition of done:** tests + coverage · ruff/mypy clean · egress-DROP green before a
+release (ADR-0019) · trace_id + metrics · typed three-part errors · secrets via .env/Vault
+· authz at executor · hardware via HAL, GUI via screen driver · kernel-only for
+tickets/RCA/SOP/skills · UI copy per §9 · both-language export produced · install.sh still
+green · ADR if a boundary moved · this file updated if an invariant or interface changed.
 
 ## §12 DOCKER COMPOSE BLUEPRINT (conceptual; `compose/` holds the real files)
 

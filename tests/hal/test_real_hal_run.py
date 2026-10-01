@@ -1,7 +1,7 @@
 """`RealHal` end to end: the same 25-cycle run as P7, this time through the Redfish driver
 against the fake Redfish service, ssh/ipmitool through the fake process runner and SOL
-through the fake stream — then the CI grep proves no credential reached any sink. Also: the
-arming gate, the PDU path, and the lspci fallback."""
+through the fake stream — then the credential grep proves no credential reached any sink.
+Also: the arming gate, the PDU path, and the lspci fallback."""
 
 from __future__ import annotations
 
@@ -241,14 +241,15 @@ def test_the_p7_run_through_the_real_drivers_leaves_no_credential_in_any_sink(
     assert PASSWORD not in " ".join(" ".join(argv) for argv, _ in rig.stream.started)
     assert rig.hal.write_audit(ALIAS).is_file()
 
-    # The CI grep: nothing under the data root carries the password, the key, or any
+    # The credential grep: nothing under the data root carries the password, the key, or any
     # credential shape — tickets, journals, SOPs, console, syslog, power journal, audit.
     hits = scan_tree(tmp_path, known=[PASSWORD, KEY])
     assert hits == [], "\n".join(h.sentence() for h in hits)
     assert len(list(tmp_path.rglob("*"))) > 100, "the grep had plenty to look at"
     assert sinkcheck_main([str(tmp_path), "--known", PASSWORD]) == 0
     if os.environ.get("SLAS_SINK_DIR"):
-        # CI keeps the sinks and greps them again with `python -m slas_hal.sinkcheck`.
+        # The checks before a push (README) keep the sinks and grep them again with
+        # `python -m slas_hal.sinkcheck`.
         shutil.copytree(tmp_path, os.environ["SLAS_SINK_DIR"], dirs_exist_ok=True)
 
     # …and it does bite when something leaks.

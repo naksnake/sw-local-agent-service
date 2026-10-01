@@ -72,8 +72,9 @@ The operator SOP, in English and Traditional Chinese:
 
 **Phase 0 — Skeleton.** The repository holds the layout from `CLAUDE.md` §13, the Python
 workspace (`uv`, `ruff`, `mypy --strict`, `pytest`), the WebUI shell (`pnpm`, Vite, React,
-`vitest`, Playwright), CI with an egress-DROP job, `./install.sh` with the preflight step
-(`slas doctor`), and ADR-0001/ADR-0002.
+`vitest`, Playwright), `./install.sh` with the preflight step (`slas doctor`), and
+ADR-0001/ADR-0002. Its hosted CI workflow was removed by ADR-0019; the same checks run
+locally (see Developing).
 
 **Core through Phase 5, against fakes.** The Agent Kernel (`slas_kernel`: lifecycle,
 write-ahead journal, crash recovery, NullAgent), the schemas, authz, the LLM gateway with
@@ -168,11 +169,11 @@ the fakes implement. Target records (`slas target add|list|arm|disarm`) carry cr
 references only, and every target starts **disarmed**: no power action reaches hardware until
 a person confirms it is free. A quirk-shim table (`config/bmc-quirks.yaml`) keyed by vendor
 and firmware covers SEL paging, PCIe location, BDF field, reset types, IPMI-for-power and
-unreliable link width (then `lspci` in-band). CI runs the 25-cycle run through the real
-drivers against a fake Redfish service and greps every resulting file for the fake BMC
-password, the fake key and every credential shape. Not done: the PDU model and the target
-alias were not named, so no real hardware was touched and the model-specific PDU driver is
-an explicit TODO.
+unreliable link width (then `lspci` in-band). The test suite runs the 25-cycle run through
+the real drivers against a fake Redfish service and greps every resulting file for the fake
+BMC password, the fake key and every credential shape. Not done: the PDU model and the
+target alias were not named, so no real hardware was touched and the model-specific PDU
+driver is an explicit TODO.
 
 **Phase 9: the Factory Agent against fakes.** `services/station-runner` (signed step
 batches over mTLS with the standard library, GUI steps through the local screen driver with
@@ -208,19 +209,35 @@ dependency decisions.
 
 ## Developing
 
+There is no hosted CI (ADR-0019). These are the checks to run before every push, the same
+ones the removed workflow ran:
+
 ```bash
-uv sync                      # Python workspace, locked versions
-uv run pytest                # unit tests with coverage
+uv sync --locked             # Python workspace, locked versions
 uv run ruff check . && uv run ruff format --check . && uv run mypy
+uv run pytest                # unit tests; fails below 85% coverage
 pnpm install --frozen-lockfile
 pnpm typecheck && pnpm test && pnpm build
 pnpm exec playwright install chromium && pnpm e2e
-./install.sh                 # preflight only in Phase 0; prints a plain-language report
+./install.sh --preflight-only --data-root "$(mktemp -d)/slas-data"   # report only; exit 0 or 1
 uv run slas doctor --json    # the same report as data
 ```
 
-Everything above also runs with the network disabled once the dependencies are installed;
-CI proves it in the `egress-drop` job.
+The credential grep over a full run's log bundles (INV-5, INV-14): the 25-cycle run keeps
+its sinks, then every file in them is grepped for the fake BMC password and every
+credential shape. The git-broker flow tests grep their own sinks for tokens inside
+`uv run pytest`.
+
+```bash
+export SLAS_SINK_DIR="$(mktemp -d)" SLAS_FAKE_BMC_PASSWORD='Bmc-Passw0rd-XYZ!'
+uv run pytest -q --no-cov -p no:cacheprovider tests/hal/test_real_hal_run.py -k leaves_no_credential
+uv run python -m slas_hal.sinkcheck "$SLAS_SINK_DIR" --known-env SLAS_FAKE_BMC_PASSWORD
+```
+
+Before a release, the Python, WebUI and preflight checks run once more with the network
+disabled (egress-DROP, INV-1 and INV-8): install the dependencies, then repeat the checks
+inside `docker run --network none` the way the removed workflow did
+(`git show ef6db3b:.github/workflows/ci.yml`, job `egress-drop`).
 
 ## Licence
 

@@ -3,7 +3,8 @@
 Companion to `CLAUDE.md` v3.0. Phases are ordered so that the **shared kernel exists before
 any agent**, and every agent is built against **fakes before hardware**. Each phase ends
 with something you can click or run. Do not start a phase until the previous one's "Done
-when" is green in CI.
+when" is green in the checks before a push (README, "Developing"; there is no hosted CI
+since ADR-0019).
 
 Estimated effort is in Claude Code sessions of roughly 1–2 hours with review.
 
@@ -51,7 +52,8 @@ P0 skeleton ──► P1 quickstart core ──► P2 kernel + tickets ──►
 `install.sh` preflight only; `.env.example`; ADR-0001 "Agent Kernel" and ADR-0002 "Screen
 worker instead of host X11".
 **Done when.** `./install.sh` runs preflight and prints a plain-language report; CI is
-green on an empty repo; `docs/adr/` has two accepted ADRs.
+green on an empty repo; `docs/adr/` has two accepted ADRs. (ADR-0019 later removed the CI
+workflow: its checks run locally before a push, egress-DROP before a release.)
 
 ### P1 — Quickstart core (3 sessions)
 **Scope.** Compose with postgres, redis, minio, api, webui shell, edge (self-signed TLS);
@@ -78,7 +80,7 @@ per-decision rules from `config/consensus.yaml`, token budget); Models page (car
 fit sentence, swap progress, voter chips); `slas model scan|fit|swap|test`.
 **Done when.** Swap `coder` from the UI with progress and roll back; a cross-check request
 with 3 voters returns a verdict object; a voter that fails schema twice trips the breaker;
-eval harness runs against local judges only (CI asserts no `api.openai.com`).
+eval harness runs against local judges only (a unit test asserts no `api.openai.com`).
 
 ### P4 — Skills + screen worker (4 sessions)
 **Scope.** `skills/schema/skill.schema.json` from CLAUDE.md §6; `slas-skills` import →
@@ -89,8 +91,8 @@ that replays scripted windows for tests; Skills page (list, enable per agent, im
 export, "Try it").
 **Done when.** The two example skills in §6.3 validate, compile and run against fakes; a
 skill with a `redfish: power_off` step shows the approval requirement at import and at run;
-a GUI skill runs on a real Xvfb display in CI and produces before/after screenshots; a
-skill exported from one install imports into another unchanged.
+a GUI skill runs on a real Xvfb display (a release check, ADR-0019) and produces
+before/after screenshots; a skill exported from one install imports into another unchanged.
 
 ### P5 — Knowledge, RCA, dual-language SOP (3 sessions)
 **Scope.** Qdrant + Postgres FTS ingestion; hybrid retrieval with RRF and rerank;
@@ -123,7 +125,7 @@ branch in `Projects/<slug>/.git` → 3-voter cross-check shown → EN/中文 wal
 → ZIP downloads → "Push to gitlab-firmware" opens a PR on local GitLab. In the terminal,
 `git log` shows the agent's commits with `Slas-Agent` trailers and `git push` fails with the
 "push happens from the Git panel" message. A PAT pasted in the UI appears in no log,
-workspace file, argv or model context (CI grep on every sink). A repo with a malicious
+workspace file, argv or model context (the credential grep on every sink). A repo with a malicious
 `pre-push` hook pushes without the hook executing. A bundle exported from one install
 imports into another. A plan that needs a missing file stops after 3 iterations with a
 three-part message.
@@ -146,7 +148,7 @@ approval dialog blocks an AC-cycle plan until approved.
 open decision 3), BMC quirk shims; macvlan overlay; one real target.
 **Done when.** One real DC cycle with SOL capture and baseline diff; approval flow used for
 a real AC cycle; fence markers correlate to real console lines; no credential appears in
-any log or model context (grep-based CI check on redacted bundles).
+any log or model context (grep-based credential check on redacted bundles).
 
 ### P9 — Factory Agent against fakes (4 sessions)
 **Scope.** Factory templates (`templates/factory/*.yaml`); MES adapter interface with a
@@ -200,7 +202,7 @@ a measured RTO.
 | Three voters don't fit in VRAM | Models page fit sentence; consensus degrades to single-model + flag, never blocks |
 | Dual-language drift | one structured source; identifiers copied by code; glossary pinned; eval checks |
 | Skill files become an attack surface | schema + whitelist + capabilities + risk classes; no shell primitive; import-time review of destructive steps |
-| Pasted Git credentials leak, or a hostile repo runs code in the platform | credentials exist only in `git-broker` memory per operation, stored encrypted by reference; sandboxes have no route and no creds; hooks and repo config neutralised on every broker invocation; CI greps every log sink for token/key patterns |
+| Pasted Git credentials leak, or a hostile repo runs code in the platform | credentials exist only in `git-broker` memory per operation, stored encrypted by reference; sandboxes have no route and no creds; hooks and repo config neutralised on every broker invocation; the tests grep every log sink for token/key patterns before every push |
 | "Air-gapped" with a proxy search | Option A default; Option B requires an ADR and cannot use the label |
 
 ## Working rules for every phase

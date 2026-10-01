@@ -1,7 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
 // End-to-end tests live in tests/e2e (CLAUDE.md §13). The WebUI dev server is started
-// here on loopback; CI installs Chromium for this exact @playwright/test version.
+// here on loopback; `pnpm exec playwright install chromium` installs Chromium for this
+// exact @playwright/test version (README, "Developing").
 export default defineConfig({
   testDir: "tests/e2e",
   fullyParallel: true,

@@ -12,4 +12,5 @@ against the platform's own display; no host X11 socket or `/dev/input` is ever m
 | `entrypoint.sh` | starts one session from the environment for image smoke tests, plus `/health` and `/metrics` on 8000 through the stdlib `slas_observability.serve` runner |
 
 The orchestrator-facing session API arrives with the api dependencies (ADR-0005). The
-Phase 4 CI job that runs a GUI skill on a real Xvfb display needs this image built.
+Phase 4 release check that runs a GUI skill on a real Xvfb display (ADR-0019) needs this
+image built.

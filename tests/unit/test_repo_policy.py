@@ -3,7 +3,7 @@
 - no `shell=True` anywhere in Python (argv lists only)
 - no cloud AI endpoint in code or config (INV-2)
 - no `latest` image tag, every GitHub Action pinned to a commit, every CI image pinned
-  to a digest (INV-8)
+  to a digest (INV-8) — in any workflow added later; ADR-0019 removed the hosted CI
 - every JavaScript dependency and every Python dev tool pinned to an exact version (INV-8)
 """
 
@@ -95,9 +95,9 @@ def test_no_latest_image_tags() -> None:
 
 
 def workflows() -> list[Path]:
-    found = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
-    assert found, "at least one workflow is expected"
-    return found
+    """Every GitHub workflow; none since ADR-0019, so the pinning rules wait for the next."""
+    directory = REPO_ROOT / ".github" / "workflows"
+    return sorted([*directory.glob("*.yml"), *directory.glob("*.yaml")])
 
 
 def test_every_github_action_is_pinned_to_a_commit() -> None:

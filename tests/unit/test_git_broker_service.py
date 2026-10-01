@@ -702,7 +702,7 @@ def test_push_pull_and_bundles_over_the_fake_host(bench: ServiceBench) -> None:
         "the clone ran outside a request"
     )
 
-    # The CI grep: token and key shapes in no body, log line, argv, env, file or server log.
+    # The credential grep: token and key shapes in no body, log line, argv, env, file or server log.
     bench.assert_clean("glpat-abcdefghijklmnopqrst")
     assert all(json.loads(line)["trace_id"] for line in bench.sink.lines if "git." in line), (
         "every event carries the request's trace id"

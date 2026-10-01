@@ -129,7 +129,6 @@ FILES = [
     "config/.env.example",
     "docs/DEVELOPMENT_PLAN.md",
     "docs/PROMPTS.md",
-    ".github/workflows/ci.yml",
 ]
 
 
