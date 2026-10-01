@@ -209,4 +209,5 @@ routes answer the 503 *"The model-fetcher did not answer."* there.
 | `POST /api/v1/models/fetches` | model-fetcher `/v1/fetches` | `model:manage` |
 | `GET /api/v1/models/fetches/{id}` | model-fetcher `/v1/fetches/{id}` | signed in |
 | `DELETE /api/v1/models/fetches/{id}` | model-fetcher `/v1/fetches/{id}` | `model:manage` |
-| `POST /api/v1/git/projects/{slug}/terminal` | sandbox-manager: `/v1/sessions` (query `user`, `slug`), then `/v1/sessions/{session}/terminal` | `git:terminal` |
+| `POST /api/v1/git/projects/{slug}/terminal` | sandbox-manager: `/v1/sessions` (query `user` = the email's workspace name, `slug`), then `/v1/sessions/{session}/terminal` | `git:terminal` |
+| `GET /api/v1/coding/tasks/{ticket_id}/zip` | none: the api streams `Coding/<user>/Artifacts/<ticket>/*.zip` from the data root, the person's own folder only; `404` *"There is no ZIP for {ticket} yet."* | signed in |

@@ -9,16 +9,20 @@ DELETE, behind the `X-Requested-With` middleware like the round-1 routes.
 
 One route is not a plain forward: `POST /git/projects/{slug}/terminal` first asks the
 sandbox manager which session the person holds for the slug, then sends the line to it.
+`GET /coding/tasks/{ticket_id}/zip` is served by the api itself: the ZIP the Coding Agent
+exported into the person's own `Coding/<user>/Artifacts/<ticket>/` on the shared data root.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Any, Final, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import FileResponse
 
 from slas_api import proxy
 from slas_api.authz import require
@@ -260,6 +264,21 @@ for _route in ROUTES:
     round2.add_api_route(_route.path, _endpoint_for(_route), methods=[_route.method])
 
 
+# --- the person's workspace name ----------------------------------------------------------------
+
+_UNSAFE = re.compile(r"[^a-z0-9._-]+")
+
+
+def workspace_user(email: str) -> str:
+    """`Coding/<user>/` for an email; the same rule as the orchestrator's `workspace_user`.
+
+    The sandbox manager records sessions under this name, not the email, so every lookup by
+    person goes through it.
+    """
+    local = email.split("@", 1)[0].strip().lower()
+    return _UNSAFE.sub("-", local).strip("-.") or "user"
+
+
 # --- the terminal: two steps through the sandbox manager --------------------------------------
 
 
@@ -291,7 +310,7 @@ def terminal_line(slug: str, auth: Ready, svc: ServicesDep, body: JsonBody) -> R
         "GET",
         "/v1/sessions",
         principal=auth.principal,
-        params={"user": auth.person.email, "slug": slug},
+        params={"user": workspace_user(auth.person.email), "slug": slug},
     )
     session_id = first_session_id(sessions)
     if session_id is None:
@@ -306,8 +325,43 @@ def terminal_line(slug: str, auth: Ready, svc: ServicesDep, body: JsonBody) -> R
     return proxy.as_response(answer)
 
 
+# --- the exported ZIP ------------------------------------------------------------------------
+
+ZIP_PATH: Final = "/coding/tasks/{ticket_id}/zip"
+_TICKET = re.compile(r"^T-coding-\d{1,9}$")
+
+
+def no_zip(ticket_id: str) -> ThreePartMessage:
+    return ThreePartMessage(
+        f"There is no ZIP for {ticket_id} yet.",
+        "The task has not reached its Export a ZIP step, it was removed, or it belongs to "
+        "someone else.",
+        "Wait until Export a ZIP is done, then press Download ZIP again.",
+    )
+
+
+@round2.get(ZIP_PATH, response_model=None)
+def download_zip(ticket_id: str, auth: Ready, svc: ServicesDep) -> FileResponse:
+    if not _TICKET.match(ticket_id):
+        raise ApiError(404, no_zip(ticket_id))
+    folder = (
+        svc.settings.slas_data_root
+        / "Coding"
+        / workspace_user(auth.person.email)
+        / "Artifacts"
+        / ticket_id
+    )
+    zips = sorted(folder.glob("*.zip")) if folder.is_dir() else []
+    if not zips:
+        raise ApiError(404, no_zip(ticket_id))
+    return FileResponse(
+        zips[0], media_type="application/zip", filename=f"{ticket_id}-{zips[0].name}"
+    )
+
+
 def browser_routes() -> list[tuple[str, str, tuple[Capability, ...]]]:
     """(method, browser path, capabilities) for every round-2 route, sorted; docs and tests."""
     rows = [(r.method, r.browser_path, r.requires) for r in ROUTES]
     rows.append(("POST", f"/api/v1{TERMINAL_PATH}", TERMINAL_REQUIRES))
+    rows.append(("GET", f"/api/v1{ZIP_PATH}", ()))
     return sorted(rows)

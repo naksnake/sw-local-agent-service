@@ -18,7 +18,13 @@ from fastapi.testclient import TestClient
 
 from slas_api import proxy, routes_round2
 from slas_api.app import route_table
-from slas_api.routes_round2 import ROUTES, ProxyRoute, browser_routes, first_session_id
+from slas_api.routes_round2 import (
+    ROUTES,
+    ProxyRoute,
+    browser_routes,
+    first_session_id,
+    workspace_user,
+)
 from slas_api.service import Downstream
 from slas_api.settings import Settings
 from slas_authz import Capability, Principal
@@ -344,7 +350,7 @@ def test_terminal_looks_the_session_up_then_sends_the_line(
     admin: TestClient, recorder: Recorder
 ) -> None:
     recorder.answers[("sandbox_manager", "/v1/sessions")] = httpx.Response(
-        200, json=[{"id": "sess-42", "user": ADMIN_EMAIL, "slug": "demo-proj"}]
+        200, json=[{"id": "sess-42", "user": "admin", "slug": "demo-proj"}]
     )
     recorder.answers[("sandbox_manager", "/v1/sessions/sess-42/terminal")] = httpx.Response(
         200, json={"line": "git status", "output": "On branch main", "sentence": "Ran git status."}
@@ -356,7 +362,9 @@ def test_terminal_looks_the_session_up_then_sends_the_line(
     assert response.json()["output"] == "On branch main"
     lookup, line = recorder.calls
     assert (lookup.method, lookup.path) == ("GET", "/v1/sessions")
-    assert lookup.query == {"user": ADMIN_EMAIL, "slug": "demo-proj"}
+    # The sandbox manager names sessions by workspace user (`Coding/admin/`), not by email;
+    # asking with the email found nothing and every Terminal line was a 409.
+    assert lookup.query == {"user": "admin", "slug": "demo-proj"}
     assert lookup.headers["x-slas-user"] == ADMIN_EMAIL
     assert (line.method, line.path) == ("POST", "/v1/sessions/sess-42/terminal")
     assert line.body == {"line": "git status"}
@@ -379,6 +387,35 @@ def test_terminal_without_an_open_sandbox_is_a_409(admin: TestClient, recorder: 
         503,
     )
     assert "slas logs sandbox-manager" in down["what_to_do"]
+
+
+def test_workspace_user_matches_the_orchestrators_rule() -> None:
+    from slas_http.identity import Identity
+    from slas_orchestrator.service.deps import workspace_user as orchestrator_rule
+
+    for email in ("admin@slas.local", "Recovery@SLAS.local", "ana.lin+x@lab.local", "@x"):
+        identity = Identity(user=email, display_name="X", capabilities=frozenset())
+        assert workspace_user(email) == orchestrator_rule(identity), email
+
+
+def test_download_zip_serves_the_persons_own_export(harness: Harness, admin: TestClient) -> None:
+    folder = harness.settings.slas_data_root / "Coding" / "admin" / "Artifacts" / "T-coding-8"
+    folder.mkdir(parents=True)
+    (folder / "plan.zip").write_bytes(b"PK\x03\x04 zip bytes")
+    response = admin.get("/api/v1/coding/tasks/T-coding-8/zip")
+    assert response.status_code == 200, response.text
+    assert response.content == b"PK\x03\x04 zip bytes"
+    assert response.headers["content-type"] == "application/zip"
+    assert 'filename="T-coding-8-plan.zip"' in response.headers["content-disposition"]
+
+    missing = assert_problem(admin.get("/api/v1/coding/tasks/T-coding-9/zip"), 404)
+    assert missing["what_happened"] == "There is no ZIP for T-coding-9 yet."
+    assert_problem(admin.get("/api/v1/coding/tasks/..%2F..%2Fsecrets/zip"), 404)
+
+    other = harness.settings.slas_data_root / "Coding" / "ana" / "Artifacts" / "T-coding-5"
+    other.mkdir(parents=True)
+    (other / "x.zip").write_bytes(b"PK")
+    assert_problem(admin.get("/api/v1/coding/tasks/T-coding-5/zip"), 404)  # only your own
 
 
 def test_first_session_id_accepts_a_list_or_a_wrapped_list() -> None:
@@ -416,7 +453,7 @@ def test_the_browser_table_is_documented_with_its_capabilities() -> None:
         else:
             assert cell == " or ".join(f"`{c.value}`" for c in requires), (method, path, cell)
     assert all(pair in route_table() for pair in documented), "the app serves every row"
-    assert len(table) == len(ROUTES) + 1 and table == sorted(table)
+    assert len(table) == len(ROUTES) + 2 and table == sorted(table)
     methods = {m for m, _, _ in table}
     assert methods == {"GET", "POST", "PUT", "DELETE"}
     assert ("GET", "/api/v1/coding/tasks", ()) in table, "the round-1 stub is now a proxy"

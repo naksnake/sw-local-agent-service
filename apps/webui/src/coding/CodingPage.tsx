@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { isLive, POLL_INTERVAL_MS, usePolling } from "../api/polling";
 import type { GitApi } from "../git/api";
 import { GitPanel } from "../git/GitPanel";
-import { type CodingApi, type CodingTask, isFinished, type StepStatus } from "./api";
+import { type CodingApi, type CodingTask, isFinished, type StepStatus, zipUrl } from "./api";
 import { NewCodingTaskWizard } from "./NewCodingTaskWizard";
 
 // The Coding page (CLAUDE.md §9): tasks with their plan checklist and activity feed, and
@@ -183,6 +183,16 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
                     >
                       {gitOpenFor === task.ticketId ? "Hide Git panel" : "Git panel"}
                     </button>
+                  )}
+                  {zipUrl(task) !== null && (
+                    <a
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700"
+                      href={zipUrl(task) ?? undefined}
+                      download
+                      title="Downloads the project as the agent left it, to build and test on your own machine."
+                    >
+                      Download ZIP
+                    </a>
                   )}
                   {isFinished(task) && (
                     <button

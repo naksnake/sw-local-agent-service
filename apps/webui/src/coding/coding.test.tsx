@@ -142,6 +142,26 @@ describe("New coding task wizard", () => {
     expect(api.tasks.map((t) => t.ticketId)).toEqual(["T-coding-0001"]);
   });
 
+  it("offers Download ZIP once the Export a ZIP step is done, and only then", async () => {
+    const api = new FakeCodingApi();
+    const task = (ticketId: string, status: "done" | "pending") => ({
+      ticketId,
+      title: "plan",
+      state: "Needs review",
+      sentence: `${ticketId} needs your review.`,
+      steps: [{ n: 6, title: "Export a ZIP of the project", status }],
+      feed: [],
+    });
+    api.tasks.push(task("T-coding-0008", "done"), task("T-coding-0009", "pending"));
+    render(<CodingPage api={api} />);
+    const exported = await screen.findByLabelText("T-coding-0008");
+    const link = within(exported).getByRole("link", { name: "Download ZIP" });
+    expect(link.getAttribute("href")).toBe("/api/v1/coding/tasks/T-coding-0008/zip");
+    expect(link.hasAttribute("download")).toBe(true);
+    const waiting = screen.getByLabelText("T-coding-0009");
+    expect(within(waiting).queryByRole("link", { name: "Download ZIP" })).toBeNull();
+  });
+
   it("keeps pinned versions the bundle has and says so", async () => {
     const api = new FakeCodingApi();
     const [exact, prefix] = await api.resolveToolchains([

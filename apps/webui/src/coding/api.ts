@@ -95,6 +95,12 @@ export interface Readiness {
   sentence: string;
 }
 
+/** The URL that downloads a task's exported ZIP, once its "Export a ZIP" step is done. */
+export function zipUrl(task: CodingTask): string | null {
+  const exported = task.steps.some((step) => step.title.startsWith("Export a ZIP") && step.status === "done");
+  return exported ? `/api/v1/coding/tasks/${encodeURIComponent(task.ticketId)}/zip` : null;
+}
+
 export interface CodingApi {
   readiness(): Promise<Readiness>;
   detectLanguages(plan: string): Promise<LanguageId[]>;
