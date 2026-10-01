@@ -310,9 +310,9 @@ def test_round_2_wiring_of_the_compose_services() -> None:
     assert sm["SLAS_SANDBOX_USER"] == "${SLAS_UID}:${SLAS_GID}", (
         "sandboxes write what the platform owns"
     )
-    assert (
-        sm["SLAS_RUNTIME_SOCKET"] == "/run/podman/podman.sock" and sm["DEFAULT_RUNTIME"] == "runsc"
-    )
+    assert sm["SLAS_RUNTIME_SOCKET"] == "/run/podman/podman.sock"
+    assert sm["DEFAULT_RUNTIME"] == "${SLAS_SANDBOX_RUNTIME:-runsc}", "gVisor unless .env says runc"
+    assert "\nSLAS_SANDBOX_RUNTIME=runsc\n" in (REPO_ROOT / "config" / ".env.example").read_text()
     assert services["sandbox-manager"]["volumes"] == [
         f"{compose.RUNTIME_SOCKET}:{compose.RUNTIME_SOCKET_IN_CONTAINER}",
         "${SLAS_DATA_ROOT}/Coding:/data/Coding",

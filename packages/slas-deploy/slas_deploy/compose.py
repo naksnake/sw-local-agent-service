@@ -424,7 +424,8 @@ def base_compose() -> dict[str, Any]:
             "SLAS_TOOLCHAIN_MANIFEST": "/data/Toolchains/manifest.json",
             "SLAS_SANDBOX_REGISTRY": "${SLAS_REGISTRY}",
             "SLAS_SANDBOX_USER": "${SLAS_UID}:${SLAS_GID}",
-            "DEFAULT_RUNTIME": "runsc",
+            # runc is the quickstart way out when exec hangs under gVisor on a host.
+            "DEFAULT_RUNTIME": "${SLAS_SANDBOX_RUNTIME:-runsc}",
             "SANDBOX_TIER": "gvisor",
             "DEFAULT_NETWORK": "none",
             "PIDS_LIMIT": "512",
