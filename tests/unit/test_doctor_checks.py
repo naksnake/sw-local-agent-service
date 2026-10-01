@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 
 import pytest
@@ -38,7 +39,7 @@ def bare_host() -> FakeHost:
 
 def test_healthy_host_passes_every_check() -> None:
     results = run_checks(FakeHost.healthy(), SETTINGS)
-    assert len(results) == len(ALL_CHECKS) == 16
+    assert len(results) == len(ALL_CHECKS) == 20
     assert [result.status for result in results] == ["ok"] * len(ALL_CHECKS)
 
 
@@ -196,6 +197,183 @@ def test_container_runtime_unknown_docker_version() -> None:
     assert result.summary == "Docker of an unknown version with Compose 2.29.7 is ready."
 
 
+# --- the runtime socket and what is registered behind it (ADR-0015) ------------------------
+
+
+def test_runtime_socket_served_by_docker_wins_because_the_images_live_there() -> None:
+    host = FakeHost.healthy()
+    result = checks.check_runtime_socket(host, SETTINGS)
+    assert result.status == "ok"
+    assert result.summary == (
+        "Docker Engine 29.0.1 serves the container-runtime socket /var/run/docker.sock; only "
+        "model-manager and sandbox-manager will see it."
+    )
+    assert ("/var/run/docker.sock", "/version") in host.http_calls
+    assert all(argv[0] != "docker" or argv[1] != "info" for argv in host.calls[-1:]), (
+        "the engine is identified over the socket with the standard library, not a CLI"
+    )
+    # Both sockets present (the first host): Docker's is asked first and wins, so the
+    # managers see the store `docker compose` and `install.sh --build` filled (ADR-0015
+    # amendment); Podman's is not even asked.
+    host.sockets.add("/run/podman/podman.sock")
+    host.http[("/run/podman/podman.sock", "/version")] = FakeHost.PODMAN_VERSION_BODY
+    host.http_calls.clear()
+    both = checks.check_runtime_socket(host, SETTINGS)
+    assert both.summary.startswith("Docker Engine 29.0.1 serves the container-runtime socket")
+    assert ("/run/podman/podman.sock", "/version") not in host.http_calls
+    assert checks.runtime_socket_candidates(host, SETTINGS) == [
+        "/var/run/docker.sock",
+        "/run/podman/podman.sock",
+    ]
+
+
+def test_runtime_socket_served_by_podman_on_a_host_without_docker() -> None:
+    host = FakeHost.healthy()
+    host.serve_podman()
+    result = checks.check_runtime_socket(host, SETTINGS)
+    assert result.status == "ok"
+    assert result.summary == (
+        "Podman 4.9.3 serves the container-runtime socket /run/podman/podman.sock (no Docker "
+        "socket at /var/run/docker.sock, so the compose default stays); only model-manager "
+        "and sandbox-manager will see it."
+    )
+
+
+def test_runtime_socket_configured_in_the_environment_or_env_file_wins() -> None:
+    host = FakeHost.healthy()
+    host.serve_podman("/run/user/1000/podman/podman.sock")
+    host.environment["SLAS_RUNTIME_SOCKET"] = "/run/user/1000/podman/podman.sock"
+    result = checks.check_runtime_socket(host, SETTINGS)
+    assert result.status == "ok"
+    assert result.summary.startswith(
+        "Podman 4.9.3 serves the container-runtime socket /run/user/1000/podman/podman.sock;"
+    )
+    del host.environment["SLAS_RUNTIME_SOCKET"]
+    host.files["/AI/Agent/.env"] = (
+        'SLAS_PROFILE=quickstart\nSLAS_RUNTIME_SOCKET="/run/user/1000/podman/podman.sock"\n'
+    )
+    assert checks.check_runtime_socket(host, SETTINGS).status == "ok"
+    host.files["/AI/Agent/.env"] = "SLAS_RUNTIME_SOCKET=/elsewhere.sock\n"
+    missing = checks.check_runtime_socket(host, SETTINGS)
+    assert missing.status == "fail"
+    assert missing.summary == "No container-runtime socket was found at /elsewhere.sock."
+
+
+def test_runtime_socket_missing_or_silent() -> None:
+    host = FakeHost.healthy()
+    host.sockets.clear()
+    result = checks.check_runtime_socket(host, SETTINGS)
+    assert result.status == "fail"
+    assert result.summary == (
+        "No container-runtime socket was found at /var/run/docker.sock or /run/podman/podman.sock."
+    )
+    assert result.detail is not None
+    assert "podman.socket" in result.detail.what_to_do
+    assert "Docker Engine" in result.detail.what_to_do
+    host.sockets.add("/var/run/docker.sock")
+    host.http.clear()
+    silent = checks.check_runtime_socket(host, SETTINGS)
+    assert silent.status == "fail"
+    assert silent.summary == (
+        "The container-runtime socket /var/run/docker.sock exists but did not answer."
+    )
+    assert silent.detail is not None and "docker group" not in silent.summary
+    host.http[("/var/run/docker.sock", "/version")] = "not json"
+    assert checks.check_runtime_socket(host, SETTINGS).status == "fail"
+
+
+def test_gvisor_runtime_registered_or_not() -> None:
+    host = FakeHost.healthy()
+    ok = checks.check_gvisor_runtime(host, SETTINGS)
+    assert ok.status == "ok"
+    assert ok.summary == (
+        "gVisor is registered with Docker Engine as the runsc runtime; sandboxes will use it."
+    )
+    host.http[("/var/run/docker.sock", "/info")] = '{"Runtimes":{"runc":{"path":"runc"}}}'
+    warn = checks.check_gvisor_runtime(host, SETTINGS)
+    assert warn.status == "warn"
+    assert warn.summary == (
+        "runsc is not registered with Docker Engine as a container runtime; sandboxes will "
+        "use hardened runc."
+    )
+    assert warn.detail is not None and "runsc install" in warn.detail.what_to_do
+    assert checks.check_gvisor_runtime(host, DoctorSettings(profile="prod")).status == "fail"
+    host.sockets.clear()
+    skipped = checks.check_gvisor_runtime(host, SETTINGS)
+    assert skipped.status == "skip"
+    assert skipped.summary == "Skipped because no container runtime answered on its socket."
+
+
+def test_gvisor_runtime_when_podman_does_not_list_its_runtimes() -> None:
+    host = FakeHost.healthy()
+    host.serve_podman()
+    del host.http[("/run/podman/podman.sock", "/info")]
+    result = checks.check_gvisor_runtime(host, SETTINGS)
+    assert result.status == "ok"
+    assert result.summary == (
+        "Podman does not list its runtimes, but runsc is installed; sandboxes use it when "
+        "containers.conf names it."
+    )
+    del host.commands["runsc"]
+    assert checks.check_gvisor_runtime(host, SETTINGS).status == "warn"
+
+
+def test_nvidia_runtime_registered_with_docker() -> None:
+    host = FakeHost.healthy()
+    result = checks.check_nvidia_runtime(host, SETTINGS)
+    assert result.status == "ok"
+    assert result.summary == (
+        "The NVIDIA runtime is registered with Docker Engine (nvidia-container-toolkit "
+        "1.16.2); the model instances get their GPUs."
+    )
+    host.http[("/var/run/docker.sock", "/info")] = '{"Runtimes":{"runc":{"path":"runc"}}}'
+    unregistered = checks.check_nvidia_runtime(host, SETTINGS)
+    assert unregistered.status == "fail"
+    assert unregistered.summary == (
+        "The NVIDIA runtime is not registered with Docker Engine, although "
+        "nvidia-container-toolkit 1.16.2 is installed."
+    )
+    assert unregistered.detail is not None
+    assert "nvidia-ctk runtime configure --runtime=docker" in unregistered.detail.what_to_do
+    del host.commands["nvidia-ctk"]
+    absent = checks.check_nvidia_runtime(host, SETTINGS)
+    assert absent.status == "fail"
+    assert absent.summary == (
+        "Neither the NVIDIA runtime nor the NVIDIA Container Toolkit was found for Docker Engine."
+    )
+    assert absent.detail is not None
+    assert "apt install nvidia-container-toolkit" in absent.detail.what_to_do
+
+
+def test_nvidia_runtime_skips_without_a_gpu_or_an_engine() -> None:
+    host = FakeHost.healthy()
+    host.sockets.clear()
+    assert checks.check_nvidia_runtime(host, SETTINGS).summary == (
+        "Skipped because no container runtime answered on its socket."
+    )
+    del host.commands["nvidia-smi"]
+    assert checks.check_nvidia_runtime(host, SETTINGS).summary == (
+        "Skipped because no GPU driver was found."
+    )
+
+
+def test_nvidia_runtime_on_podman_uses_the_cdi_spec() -> None:
+    host = FakeHost.healthy()
+    host.serve_podman()
+    host.http[("/run/podman/podman.sock", "/info")] = '{"Runtimes":{"crun":{"path":"crun"}}}'
+    missing = checks.check_nvidia_runtime(host, SETTINGS)
+    assert missing.status == "fail"
+    assert missing.summary == "No NVIDIA CDI specification was found for Podman."
+    assert missing.detail is not None and "nvidia-ctk cdi generate" in missing.detail.what_to_do
+    host.existing_paths.add("/etc/cdi/nvidia.yaml")
+    present = checks.check_nvidia_runtime(host, SETTINGS)
+    assert present.status == "ok"
+    assert present.summary == (
+        "The NVIDIA CDI specification /etc/cdi/nvidia.yaml is present; Podman attaches GPUs "
+        "to the model instances through it."
+    )
+
+
 # --- sandboxes -------------------------------------------------------------------------------
 
 
@@ -323,6 +501,53 @@ def test_gpu_container_toolkit() -> None:
     assert skipped.summary == "Skipped because no GPU driver was found."
 
 
+def test_gpu_fabric_not_initialized_names_fabric_manager() -> None:
+    """The first host: eight B300 SXM GPUs, nvidia-smi fine, every vLLM instance crashing
+    with CUDA error 802 because Fabric Manager was not installed."""
+    host = FakeHost.healthy()
+    host.outputs[checks.FABRIC_QUERY] = CommandResult(
+        0, "".join(f"{i}, Not Started, N/A\n" for i in range(8))
+    )
+    result = checks.check_gpu_fabric(host, SETTINGS)
+    assert result.status == "fail"
+    assert result.summary == (
+        "The NVLink fabric is not initialized on 8 GPUs (fabric state: Not Started)."
+    )
+    assert result.detail is not None
+    assert "error 802" in result.detail.likely_cause
+    assert "nvidia-fabricmanager-595" in result.detail.what_to_do
+    assert "systemctl enable --now nvidia-fabricmanager" in result.detail.what_to_do
+
+    host.outputs[checks.FABRIC_QUERY] = CommandResult(
+        0, "0, Completed, Success\n1, In Progress, N/A\n"
+    )
+    partial = checks.check_gpu_fabric(host, SETTINGS)
+    assert partial.status == "fail"
+    assert partial.summary.startswith("The NVLink fabric is not initialized on 1 GPU ")
+
+
+def test_gpu_fabric_ready_or_absent() -> None:
+    host = FakeHost.healthy()
+    host.outputs[checks.FABRIC_QUERY] = CommandResult(
+        0, "".join(f"{i}, Completed, Success\n" for i in range(8))
+    )
+    assert checks.check_gpu_fabric(host, SETTINGS).summary == (
+        "The NVLink fabric is up on 8 GPUs (Fabric Manager is running)."
+    )
+    host.outputs[checks.FABRIC_QUERY] = CommandResult(0, "0, N/A, N/A\n1, [N/A], [N/A]\n")
+    assert checks.check_gpu_fabric(host, SETTINGS).summary == (
+        "These GPUs have no NVSwitch fabric; nothing to bring up."
+    )
+    # An older driver does not know the field: nothing to check, never a failure.
+    host.outputs[checks.FABRIC_QUERY] = CommandResult(
+        1, "", 'Field "fabric.state" is not a valid field to query.'
+    )
+    older = checks.check_gpu_fabric(host, SETTINGS)
+    assert older.status == "ok" and "older driver" in older.summary
+    del host.commands["nvidia-smi"]
+    assert checks.check_gpu_fabric(host, SETTINGS).status == "skip"
+
+
 # --- data root, disk, port -----------------------------------------------------------------
 
 
@@ -411,3 +636,30 @@ def test_web_port(in_use: bool | None, status: str, summary: str) -> None:
     result = checks.check_web_port(host, SETTINGS)
     assert result.status == status
     assert result.summary == summary
+    if status == "fail":
+        assert result.detail is not None
+        assert "docker compose -p slas down" in result.detail.what_to_do
+
+
+def test_web_port_held_by_our_own_edge_is_fine() -> None:
+    """A second ./install.sh while the first stack is up: the listener on 443 is our edge."""
+    host = FakeHost.healthy()
+    host.ports[443] = True
+    query = checks.OWN_EDGE_QUERY
+    assert query.startswith("/containers/json?filters=") and "%22" in query and " " not in query
+    host.http[("/var/run/docker.sock", query)] = json.dumps(
+        [{"Id": "abc", "Names": ["/slas-edge-1"], "State": "running"}]
+    )
+    result = checks.check_web_port(host, SETTINGS)
+    assert result.status == "ok"
+    assert result.summary == (
+        "Port 443 is held by this installation's own edge container; the install keeps it."
+    )
+    assert ("/var/run/docker.sock", query) in host.http_calls
+
+    # No edge of ours behind the socket: the port belongs to something else.
+    host.http[("/var/run/docker.sock", query)] = "[]"
+    assert checks.check_web_port(host, SETTINGS).status == "fail"
+    # No engine answers at all: the check cannot tell whose the listener is, so it fails.
+    host.sockets.clear()
+    assert checks.check_web_port(host, SETTINGS).status == "fail"

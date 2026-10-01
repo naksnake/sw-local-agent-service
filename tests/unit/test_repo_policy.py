@@ -19,7 +19,16 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 THIS_FILE = Path(__file__).resolve()
 
-SKIP_DIRS = {".git", ".venv", ".uv-cache", "node_modules", "dist", ".pytest_cache", ".mypy_cache"}
+SKIP_DIRS = {
+    ".git",
+    ".venv",
+    ".uv-cache",
+    ".claude",  # Claude Code session state and agent worktrees
+    "node_modules",
+    "dist",
+    ".pytest_cache",
+    ".mypy_cache",
+}
 CODE_SUFFIXES = {".py", ".ts", ".tsx", ".toml", ".yaml", ".yml", ".json", ".sh", ".env", ".cfg"}
 # Prose is allowed to name the things we reject; code and config are not.
 PROSE = {REPO_ROOT / "CLAUDE.md", REPO_ROOT / "README.md"}

@@ -14,7 +14,15 @@ dependencies = [
   "slas-sandbox-manager",
   "slas-schemas",
   "slas-validation-executor",
+  "slas-http",
+  "pyyaml==6.0.3",
+  "types-PyYAML==6.0.12.20260906",
+  "slas-skills",
+  "slas-authz",
 ]
+
+[project.scripts]
+slas-orchestrator = "slas_orchestrator.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9.0"]
@@ -33,3 +41,6 @@ slas-llm-gateway = { workspace = true }
 slas-sandbox-manager = { workspace = true }
 slas-schemas = { workspace = true }
 slas-validation-executor = { workspace = true }
+slas-http = { workspace = true }
+slas-skills = { workspace = true }
+slas-authz = { workspace = true }

@@ -3,6 +3,11 @@
 # keys it reads from .env; secrets are files under ${SLAS_DATA_ROOT}/secrets. Third-party
 # images are pinned by an immutable tag whose digest and image ID live in
 # compose/images.lock.*; install.sh refuses to start an image the lock does not pin.
+# Round 2 (ADR-0015): services reach each other through the SLAS_*_URL variables; the
+# vllm-* containers are not services here — model-manager starts them from SLAS_VLLM_IMAGE
+# on the slas_slas-inference network (docs/api-contract-round-2.md §3).
+# ADR-0018: model-fetcher, behind the `fetch` profile (COMPOSE_PROFILES on quickstart,
+# never on prod), is the only service with a route out: slas-egress, hub allowlist only.
 name: slas
 networks:
   slas-edge: {}
@@ -12,6 +17,7 @@ networks:
     internal: true
   slas-inference:
     internal: true
+    name: slas_slas-inference
   slas-knowledge:
     internal: true
   slas-observability:
@@ -21,6 +27,7 @@ networks:
   slas-lab: {}
   slas-factory: {}
   slas-git: {}
+  slas-egress: {}
 volumes:
   postgres_data: {}
   redis_data: {}
@@ -41,6 +48,8 @@ secrets:
     file: "${SLAS_DATA_ROOT}/secrets/secret_key"
   admin-initial-password:
     file: "${SLAS_DATA_ROOT}/secrets/admin-initial-password"
+  hf_token:
+    file: "${SLAS_DATA_ROOT}/secrets/hf_token"
   grafana_admin_password:
     file: "${SLAS_DATA_ROOT}/secrets/grafana_admin_password"
 services:
@@ -58,6 +67,7 @@ services:
       HF_HUB_DISABLE_TELEMETRY: "1"
       SLAS_TLS_MODE: "${SLAS_TLS_MODE}"
       SLAS_TLS_NAMES: "${SLAS_TLS_NAMES}"
+      SLAS_PUBLIC_HOST: "${SLAS_PUBLIC_HOST}"
     logging:
       driver: json-file
       options:
@@ -88,6 +98,8 @@ services:
         condition: service_healthy
     ports:
       - "${SLAS_HTTPS_PORT}:443"
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
   webui:
     image: "${SLAS_REGISTRY}/slas/webui:${SLAS_VERSION}"
     restart: unless-stopped
@@ -117,6 +129,8 @@ services:
       timeout: 5s
       retries: 8
       start_period: 30s
+    cap_add:
+      - NET_BIND_SERVICE
     read_only: true
     tmpfs:
       - /tmp
@@ -135,11 +149,19 @@ services:
       HF_HUB_DISABLE_TELEMETRY: "1"
       SLAS_PROFILE: "${SLAS_PROFILE}"
       SLAS_DATA_ROOT: /data
+      SLAS_BIND: 0.0.0.0:8000
       SLAS_SOP_CHINESE: "${SLAS_SOP_CHINESE}"
       SLAS_AUTH_MODES: builtin
+      SLAS_AGENTS: "${SLAS_AGENTS:-coding}"
       POSTGRES_DB: "${POSTGRES_DB}"
       POSTGRES_USER: "${POSTGRES_USER}"
       SLAS_ROLES_FILE: /etc/slas/rbac-roles.yaml
+      SLAS_MODEL_MANAGER_URL: http://model-manager:8000
+      SLAS_SANDBOX_MANAGER_URL: http://sandbox-manager:8000
+      SLAS_ORCHESTRATOR_URL: http://agent-core-orchestrator:8000
+      SLAS_GIT_BROKER_URL: http://git-broker:8000
+      SLAS_FACTORY_EXECUTOR_URL: http://factory-executor:8000
+      SLAS_MODEL_FETCHER_URL: http://model-fetcher:8000
     logging:
       driver: json-file
       options:
@@ -189,8 +211,14 @@ services:
       TRANSFORMERS_OFFLINE: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
       SLAS_DATA_ROOT: /data
+      SLAS_BIND: 0.0.0.0:8000
       SLAS_GLOSSARY: /etc/slas/glossary.yaml
       SLAS_OWNER_ROUTING: /etc/slas/owner-routing.yaml
+      SLAS_GATEWAY_URL: http://llm-gateway:8000
+      SLAS_SANDBOX_MANAGER_URL: http://sandbox-manager:8000
+      SLAS_GIT_BROKER_URL: http://git-broker:8000
+      SLAS_VALIDATION_EXECUTOR_URL: http://validation-executor:8000
+      SLAS_FACTORY_EXECUTOR_URL: http://factory-executor:8000
     logging:
       driver: json-file
       options:
@@ -217,6 +245,8 @@ services:
       api:
         condition: service_healthy
       llm-gateway:
+        condition: service_healthy
+      sandbox-manager:
         condition: service_healthy
   screen-worker:
     image: "${SLAS_REGISTRY}/slas/screen-worker:${SLAS_VERSION}"
@@ -264,6 +294,7 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
+      SLAS_BIND: 0.0.0.0:8000
       SCHEMA_ENFORCE: strict
       CONSENSUS_DEFAULT_VOTERS: "3"
       CONSENSUS_TOKEN_BUDGET_PCT: "5"
@@ -302,8 +333,19 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
+      SLAS_DATA_ROOT: /data
+      SLAS_BIND: 0.0.0.0:8000
+      SLAS_RUNTIME_SOCKET: /run/podman/podman.sock
       SLAS_GPU_IDS: "${SLAS_GPU_IDS}"
+      SLAS_GPU_VRAM_GIB: "${SLAS_GPU_VRAM_GIB:-270}"
+      SLAS_HOST_MODELS_DIR: "${SLAS_DATA_ROOT}/Models"
+      SLAS_INFERENCE_NETWORK: slas_slas-inference
+      SLAS_VLLM_IMAGE: "${SLAS_REGISTRY}/vllm/vllm-openai:v0.29.0-x86_64-cu129"
+      SLAS_VLLM_SHM: 16g
+      SLAS_RECONCILE_INTERVAL_S: "30"
+      SLAS_START_CODER_FIRST: "${SLAS_START_CODER_FIRST:-1}"
       VLLM_NO_USAGE_STATS: "1"
+      SLAS_GATEWAY_URL: http://llm-gateway:8000
     logging:
       driver: json-file
       options:
@@ -323,7 +365,7 @@ services:
       retries: 8
       start_period: 30s
     volumes:
-      - /run/podman/podman.sock:/run/podman/podman.sock
+      - "${SLAS_RUNTIME_SOCKET:-/run/podman/podman.sock}:/run/podman/podman.sock"
       - "${SLAS_DATA_ROOT}/Models:/data/Models"
   vector-db:
     image: "${SLAS_REGISTRY}/qdrant/qdrant:v1.13.4"
@@ -349,15 +391,20 @@ services:
       - ALL
     healthcheck:
       test:
-        - CMD
-        - slas-health
-        - http://127.0.0.1:6333/readyz
+        - CMD-SHELL
+        - "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"
       interval: 15s
       timeout: 5s
       retries: 8
       start_period: 30s
     volumes:
       - "${SLAS_DATA_ROOT}/qdrant:/qdrant/storage"
+    profiles:
+      - knowledge
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
   local-search-api:
     image: "${SLAS_REGISTRY}/slas/local-search-api:${SLAS_VERSION}"
     restart: unless-stopped
@@ -394,6 +441,8 @@ services:
     depends_on:
       vector-db:
         condition: service_healthy
+    profiles:
+      - knowledge
   sandbox-manager:
     image: "${SLAS_REGISTRY}/slas/sandbox-manager:${SLAS_VERSION}"
     restart: unless-stopped
@@ -405,6 +454,13 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
+      SLAS_DATA_ROOT: /data
+      SLAS_BIND: 0.0.0.0:8000
+      SLAS_RUNTIME_SOCKET: /run/podman/podman.sock
+      SLAS_HOST_DATA_ROOT: "${SLAS_DATA_ROOT}"
+      SLAS_TOOLCHAIN_MANIFEST: /data/Toolchains/manifest.json
+      SLAS_SANDBOX_REGISTRY: "${SLAS_REGISTRY}"
+      SLAS_SANDBOX_USER: "${SLAS_UID}:${SLAS_GID}"
       DEFAULT_RUNTIME: runsc
       SANDBOX_TIER: gvisor
       DEFAULT_NETWORK: none
@@ -428,8 +484,9 @@ services:
       retries: 8
       start_period: 30s
     volumes:
-      - /run/podman/podman.sock:/run/podman/podman.sock
+      - "${SLAS_RUNTIME_SOCKET:-/run/podman/podman.sock}:/run/podman/podman.sock"
       - "${SLAS_DATA_ROOT}/Coding:/data/Coding"
+      - "${SLAS_DATA_ROOT}/Toolchains:/data/Toolchains:ro"
   git-broker:
     image: "${SLAS_REGISTRY}/slas/git-broker:${SLAS_VERSION}"
     restart: unless-stopped
@@ -442,6 +499,8 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
+      SLAS_DATA_ROOT: /data
+      SLAS_BIND: 0.0.0.0:8000
       GIT_HOSTS_ALLOWLIST: /etc/slas/git-hosts.yaml
       GIT_CONFIG_NOSYSTEM: "1"
       GIT_TERMINAL_PROMPT: "0"
@@ -468,13 +527,56 @@ services:
       - "/run/slas-keys:mode=700,size=16m"
     volumes:
       - "${SLAS_DATA_ROOT}/Coding:/data/Coding"
-      - "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:ro"
+      - "${SLAS_DATA_ROOT}/.git-broker:/data/.git-broker"
+      - "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:rw"
     secrets:
       - secret_key
       - postgres_password
     depends_on:
       postgres:
         condition: service_healthy
+  model-fetcher:
+    image: "${SLAS_REGISTRY}/slas/model-fetcher:${SLAS_VERSION}"
+    restart: unless-stopped
+    user: "${SLAS_UID}:${SLAS_GID}"
+    networks:
+      - slas-backend
+      - slas-egress
+    environment:
+      DO_NOT_TRACK: "1"
+      HF_HUB_OFFLINE: "0"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      SLAS_BIND: 0.0.0.0:8000
+      SLAS_MODELS_DIR: /data/Models
+      SLAS_HUB_HOSTS: "${SLAS_HUB_HOSTS:-huggingface.co,cdn-lfs.huggingface.co,*.hf.co}"
+      HF_ENDPOINT: "${HF_ENDPOINT:-https://huggingface.co}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      HF_TOKEN_FILE: /run/secrets/hf_token
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - slas-health
+        - http://127.0.0.1:8000/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    volumes:
+      - "${SLAS_DATA_ROOT}/Models:/data/Models"
+    secrets:
+      - hf_token
+    profiles:
+      - fetch
   validation-executor:
     image: "${SLAS_REGISTRY}/slas/validation-executor:${SLAS_VERSION}"
     restart: unless-stopped
@@ -488,6 +590,9 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
+      SLAS_DATA_ROOT: /data
+      SLAS_BIND: 0.0.0.0:8000
+      SLAS_TARGETS_REGISTRY: /data/Validation/targets.json
       GUARDRAIL_POLICY: /etc/slas/guardrails.yaml
       BMC_QUIRKS: /etc/slas/bmc-quirks.yaml
       SYSLOG_LISTEN: 0.0.0.0:5514
@@ -518,6 +623,8 @@ services:
       - "${SLAS_DATA_ROOT}/Tickets:/data/Tickets"
       - "../config/guardrails.yaml:/etc/slas/guardrails.yaml:ro"
       - "../config/bmc-quirks.yaml:/etc/slas/bmc-quirks.yaml:ro"
+    profiles:
+      - validation
   factory-executor:
     image: "${SLAS_REGISTRY}/slas/factory-executor:${SLAS_VERSION}"
     restart: unless-stopped
@@ -531,7 +638,13 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
+      SLAS_DATA_ROOT: /data
+      SLAS_BIND: 0.0.0.0:8000
+      SLAS_FACTORY_TEMPLATES: /etc/slas/templates
+      ENROLMENT_LISTEN: 0.0.0.0:8444
+      STATION_RUNNER_PORT: "8443"
       MES_ADAPTER: file_drop
+      MES_INBOX: /data/Factory/mes/inbox
       RUNNER_MTLS_CA: /data/Factory/ca/ca.pem
       LLM_IN_CONTROL_LOOP: "false"
       CREDENTIAL_SOURCE: env
@@ -559,6 +672,9 @@ services:
       - "${SLAS_DATA_ROOT}/Backups/stations:/data/Backups/stations"
       - "${SLAS_DATA_ROOT}/Tickets:/data/Tickets"
       - "../config/factory.yaml:/etc/slas/factory.yaml:ro"
+      - "../templates/factory:/etc/slas/templates:ro"
+    profiles:
+      - factory
   postgres:
     image: "${SLAS_REGISTRY}/library/postgres:16.6"
     restart: unless-stopped
@@ -627,11 +743,8 @@ services:
       - ALL
     healthcheck:
       test:
-        - CMD
-        - redis-cli
-        - "-a"
-        - "$(cat /run/secrets/redis_password)"
-        - ping
+        - CMD-SHELL
+        - "redis-cli --no-auth-warning -a \"$(cat /run/secrets/redis_password)\" ping | grep -q PONG"
       interval: 15s
       timeout: 5s
       retries: 8
@@ -713,7 +826,11 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - wget
+        - "-q"
+        - "--spider"
+        - "-T"
+        - "5"
         - http://127.0.0.1:9090/-/ready
       interval: 15s
       timeout: 5s
@@ -752,7 +869,11 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - wget
+        - "-q"
+        - "--spider"
+        - "-T"
+        - "5"
         - http://127.0.0.1:9093/-/ready
       interval: 15s
       timeout: 5s
@@ -796,7 +917,10 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - curl
+        - "-fsS"
+        - "-m"
+        - "5"
         - http://127.0.0.1:3000/api/health
       interval: 15s
       timeout: 5s
@@ -833,9 +957,8 @@ services:
       - ALL
     healthcheck:
       test:
-        - CMD
-        - slas-health
-        - http://127.0.0.1:9400/metrics
+        - CMD-SHELL
+        - "bash -c ':> /dev/tcp/127.0.0.1/9400' || exit 1"
       interval: 15s
       timeout: 5s
       retries: 8
@@ -873,7 +996,11 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - wget
+        - "-q"
+        - "--spider"
+        - "-T"
+        - "5"
         - http://127.0.0.1:9100/metrics
       interval: 15s
       timeout: 5s
@@ -918,7 +1045,11 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - wget
+        - "-q"
+        - "--spider"
+        - "-T"
+        - "5"
         - http://127.0.0.1:9187/metrics
       interval: 15s
       timeout: 5s

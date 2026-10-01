@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Final, Literal
 
 from pydantic import Field
@@ -33,6 +33,9 @@ _LATEST: Final = re.compile(r"(:latest$|^[^:@]+$)")
 
 Profile = Literal["quickstart", "prod"]
 ALL_PROFILES: Final[tuple[Profile, ...]] = ("quickstart", "prod")
+#: Who starts a locked image: compose (a service in the compose files) or the model manager
+#: (the vLLM image, one container per role and voter; CLAUDE.md §7, contract round 2 §3).
+StartedBy = Literal["compose", "model-manager"]
 
 
 class LockedImage(SlasModel):
@@ -42,8 +45,13 @@ class LockedImage(SlasModel):
     reference: str = Field(min_length=3)
     #: Upstream source the build host pulls from, for the record.
     upstream: str = Field(min_length=3)
+    #: The same release on other registries, tried in order when the upstream refuses the
+    #: pull (a registry that removed the tag or now wants a login answers 401; quay.io did
+    #: that for MinIO on the first host). Same immutable tag, so the same image (INV-8).
+    mirrors: list[str] = Field(default_factory=list)
     first_party: bool = False
-    #: Upstream manifest digest; None until the lock is filled on a build host.
+    #: Upstream manifest digest; None until the lock is filled on a build host. An image whose
+    #: digest is known up front is pulled by that digest, never by its tag alone (INV-8).
     digest: str | None = None
     #: The image ID (config digest) `docker inspect` reports after load or pull.
     image_id: str | None = None
@@ -51,10 +59,42 @@ class LockedImage(SlasModel):
     signed_by: str | None = None
     #: Profiles that start the image.
     profiles: list[Profile] = Field(default_factory=lambda: list(ALL_PROFILES))
+    #: `compose` for a service in the compose files; `model-manager` for an image the model
+    #: manager starts over the runtime socket and compose never references as a service.
+    started_by: StartedBy = "compose"
+
+    @property
+    def pull_reference(self) -> str:
+        """What a connected host pulls: `<upstream repository>@<digest>` when the lock knows
+        the digest, the pinned upstream tag otherwise."""
+        if self.digest and not self.first_party:
+            repository = self.upstream.split("@", 1)[0].rsplit(":", 1)[0]
+            return f"{repository}@{self.digest}"
+        return self.upstream
+
+    @property
+    def pull_candidates(self) -> list[str]:
+        """What to pull, in order: the upstream, then each mirror (by the same digest when the
+        lock knows one, since a manifest digest names the same image on every registry)."""
+        candidates = [self.pull_reference]
+        for mirror in self.mirrors:
+            if self.digest:
+                repository = mirror.split("@", 1)[0].rsplit(":", 1)[0]
+                candidates.append(f"{repository}@{self.digest}")
+            else:
+                candidates.append(mirror)
+        return candidates
 
     @property
     def pinned(self) -> bool:
-        return bool(self.digest and _DIGEST.match(self.digest)) and bool(self.image_id)
+        """Third-party: the upstream manifest digest and the image ID. First-party: the image
+        ID alone — a local build (`install.sh --build`, ADR-0014) has no registry digest, and
+        the ID is what `docker inspect` reports for the tag compose starts."""
+        if not (self.image_id and _DIGEST.match(self.image_id)):
+            return False
+        if self.first_party:
+            return True
+        return bool(self.digest and _DIGEST.match(self.digest))
 
     def compose_ref(self) -> str:
         return f"{REGISTRY}/{self.reference}"
@@ -64,27 +104,56 @@ def third_party(name: str) -> str:
     return next(image for image in DEFAULT_IMAGES if image.name == name).compose_ref()
 
 
+def started_by_compose(images: Iterable[LockedImage]) -> list[LockedImage]:
+    """The images a compose file may reference as a service's `image:`."""
+    return [image for image in images if image.started_by == "compose"]
+
+
+def started_by_model_manager(images: Iterable[LockedImage]) -> list[LockedImage]:
+    """The images the model manager starts (the vLLM image); never a compose service."""
+    return [image for image in images if image.started_by == "model-manager"]
+
+
 def first_party(name: str) -> str:
     return f"{REGISTRY}/slas/{name}:{VERSION}"
 
 
-def _third(name: str, reference: str, upstream: str, *, prod_only: bool = False) -> LockedImage:
+def _third(
+    name: str,
+    reference: str,
+    upstream: str,
+    *,
+    prod_only: bool = False,
+    digest: str | None = None,
+    started_by: StartedBy = "compose",
+    mirrors: Sequence[str] = (),
+) -> LockedImage:
     return LockedImage(
         name=name,
         reference=reference,
         upstream=upstream,
+        mirrors=list(mirrors),
+        digest=digest,
         profiles=["prod"] if prod_only else ["quickstart", "prod"],
+        started_by=started_by,
     )
 
 
-def _first(name: str, *, prod_only: bool = False) -> LockedImage:
+def _first(name: str, *, prod_only: bool = False, quickstart_only: bool = False) -> LockedImage:
+    profiles: list[Profile]
+    if prod_only:
+        profiles = ["prod"]
+    elif quickstart_only:
+        profiles = ["quickstart"]
+    else:
+        profiles = ["quickstart", "prod"]
     return LockedImage(
         name=name,
         reference=f"slas/{name}:{VERSION}",
         upstream="built offline from images/ and the vendored caches",
         first_party=True,
         signed_by="slas-release",
-        profiles=["prod"] if prod_only else ["quickstart", "prod"],
+        profiles=profiles,
     )
 
 
@@ -97,12 +166,14 @@ DEFAULT_IMAGES: Final[tuple[LockedImage, ...]] = (
         "minio",
         "minio/minio:RELEASE.2025-04-22T22-12-26Z",
         "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z",
+        mirrors=["docker.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"],
     ),
     _third(
         "mc",
         "minio/mc:RELEASE.2025-04-16T18-13-26Z",
         "quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z",
         prod_only=True,
+        mirrors=["docker.io/minio/mc:RELEASE.2025-04-16T18-13-26Z"],
     ),
     _third("qdrant", "qdrant/qdrant:v1.13.4", "docker.io/qdrant/qdrant:v1.13.4"),
     _third("prometheus", "prom/prometheus:v3.2.1", "quay.io/prometheus/prometheus:v3.2.1"),
@@ -125,12 +196,25 @@ DEFAULT_IMAGES: Final[tuple[LockedImage, ...]] = (
     ),
     _third("loki", "grafana/loki:3.4.2", "docker.io/grafana/loki:3.4.2", prod_only=True),
     _third("tempo", "grafana/tempo:2.7.1", "docker.io/grafana/tempo:2.7.1", prod_only=True),
+    # Not a compose service: the model manager starts one container from it per role and per
+    # voter on the inference network (CLAUDE.md §7, §12; ADR-0015). Compose passes its
+    # reference to model-manager as SLAS_VLLM_IMAGE; install.sh --build pulls it by this digest.
+    _third(
+        "vllm",
+        "vllm/vllm-openai:v0.29.0-x86_64-cu129",
+        "docker.io/vllm/vllm-openai:v0.29.0-x86_64-cu129",
+        digest="sha256:3e10e8189823e0f7ae4620c271bcdaaf64127ec7d0edc351591a508498b7684a",
+        started_by="model-manager",
+    ),
     _first("edge"),
     _first("webui"),
     _first("api"),
     _first("agent-core-orchestrator"),
     _first("llm-gateway"),
     _first("model-manager"),
+    # The only component with egress (ADR-0018): behind the compose profile `fetch`, which the
+    # installer turns on for quickstart and never for prod; prod keeps the signed bundle path.
+    _first("model-fetcher", quickstart_only=True),
     _first("sandbox-manager"),
     _first("screen-worker"),
     _first("git-broker"),
@@ -141,20 +225,148 @@ DEFAULT_IMAGES: Final[tuple[LockedImage, ...]] = (
 )
 
 
+#: The optional parts an installation starts (ADR-0017). `coding` is always on; the other
+#: names bring their containers and compose profile only when listed in SLAS_AGENTS:
+#: `validation` and `factory` their executors, `knowledge` the knowledge base (Qdrant and the
+#: local search api, §8.3), which the Coding Agent does not need until the RCA round.
+AGENTS: Final[tuple[str, ...]] = ("coding", "validation", "factory", "knowledge")
+DEFAULT_AGENTS: Final[tuple[str, ...]] = ("coding",)
+#: The images only one optional part starts.
+AGENT_IMAGES: Final[dict[str, frozenset[str]]] = {
+    "validation": frozenset({"validation-executor"}),
+    "factory": frozenset({"factory-executor"}),
+    "knowledge": frozenset({"local-search-api", "qdrant"}),
+}
+#: The compose services only one optional part starts (`compose.py` puts them behind the
+#: profile of the same name). An install removes the containers of the parts it turns off:
+#: `docker compose up` leaves a container whose service's profile is inactive, so one an
+#: earlier install started would keep restarting with its old settings.
+AGENT_SERVICES: Final[dict[str, tuple[str, ...]]] = {
+    "validation": ("validation-executor",),
+    "factory": ("factory-executor",),
+    "knowledge": ("vector-db", "local-search-api"),
+}
+#: How the installer names each optional part in a sentence.
+AGENT_NOUNS: Final[dict[str, str]] = {
+    "validation": "the validation executor",
+    "factory": "the factory executor",
+    "knowledge": "the knowledge base (Qdrant and local search)",
+}
+
+
+class AgentsError(ValueError):
+    def __init__(self, message: ThreePartMessage) -> None:
+        super().__init__(message.what_happened)
+        self.message = message
+
+
+def parse_agents(text: str | None) -> tuple[str, ...]:
+    """`SLAS_AGENTS` / `--agents`: a comma list of agents; empty means the default (coding)."""
+    if text is None or not text.strip():
+        return DEFAULT_AGENTS
+    chosen: list[str] = []
+    for part in text.split(","):
+        name = part.strip().lower()
+        if not name:
+            continue
+        if name not in AGENTS:
+            raise AgentsError(
+                ThreePartMessage(
+                    f'The agent "{name}" is not known.',
+                    "SLAS_AGENTS or --agents names the agents to start.",
+                    f"Use a comma list of {', '.join(AGENTS)}; the default is coding.",
+                )
+            )
+        if name not in chosen:
+            chosen.append(name)
+    if "coding" not in chosen:
+        chosen.insert(0, "coding")
+    return tuple(name for name in AGENTS if name in chosen)
+
+
+def images_off_for(agents: Sequence[str]) -> frozenset[str]:
+    """First-party image names an installation without these agents does not start."""
+    off: set[str] = set()
+    for agent, names in AGENT_IMAGES.items():
+        if agent not in agents:
+            off |= names
+    return frozenset(off)
+
+
+#: The model fetcher (ADR-0018): its compose profile, the service behind it, and the profile
+#: of the installation that starts it. Compose cannot remove a service in an override, so the
+#: prod profile simply never activates `fetch` and the installer removes a leftover container.
+FETCH_PROFILE: Final = "fetch"
+FETCH_SERVICES: Final[tuple[str, ...]] = ("model-fetcher",)
+FETCH_INSTALL_PROFILE: Final[Profile] = "quickstart"
+
+
+def fetcher_on(profile: Profile) -> bool:
+    return profile == FETCH_INSTALL_PROFILE
+
+
+def services_off_for(agents: Sequence[str], profile: Profile = "quickstart") -> list[str]:
+    """Compose services this installation does not start, in start order: the parts of the
+    agents that are off (ADR-0017) and, on prod, the model fetcher (ADR-0018)."""
+    off = [
+        service
+        for agent in AGENTS
+        if agent in AGENT_SERVICES and agent not in agents
+        for service in AGENT_SERVICES[agent]
+    ]
+    if not fetcher_on(profile):
+        off.extend(FETCH_SERVICES)
+    return off
+
+
+def compose_profiles(agents: Sequence[str], profile: Profile = "quickstart") -> list[str]:
+    """The compose profiles (`COMPOSE_PROFILES`) the chosen agents need, plus `fetch` on
+    quickstart for the model fetcher (ADR-0018)."""
+    profiles = [agent for agent in AGENTS if agent in agents and agent in AGENT_IMAGES]
+    if fetcher_on(profile):
+        profiles.append(FETCH_PROFILE)
+    return profiles
+
+
+def profiles_sentence(profiles: Sequence[str]) -> str:
+    """What install.sh prints about `COMPOSE_PROFILES`; empty when there is none."""
+    if not profiles:
+        return ""
+    chosen = [p for p in profiles if p != FETCH_PROFILE]
+    listed = ",".join(profiles)
+    if chosen and FETCH_PROFILE in profiles:
+        why = (
+            "the parts you chose with --agents, and the model fetcher of the quickstart "
+            "profile, ADR-0018"
+        )
+    elif FETCH_PROFILE in profiles:
+        why = "the model fetcher of the quickstart profile, ADR-0018"
+    else:
+        why = "the parts you chose with --agents"
+    return f"Compose profiles: {listed} ({why})."
+
+
 class ImageLock(SlasModel):
     version: int = 1
     default_registry: str = DEFAULT_REGISTRY
     images: list[LockedImage]
 
-    def for_profile(self, profile: Profile) -> list[LockedImage]:
-        return [image for image in self.images if profile in image.profiles]
+    def for_profile(
+        self, profile: Profile, agents: Sequence[str] | None = None
+    ) -> list[LockedImage]:
+        """The images the profile starts; with `agents`, minus the executors of agents that
+        are off (ADR-0017)."""
+        off = images_off_for(agents) if agents is not None else frozenset()
+        return [
+            image for image in self.images if profile in image.profiles and image.name not in off
+        ]
 
-    def unpinned(self, profile: Profile) -> list[LockedImage]:
-        return [image for image in self.for_profile(profile) if not image.pinned]
+    def unpinned(self, profile: Profile, agents: Sequence[str] | None = None) -> list[LockedImage]:
+        return [image for image in self.for_profile(profile, agents) if not image.pinned]
 
-    def sentence(self, profile: Profile) -> str:
-        wanted = self.for_profile(profile)
-        missing = self.unpinned(profile)
+    def sentence(self, profile: Profile, agents: Sequence[str] | None = None) -> str:
+        wanted = self.for_profile(profile, agents)
+        missing = self.unpinned(profile, agents)
         if not missing:
             return f"All {len(wanted)} images the {profile} profile starts are pinned by digest."
         names = ", ".join(image.name for image in missing[:6]) + (
@@ -175,7 +387,9 @@ LOCK_HEADER: Final = (
     "slas_deploy.images.DEFAULT_IMAGES; a unit test keeps file and code in step; the JSON twin\n"
     "is what install.sh reads. Tags are immutable upstream releases. `digest` and `image_id`\n"
     "are filled by scripts/lock-images.sh on a connected build host and signed with cosign;\n"
-    "while any image the chosen profile starts is null, install.sh refuses to start it."
+    "while any image the chosen profile starts is null, install.sh refuses to start it.\n"
+    "`started_by: model-manager` marks the vLLM image: pulled, saved and locked like the\n"
+    "others, never a compose service — the model manager starts it per role and voter."
 )
 
 
@@ -191,6 +405,7 @@ def render_lock_yaml(lock: ImageLock, *, header: str = LOCK_HEADER) -> str:
         lines.append(f"    image_id: {json.dumps(image.image_id)}")
         lines.append(f"    signed_by: {json.dumps(image.signed_by)}")
         lines.append(f"    profiles: [{', '.join(image.profiles)}]")
+        lines.append(f"    started_by: {image.started_by}")
     return "\n".join(lines) + "\n"
 
 
@@ -220,10 +435,12 @@ class LockError(ValueError):
         self.message = message
 
 
-def check_lock(lock: ImageLock, profile: Profile) -> list[LockedImage]:
+def check_lock(
+    lock: ImageLock, profile: Profile, agents: Sequence[str] | None = None
+) -> list[LockedImage]:
     """The images the profile starts, or a three-part error when one is not pinned or is
     referenced by a mutable tag."""
-    wanted = lock.for_profile(profile)
+    wanted = lock.for_profile(profile, agents)
     for image in wanted:
         if _LATEST.search(image.reference):
             raise LockError(
@@ -233,15 +450,16 @@ def check_lock(lock: ImageLock, profile: Profile) -> list[LockedImage]:
                     "Pin it to an immutable tag in slas_deploy.images and render the lock again.",
                 )
             )
-    missing = lock.unpinned(profile)
+    missing = lock.unpinned(profile, agents)
     if missing:
         raise LockError(
             ThreePartMessage(
-                lock.sentence(profile),
+                lock.sentence(profile, agents),
                 "The lock has no digest or image ID for them yet; nothing has verified what "
                 "those tags point at.",
                 "On a connected build host run scripts/lock-images.sh, commit the lock and the "
-                "bundle it produces, then install from that bundle.",
+                "bundle it produces, then install from that bundle; or, on a connected "
+                "quickstart host, run ./install.sh --build (ADR-0014).",
             )
         )
     return wanted

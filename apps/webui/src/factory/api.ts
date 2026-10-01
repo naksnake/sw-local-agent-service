@@ -1,7 +1,8 @@
 // The Factory page's view of the API (CLAUDE.md §9, §10.3). Types mirror the Python schemas in
 // slas_factory_executor and slas_orchestrator.factory; the sentences the fake produces are the
-// ones the executor produces, so the UI copy is exercised end to end. `FakeFactoryApi` stands in
-// until apps/api exists. Nothing here reaches a station: the fake replays a scripted loop.
+// ones the executor produces, so the UI copy is exercised end to end. `HttpFactoryApi` and
+// `HttpStationsAdminApi` (./http.ts) are what production uses; the fakes serve `pnpm dev`.
+// Nothing here reaches a station: the fake replays a scripted loop.
 
 export type TriggerKind = "mes" | "label" | "manual";
 
@@ -17,6 +18,8 @@ export interface TriggerView {
   ticketNo: string;
   station: string;
   unitSn: string;
+  /** Who asked for the job, as the MES ticket names it; absent for a label scan or manual entry. */
+  requestedBy?: string;
 }
 
 export interface StationView {
@@ -24,6 +27,10 @@ export interface StationView {
   free: boolean;
   /** "station-08 is leased to T-factory-0007 (mes) until …" when busy. */
   holder: string | null;
+  /** From the station record (api only). */
+  description?: string;
+  enrolled?: boolean;
+  sentence?: string;
 }
 
 export interface TemplateView {
@@ -71,6 +78,8 @@ export interface FactoryJob {
   /** The child ticket drafted for the line lead, when the unit did not pass. */
   draftTicketId: string | null;
   backupPath: string | null;
+  /** The voters' sentences on the result (api only); input to the verdict, never the verdict. */
+  votes?: string[];
 }
 
 export type ControlVerb = "pause" | "resume" | "abort" | "status";

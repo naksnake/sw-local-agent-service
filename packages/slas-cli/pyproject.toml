@@ -4,7 +4,14 @@ version = "0.0.1"
 description = "The `slas` command line, mirroring the WebUI"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = ["slas-observability", "slas-hal", "slas-kernel", "slas-sandbox-manager", "slas-schemas"]
+dependencies = [
+  "slas-deploy",
+  "slas-observability",
+  "slas-hal",
+  "slas-kernel",
+  "slas-sandbox-manager",
+  "slas-schemas",
+]
 
 [project.scripts]
 slas = "slas_cli.cli:main"

@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 # SW Local Agent Service — installer (CLAUDE.md §3, ADR-0003, ADR-0004, ADR-0012).
 #
-#   preflight → verify (bundle signature or Harbor signatures; the image lock) →
-#   write .env → generate secret files → load or pull images → docker compose up → wait
-#   healthy → print the URL and the one-time administrator password.
+#   preflight → verify (bundle signature or Harbor signatures; the image lock; model
+#   checksums) → write .env → generate secret files → load or pull images → place model
+#   weights and models.yaml → docker compose up → wait healthy → print the URL and the
+#   one-time administrator password.
+#
+#   --build (ADR-0014): on a connected quickstart host, pull the third-party images by their
+#   pinned tags and build the first-party images from this checkout instead of loading a
+#   bundle; the filled image lock is written under the data root, never committed. Round 2
+#   (ADR-0015) adds the sandbox images the sandbox manager lists, the toolchain manifest
+#   they satisfy, the vLLM image the model manager starts, and the runtime-socket choice:
+#   Docker's socket when it exists (the images the install builds or loads live in Docker's
+#   store), Podman's only on a host without Docker.
 #
 # Read-only steps come first; nothing on the host changes until every one of them passed.
 # Idempotent: running it twice is safe. `--dry-run` performs the read-only steps for real
@@ -13,12 +22,32 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROFILE="${SLAS_PROFILE:-quickstart}"
+AGENTS="${SLAS_AGENTS:-}"   # empty = coding (ADR-0017); read from .env below when it exists
 DATA_ROOT="${SLAS_DATA_ROOT:-/AI/Agent}"
 BUNDLE_DIR="${SLAS_BUNDLE_DIR:-$SCRIPT_DIR/bundle}"
 REGISTRY="${SLAS_REGISTRY:-}"
+BUILD=0
 COSIGN_KEY="${SLAS_COSIGN_KEY:-$SCRIPT_DIR/config/cosign.pub}"
 LOCK_FILE="${SLAS_IMAGE_LOCK:-$SCRIPT_DIR/compose/images.lock.json}"
+MODELS_DIR="${SLAS_MODELS_DIR:-}"
+MODELS_ONLY=0
+FETCH_MODELS_FIRST=0
+FETCH_PLANNED_ONLY=0
+MODEL_SOURCES="${SLAS_MODEL_SOURCES:-$SCRIPT_DIR/config/model-sources.txt}"
+# The container-runtime socket compose mounts into model-manager and sandbox-manager only
+# (INV-4, ADR-0015). Podman's path is the default; when it is absent and Docker's exists, .env
+# gets SLAS_RUNTIME_SOCKET=<docker socket>. SLAS_RUNTIME_SOCKET set in the environment wins;
+# SLAS_PODMAN_SOCKET / SLAS_DOCKER_SOCKET name the paths to look at (rootless Docker, tests).
+PODMAN_SOCKET="${SLAS_PODMAN_SOCKET:-/run/podman/podman.sock}"
+DOCKER_SOCKET="${SLAS_DOCKER_SOCKET:-/var/run/docker.sock}"
 VERSION="$(grep -m1 '^version' "$SCRIPT_DIR/pyproject.toml" | sed 's/.*"\(.*\)"/\1/')"
+# The name browsers use for the sign-in URL. --public-host or SLAS_PUBLIC_HOST pins it; else
+# it is this host's IP address on the default route (the DHCP address other machines reach,
+# refreshed on every run), or the host's name when there is no such address. Every name and
+# address the edge answers to goes in SLAS_TLS_NAMES.
+PUBLIC_HOST="${SLAS_PUBLIC_HOST:-}"
+PUBLIC_HOST_CHOSEN=0
+[[ -n "$PUBLIC_HOST" ]] && PUBLIC_HOST_CHOSEN=1
 JSON=0
 DRY_RUN=0
 PREFLIGHT_ONLY=0
@@ -26,18 +55,48 @@ SKIP_PREFLIGHT=0
 
 usage() {
   cat <<EOF
-Usage: ./install.sh [--profile quickstart|prod] [--data-root PATH] [--bundle DIR | --registry HOST]
-                    [--dry-run] [--preflight-only] [--json]
+Usage: ./install.sh [--profile quickstart|prod] [--data-root PATH] [--bundle DIR | --registry HOST | --build]
+                    [--models DIR] [--fetch-models] [--models-only] [--dry-run] [--preflight-only] [--json]
 
 Installs SW Local Agent Service on this host: preflight, verification, .env and secrets,
-images, services, and the sign-in URL. Nothing changes until every read-only step passed.
+images, model weights, services, and the sign-in URL. Nothing changes until every read-only
+step passed.
 
   --profile PROFILE    quickstart (default) or prod. Also read from \$SLAS_PROFILE.
+  --agents LIST        Which agents to start: coding (default), or coding,validation,factory.
+                       Validation and Factory bring their executor containers and their pages
+                       (ADR-0017). Also read from \$SLAS_AGENTS and the existing .env.
   --data-root PATH     Where the platform keeps its data. Default: \$SLAS_DATA_ROOT or /AI/Agent.
+  --public-host NAME   Pin the name or IP address browsers use for the sign-in URL
+                       (SLAS_PUBLIC_HOST). Default: this host's IP address on the default route,
+                       refreshed on every run so a DHCP change is followed; the host's name when
+                       there is none. The edge answers to it, to the host's name, to localhost
+                       and to every IP address of this host (SLAS_TLS_NAMES).
   --bundle DIR         Install from an offline bundle (its manifest is verified with cosign in prod).
                        Default: ./bundle when it exists.
   --registry HOST      Pull from a registry inside the perimeter (Harbor); every image is
                        verified with cosign before it is pulled (prod).
+  --build              Build from this source checkout on a connected host (quickstart only,
+                       ADR-0014): pull the third-party images by their pinned tags (the vLLM
+                       image the model manager starts among them), build the first-party images
+                       from images/<name>/Dockerfile and the sandbox images the sandbox manager
+                       lists, write the filled image lock to <data root>/images.lock.json (the
+                       sandbox images to sandbox-images.lock.json beside it) and the toolchain
+                       manifest to <data root>/Toolchains/manifest.json, then start the stack
+                       from those images. Registry label: \$SLAS_REGISTRY or "local". Needs
+                       Docker with Compose, uv (or an existing .venv), and a route to the
+                       registries. \`./install.sh --build --fetch-models\` is the one-command
+                       connected install.
+  --models DIR         Model weights fetched with scripts/fetch_models.py on a connected host.
+                       Their checksums are verified, they are placed under <data root>/Models,
+                       and Models/models.yaml is written from config/models.<profile>.yaml
+                       when there is none. Default: ./models when it exists; also \$SLAS_MODELS_DIR.
+  --fetch-models       Download the profile's model weights first, into the --models directory
+                       (default ./models), from the pinned config/model-sources.txt. Resumes
+                       and retries; needs a route to the hub (or HTTPS_PROXY / HF_ENDPOINT).
+  --models-only        Check and place the model weights and models.yaml, then stop. For a host
+                       prepared before the bundle arrives; needs neither a bundle nor a registry.
+                       `./install.sh --fetch-models --models-only` is the one-command preparation.
   --dry-run            Run the read-only steps for real; print what the rest would do.
   --preflight-only     Stop after the preflight.
   --json               Print the preflight report as JSON, for scripts.
@@ -51,12 +110,21 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --profile)        PROFILE="${2:-}"; shift 2 ;;
     --profile=*)      PROFILE="${1#*=}"; shift ;;
+    --agents)         AGENTS="${2:-}"; shift 2 ;;
+    --agents=*)       AGENTS="${1#*=}"; shift ;;
     --data-root)      DATA_ROOT="${2:-}"; shift 2 ;;
     --data-root=*)    DATA_ROOT="${1#*=}"; shift ;;
+    --public-host)    PUBLIC_HOST="${2:-}"; PUBLIC_HOST_CHOSEN=1; shift 2 ;;
+    --public-host=*)  PUBLIC_HOST="${1#*=}"; PUBLIC_HOST_CHOSEN=1; shift ;;
     --bundle)         BUNDLE_DIR="${2:-}"; shift 2 ;;
     --bundle=*)       BUNDLE_DIR="${1#*=}"; shift ;;
     --registry)       REGISTRY="${2:-}"; shift 2 ;;
     --registry=*)     REGISTRY="${1#*=}"; shift ;;
+    --build)          BUILD=1; shift ;;
+    --models)         MODELS_DIR="${2:-}"; shift 2 ;;
+    --models=*)       MODELS_DIR="${1#*=}"; shift ;;
+    --models-only)    MODELS_ONLY=1; shift ;;
+    --fetch-models)   FETCH_MODELS_FIRST=1; shift ;;
     --lock)           LOCK_FILE="${2:-}"; shift 2 ;;
     --cosign-key)     COSIGN_KEY="${2:-}"; shift 2 ;;
     --dry-run)        DRY_RUN=1; shift ;;
@@ -87,6 +155,13 @@ if [[ -z "$DATA_ROOT" ]]; then
   exit 2
 fi
 
+if [[ $BUILD -eq 1 && "$PROFILE" == "prod" ]]; then
+  echo "--build is for the quickstart profile only." >&2
+  echo "Likely cause: the prod profile verifies every image's cosign signature, and images built on this host carry none (ADR-0014)." >&2
+  echo "What to do: for prod, build and sign on the release host (scripts/lock-images.sh --sign, scripts/build-bundle.sh --profile prod) and install from that bundle or from Harbor; for a connected quickstart host, drop --profile prod." >&2
+  exit 2
+fi
+
 find_python() {
   local candidate
   for candidate in python3.12 python3; do
@@ -110,10 +185,17 @@ EOF
 fi
 
 # From the source tree the packages are imported directly; the bundle ships them installed.
-export PYTHONPATH="$SCRIPT_DIR/packages/slas-cli:$SCRIPT_DIR/packages/slas-kernel:$SCRIPT_DIR/packages/slas-schemas:$SCRIPT_DIR/packages/slas-deploy:$SCRIPT_DIR/packages/slas-hal:$SCRIPT_DIR/packages/slas-observability${PYTHONPATH:+:$PYTHONPATH}"
+# `services/sandbox-manager` is here for the stdlib-only `slas_sandbox_manager.toolchains`
+# module that `slas toolchain` uses. tests/unit/test_host_cli_is_stdlib_only.py reads this
+# line, so the test and the installer cannot drift apart.
+export PYTHONPATH="$SCRIPT_DIR/packages/slas-cli:$SCRIPT_DIR/packages/slas-kernel:$SCRIPT_DIR/packages/slas-schemas:$SCRIPT_DIR/packages/slas-deploy:$SCRIPT_DIR/packages/slas-hal:$SCRIPT_DIR/packages/slas-observability:$SCRIPT_DIR/services/sandbox-manager${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1
 if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
   PYTHON="$SCRIPT_DIR/.venv/bin/python"
+fi
+FETCH_MODELS="$SCRIPT_DIR/scripts/fetch_models.py"   # standard library only; verifies checksums offline
+if [[ -z "$MODELS_DIR" && ( -d "$SCRIPT_DIR/models" || $FETCH_MODELS_FIRST -eq 1 ) ]]; then
+  MODELS_DIR="$SCRIPT_DIR/models"
 fi
 
 nothing_changed() {
@@ -153,11 +235,76 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------------------- 1a the deploy packages' environment (--build)
+# The installer's Python steps (the image lock, .env) import the deploy packages, whose
+# dependencies the bundle ships and a source checkout gets from uv.lock. --build is the
+# connected path, so the locked environment is created here when it is missing.
+if [[ $BUILD -eq 1 && ! -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+  if ! command -v uv >/dev/null 2>&1; then
+    nothing_changed "--build needs the locked Python environment, and neither .venv nor uv is on this host. Likely cause: the checkout is fresh and uv is not installed. What to do: install uv (https://docs.astral.sh/uv/), or run \`uv sync --frozen --no-dev\` in $SCRIPT_DIR on a host that has it, then run ./install.sh --build again." 1
+  fi
+  echo
+  echo "Creating the locked Python environment in $SCRIPT_DIR/.venv with uv (uv sync --frozen --no-dev)."
+  if ! (cd "$SCRIPT_DIR" && uv sync --frozen --no-dev); then
+    nothing_changed "uv sync did not finish. Likely cause: no route to the package index, or uv.lock and pyproject.toml disagree. What to do: read uv's message above, fix it, then run ./install.sh --build again." 1
+  fi
+  PYTHON="$SCRIPT_DIR/.venv/bin/python"
+fi
+
+# ---------------------------------------------------------------------------- 1b fetch the model weights (optional)
+# Downloads into the staging directory, never into the data root; the running platform never
+# downloads anything (INV-1). Whether the platform host may fetch while it is being prepared is
+# CLAUDE.md §15 open decision (13); this step runs only when asked for with --fetch-models.
+if [[ $FETCH_MODELS_FIRST -eq 1 ]]; then
+  echo
+  echo "Fetching the $PROFILE profile's model weights into $MODELS_DIR (from $MODEL_SOURCES)."
+  fetch_args=(fetch --sources "$MODEL_SOURCES" --profile "$PROFILE" --dest "$MODELS_DIR")
+  [[ $DRY_RUN -eq 1 ]] && fetch_args+=(--dry-run)
+  if ! "$PYTHON" "$FETCH_MODELS" "${fetch_args[@]}"; then
+    nothing_changed "Fetching the model weights did not finish; the messages above say why. Likely cause: the hub could not be reached, or the disk under $MODELS_DIR is too small. What to do: fix that and run the same command again; the fetch resumes where it stopped." 1
+  fi
+  if [[ $DRY_RUN -eq 1 && ! -d "$MODELS_DIR" ]]; then
+    MODELS_DIR=""   # nothing was downloaded, so there is nothing to place yet
+    FETCH_PLANNED_ONLY=1
+  fi
+fi
+
+# ---------------------------------------------------------------------------- 1c which agents start (ADR-0017)
+# --agents, else SLAS_AGENTS, else what the existing .env says, else coding alone. The choice
+# decides which executor images are built, which compose profiles start, and which pages the
+# WebUI shows; nothing else about the install changes.
+if [[ -z "$AGENTS" && -f "$DATA_ROOT/.env" ]]; then
+  AGENTS="$(sed -n 's/^SLAS_AGENTS=//p' "$DATA_ROOT/.env" | tail -n 1 | tr -d '"')"
+fi
+if ! agents_choice="$("$PYTHON" -m slas_deploy.installer agents --agents "$AGENTS" --profile "$PROFILE")"; then
+  echo "$agents_choice" >&2
+  exit 2
+fi
+AGENTS="$("$PYTHON" -c 'import json,sys; print(",".join(json.loads(sys.argv[1])["agents"]))' "$agents_choice")"
+# The compose profiles: the optional parts of ADR-0017 plus, on quickstart, `fetch` for the
+# model fetcher (ADR-0018); prod never activates it.
+COMPOSE_PROFILES="$("$PYTHON" -c 'import json,sys; print(",".join(json.loads(sys.argv[1])["profiles"]))' "$agents_choice")"
+PROFILES_SENTENCE="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["profiles_sentence"])' "$agents_choice")"
+AGENTS_SENTENCE="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["sentence"])' "$agents_choice")"
+# The compose services of the parts that are off; their containers from an earlier install
+# are removed before the stack starts and ignored by the health wait.
+OFF_SERVICES="$("$PYTHON" -c 'import json,sys; print(",".join(json.loads(sys.argv[1])["off_services"]))' "$agents_choice")"
+export SLAS_AGENTS="$AGENTS"
+if [[ -n "$COMPOSE_PROFILES" ]]; then export COMPOSE_PROFILES; else unset COMPOSE_PROFILES; fi
+
 # ---------------------------------------------------------------------------- 2 verify (read-only)
+if [[ $MODELS_ONLY -eq 0 ]]; then   # --models-only needs neither a bundle nor a registry
 echo
 echo "Verifying what will be installed ($PROFILE profile)."
+echo "$AGENTS_SENTENCE"
 SOURCE=""
-if [[ -n "$REGISTRY" ]]; then
+if [[ $BUILD -eq 1 ]]; then
+  SOURCE="local"
+  if [[ -z "$REGISTRY" && -f "$DATA_ROOT/.env" ]]; then
+    REGISTRY="$(sed -n 's/^SLAS_REGISTRY=//p' "$DATA_ROOT/.env" | tail -n 1)"   # keep the label a previous install tagged with
+  fi
+  REGISTRY="${REGISTRY:-local}"
+elif [[ -n "$REGISTRY" ]]; then
   SOURCE="registry"
 elif [[ -d "$BUNDLE_DIR" ]]; then
   SOURCE="bundle"
@@ -178,7 +325,19 @@ if [[ "$PROFILE" == "prod" ]]; then
   fi
 fi
 
-if [[ "$SOURCE" == "bundle" ]]; then
+if [[ "$SOURCE" == "local" ]]; then
+  LOCK_FILE="$DATA_ROOT/images.lock.json"   # filled by the build step below; never committed
+  echo "Images are built from this checkout and pulled by their pinned tags after the read-only checks (ADR-0014); the filled image lock goes to $LOCK_FILE."
+  for tool in docker uv; do
+    if [[ "$tool" == "uv" && -x "$SCRIPT_DIR/.venv/bin/python" ]]; then continue; fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      nothing_changed "--build needs $tool on this host and it was not found. Likely cause: the host was prepared for a bundle install only. What to do: install $tool, then run ./install.sh --build again." 1
+    fi
+  done
+  if ! docker compose version >/dev/null 2>&1; then
+    nothing_changed "Docker Compose (the \`docker compose\` plugin) is not available. Likely cause: Docker was installed without the compose plugin. What to do: install docker-compose-plugin, then run ./install.sh --build again." 1
+  fi
+elif [[ "$SOURCE" == "bundle" ]]; then
   if [[ "$PROFILE" == "prod" ]]; then
     if [[ ! -f "$BUNDLE_DIR/manifest.json" || ! -f "$BUNDLE_DIR/manifest.json.sig" ]]; then
       nothing_changed "The bundle at $BUNDLE_DIR has no signed manifest. Likely cause: an incomplete download or a bundle built without signing. What to do: download the complete release bundle again." 1
@@ -194,7 +353,7 @@ if [[ "$SOURCE" == "bundle" ]]; then
     nothing_changed "The bundle does not match the image lock." 1
   fi
 else
-  if ! "$PYTHON" -m slas_deploy.installer check-lock --lock "$LOCK_FILE" --profile "$PROFILE"; then
+  if ! "$PYTHON" -m slas_deploy.installer check-lock --lock "$LOCK_FILE" --profile "$PROFILE" --agents "$AGENTS"; then
     nothing_changed "The image lock does not pin every image the $PROFILE profile starts." 1
   fi
   if [[ "$PROFILE" == "prod" ]]; then
@@ -218,6 +377,187 @@ PY
   fi
 fi
 
+fi  # MODELS_ONLY
+
+# ---------------------------------------------------------------------------- 2b model weights (read-only)
+# Weights are fetched by scripts/fetch_models.py on a connected host (INV-1). Here they are only
+# checked; copying and models.yaml happen with the other changes below, or alone with
+# --models-only on a host prepared before the bundle arrives.
+MODELS_TARGET="$DATA_ROOT/Models"
+MODELS_TEMPLATE="$SCRIPT_DIR/config/models.$PROFILE.yaml"
+MODELS_TO_COPY=()
+MODELS_PRESENT=()
+MODELS_COPY_BYTES=0
+MODELS_SAME_VOLUME=0
+list_models() {  # the model directories under $1: those that carry a SHA256SUMS
+  local dir
+  for dir in "$1"/*/; do
+    [[ -f "$dir/SHA256SUMS" ]] && basename "$dir"
+  done
+  return 0
+}
+nearest_existing() {  # the closest existing ancestor of $1, for df and stat
+  local p="$1"
+  while [[ ! -e "$p" ]]; do p="$(dirname "$p")"; done
+  printf '%s\n' "$p"
+}
+human_size() { numfmt --to=iec-i --suffix=B "$1" 2>/dev/null || echo "$1 bytes"; }
+if [[ -n "$MODELS_DIR" ]]; then
+  if [[ ! -d "$MODELS_DIR" ]]; then
+    nothing_changed "The models directory $MODELS_DIR does not exist. Likely cause: a typo in --models or SLAS_MODELS_DIR, or the weights were not copied to this host yet. What to do: on a connected host run scripts/fetch_models.py fetch --sources config/model-sources.txt --profile $PROFILE --dest <dir>, bring <dir> here, and pass --models <dir>." 1
+  fi
+  MODELS_DIR="$(realpath "$MODELS_DIR")"
+  mapfile -t found_models < <(list_models "$MODELS_DIR")
+  if [[ ${#found_models[@]} -eq 0 ]]; then
+    nothing_changed "No model weights were found in $MODELS_DIR: no <model>/SHA256SUMS. Likely cause: the directory is not the --dest of scripts/fetch_models.py, or the fetch did not finish. What to do: run the fetch again on the connected host; it resumes and writes SHA256SUMS when a model is complete." 1
+  fi
+  for name in "${found_models[@]}"; do
+    if [[ -f "$MODELS_TARGET/$name/SHA256SUMS" ]]; then
+      if cmp -s "$MODELS_DIR/$name/SHA256SUMS" "$MODELS_TARGET/$name/SHA256SUMS"; then
+        MODELS_PRESENT+=("$name")
+      else
+        nothing_changed "$MODELS_TARGET/$name holds a different revision of $name than $MODELS_DIR/$name: their SHA256SUMS differ. Likely cause: the pin for $name in config/model-sources.txt was moved and the model was fetched again. What to do: move the old directory away (for example to $MODELS_TARGET/$name.old) or delete it, then run ./install.sh again; the new revision is copied in its place." 1
+      fi
+    elif [[ -e "$MODELS_TARGET/$name" ]]; then
+      nothing_changed "$MODELS_TARGET/$name exists but has no SHA256SUMS, so the installer cannot tell what it holds. Likely cause: a copy made by hand, or a copy that was cut short. What to do: move or delete that directory, then run ./install.sh again." 1
+    else
+      MODELS_TO_COPY+=("$name")
+    fi
+  done
+  if [[ ${#MODELS_TO_COPY[@]} -gt 0 ]]; then
+    echo
+    echo "Checking the model weights in $MODELS_DIR against their checksums (large models take a few minutes)."
+    verify_args=(verify --dest "$MODELS_DIR")
+    for name in "${MODELS_TO_COPY[@]}"; do verify_args+=(--model "$name"); done
+    if ! "$PYTHON" "$FETCH_MODELS" "${verify_args[@]}"; then
+      nothing_changed "The model weights in $MODELS_DIR do not match their checksums. Likely cause: an interrupted copy or fetch. What to do: copy the listed files again (or run the fetch again on the connected host), then run ./install.sh again." 1
+    fi
+    copy_paths=()
+    for name in "${MODELS_TO_COPY[@]}"; do copy_paths+=("$MODELS_DIR/$name"); done
+    MODELS_COPY_BYTES="$(du -sbc "${copy_paths[@]}" 2>/dev/null | tail -1 | cut -f1 || true)"
+    MODELS_COPY_BYTES="${MODELS_COPY_BYTES:-0}"
+    target_parent="$(nearest_existing "$MODELS_TARGET")"
+    if [[ "$(stat -L -c %d "$MODELS_DIR")" == "$(stat -L -c %d "$target_parent")" ]]; then
+      MODELS_SAME_VOLUME=1   # hard links are tried first: instant, and they cost no space
+    else
+      free_bytes="$(df --output=avail -B1 "$target_parent" | tail -1 | tr -d ' ')"
+      if [[ "$MODELS_COPY_BYTES" -gt "$free_bytes" ]]; then
+        nothing_changed "Not enough free disk under $MODELS_TARGET for the model weights: $(human_size "$MODELS_COPY_BYTES") to copy, $(human_size "$free_bytes") free. Likely cause: the data root's volume is smaller than this set of models. What to do: free space, mount a larger volume at $MODELS_TARGET, or fetch the weights straight into $MODELS_TARGET; then run ./install.sh again." 1
+      fi
+    fi
+  fi
+else
+  if [[ -d "$MODELS_TARGET" ]]; then
+    mapfile -t MODELS_PRESENT < <(list_models "$MODELS_TARGET")
+  fi
+  if [[ ${#MODELS_PRESENT[@]} -eq 0 && $FETCH_PLANNED_ONLY -eq 0 ]]; then
+    echo
+    echo "No model weights were given: no --models DIR and no ./models next to install.sh."
+    echo "The platform installs without models. Fetch them on a connected host with scripts/fetch_models.py fetch --sources config/model-sources.txt --profile $PROFILE --dest <dir>, then run ./install.sh --models <dir>; nothing else needs to change."
+  fi
+fi
+
+place_models() {  # the changing half of the model step: copy, verify, manifest, models.yaml
+  local name src noun linked copied failed registry_from_template wanted have
+  if [[ ${#MODELS_TO_COPY[@]} -gt 0 ]]; then
+    noun="model"; [[ ${#MODELS_TO_COPY[@]} -gt 1 ]] && noun="models"
+    if [[ $DRY_RUN -eq 1 ]]; then
+      echo "Would copy ${#MODELS_TO_COPY[@]} $noun ($(human_size "$MODELS_COPY_BYTES")) from $MODELS_DIR into $MODELS_TARGET: ${MODELS_TO_COPY[*]}."
+    else
+      mkdir -p "$MODELS_TARGET"
+      echo "Copying ${#MODELS_TO_COPY[@]} $noun ($(human_size "$MODELS_COPY_BYTES")) into $MODELS_TARGET: ${MODELS_TO_COPY[*]}. Large models take a while."
+      linked=()
+      copied=()
+      for name in "${MODELS_TO_COPY[@]}"; do
+        src="$(realpath "$MODELS_DIR/$name")"
+        rm -rf "$MODELS_TARGET/$name.part"   # a copy this script left unfinished earlier
+        if [[ $MODELS_SAME_VOLUME -eq 1 ]] && cp -al "$src" "$MODELS_TARGET/$name.part" 2>/dev/null; then
+          linked+=("$name")
+        else
+          rm -rf "$MODELS_TARGET/$name.part"
+          if ! cp -a --reflink=auto "$src" "$MODELS_TARGET/$name.part"; then
+            rm -rf "$MODELS_TARGET/$name.part"
+            echo "Copying $name into $MODELS_TARGET did not finish."
+            echo "Likely cause: the disk ran out of space, or a file could not be read."
+            echo "What to do: check the free space under $MODELS_TARGET and the messages above, then run ./install.sh again; the models already placed are kept."
+            exit 1
+          fi
+          copied+=("$name")
+        fi
+        mv -T "$MODELS_TARGET/$name.part" "$MODELS_TARGET/$name"
+      done
+      failed=0
+      for name in ${copied[@]+"${copied[@]}"}; do
+        if ! "$PYTHON" "$FETCH_MODELS" verify --dest "$MODELS_TARGET" --model "$name"; then
+          rm -rf "$MODELS_TARGET/$name"
+          failed=1
+        fi
+      done
+      if [[ $failed -eq 1 ]]; then
+        echo "Some copied model weights under $MODELS_TARGET did not match their checksums and were removed."
+        echo "Likely cause: a read error on the source disk or a write error on the destination during the copy."
+        echo "What to do: check both disks, then run ./install.sh again; the removed models are copied anew."
+        exit 1
+      fi
+      echo "Placed ${#MODELS_TO_COPY[@]} $noun under $MODELS_TARGET: ${#linked[@]} linked on the same volume, ${#copied[@]} copied and verified again."
+      if [[ -f "$MODELS_DIR/manifest.json" ]]; then
+        "$PYTHON" "$FETCH_MODELS" merge-manifest --dest "$MODELS_TARGET" --from "$MODELS_DIR/manifest.json"
+      fi
+    fi
+  fi
+  if [[ ${#MODELS_PRESENT[@]} -gt 0 ]]; then
+    noun="model is"; [[ ${#MODELS_PRESENT[@]} -gt 1 ]] && noun="models are"
+    echo "${#MODELS_PRESENT[@]} $noun already under $MODELS_TARGET: ${MODELS_PRESENT[*]}."
+  fi
+  if [[ $(( ${#MODELS_TO_COPY[@]} + ${#MODELS_PRESENT[@]} )) -gt 0 ]]; then
+    registry_from_template=0
+    if [[ -f "$MODELS_TARGET/models.yaml" ]]; then
+      echo "Kept $MODELS_TARGET/models.yaml as it is; the $PROFILE template was not applied over your registry."
+    elif [[ $DRY_RUN -eq 1 ]]; then
+      echo "Would write $MODELS_TARGET/models.yaml from config/models.$PROFILE.yaml."
+      registry_from_template=1
+    else
+      cp "$MODELS_TEMPLATE" "$MODELS_TARGET/models.yaml"
+      echo "Wrote $MODELS_TARGET/models.yaml from the $PROFILE template; it assumes GPUs of about 288 GB (HGX B300 class). Change roles on the Models page or in that file; no restart is needed."
+      registry_from_template=1
+    fi
+    if [[ $registry_from_template -eq 1 ]]; then
+      if [[ "$PROFILE" == "quickstart" ]]; then
+        echo "Quickstart declares two voters from two model families, so every cross-check is reported as a weaker check until a third family is added (config/models.prod.yaml shows one)."
+      fi
+      # The template names the weights the profile expects; say which are not here yet.
+      while IFS= read -r wanted; do
+        [[ -z "$wanted" ]] && continue
+        have=0
+        for name in ${MODELS_TO_COPY[@]+"${MODELS_TO_COPY[@]}"} ${MODELS_PRESENT[@]+"${MODELS_PRESENT[@]}"}; do
+          [[ "$name" == "$wanted" ]] && have=1
+        done
+        if [[ $have -eq 0 ]]; then
+          echo "models.yaml names $wanted, but no weights for it are here yet. Fetch it with scripts/fetch_models.py and run ./install.sh --models <dir> again, or remove it from models.yaml."
+        fi
+      done < <(sed -n 's/^    path: "\(.*\)"$/\1/p' "$MODELS_TEMPLATE")
+    fi
+  fi
+}
+
+if [[ $MODELS_ONLY -eq 1 ]]; then
+  if [[ $FETCH_PLANNED_ONLY -eq 1 ]]; then
+    nothing_changed "Dry run finished: the fetch plan above checks out; run the same command without --dry-run to download and place the weights." 0
+  fi
+  if [[ -z "$MODELS_DIR" ]]; then
+    nothing_changed "--models-only needs the weights: pass --models DIR or put them in ./models next to install.sh." 2
+  fi
+  echo
+  place_models
+  echo
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "Dry run finished: the model weights check out; nothing was changed on this host."
+  else
+    echo "The model weights are in place under $MODELS_TARGET. Run ./install.sh with the bundle to install the platform; it finds them there."
+  fi
+  exit 0
+fi
+
 # ---------------------------------------------------------------------------- 3 the changes
 run_or_print() {
   if [[ $DRY_RUN -eq 1 ]]; then
@@ -227,21 +567,128 @@ run_or_print() {
   fi
 }
 
-TLS_NAMES="127.0.0.1,localhost,$(hostname -f 2>/dev/null || hostname)"
-PUBLIC_HOST="${SLAS_PUBLIC_HOST:-$(hostname -f 2>/dev/null || hostname)}"
+HOST_NAME="$(hostname -f 2>/dev/null || hostname)"
+# The host's IPv4 addresses on real interfaces (not the container bridges), so a browser may
+# use https://<ip> as well as the name; `hostname -I` is the fallback without iproute2.
+host_ips() {
+  local found=""
+  if command -v ip >/dev/null 2>&1; then
+    found="$(ip -4 -o addr show scope global 2>/dev/null \
+      | awk '$2 !~ /^(docker|br-|veth|virbr|podman|cni|flannel|tun)/ { sub(/\/.*/, "", $4); print $4 }')"
+  fi
+  if [[ -z "$found" ]]; then
+    found="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '^127\.' || true)"
+  fi
+  printf '%s\n' "$found" | awk 'NF && !seen[$0]++'
+}
+HOST_IPS="$(host_ips | paste -sd, -)"
+# The address on the default route: what another machine on the network reaches this host at.
+primary_ip() {
+  local via=""
+  if command -v ip >/dev/null 2>&1; then
+    via="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+  fi
+  if [[ -z "$via" ]]; then via="${HOST_IPS%%,*}"; fi
+  printf '%s\n' "$via"
+}
+if [[ -z "$PUBLIC_HOST" ]]; then
+  PUBLIC_HOST="$(primary_ip)"
+  [[ -z "$PUBLIC_HOST" ]] && PUBLIC_HOST="$HOST_NAME"
+fi
+TLS_NAMES="127.0.0.1,localhost,$HOST_NAME${HOST_IPS:+,$HOST_IPS},$PUBLIC_HOST"
 ENV_FILE="$DATA_ROOT/.env"
 
+# ---------------------------------------------------------------------------- 3a build and pull the images (--build)
+if [[ "$SOURCE" == "local" ]]; then
+  echo
+  echo "Building the first-party images from $SCRIPT_DIR and pulling the third-party images for the $PROFILE profile (registry label $REGISTRY, version $VERSION)."
+  echo "This host reaches the image registries, PyPI and the npm registry for the build; the running platform still has no egress (ADR-0014)."
+  build_args=(build-images --lock "$SCRIPT_DIR/compose/images.lock.json" --profile "$PROFILE" \
+    --registry "$REGISTRY" --version "$VERSION" --repo "$SCRIPT_DIR" --out "$LOCK_FILE" --agents "$AGENTS")
+  if [[ $DRY_RUN -eq 1 ]]; then
+    build_args+=(--dry-run)
+  else
+    mkdir -p "$DATA_ROOT"
+  fi
+  if ! "$PYTHON" -m slas_deploy.installer "${build_args[@]}"; then
+    echo
+    echo "Building or pulling the images did not finish; the messages above say which one and why."
+    echo "Likely cause: no route to a registry, a build error, or the Docker daemon is not running."
+    echo "What to do: fix what the message names, then run ./install.sh --build again; images already built or pulled are kept and the stack was not started."
+    exit 1
+  fi
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "Would check that lock: every image the $PROFILE profile starts must have an image ID."
+  elif ! "$PYTHON" -m slas_deploy.installer check-lock --lock "$LOCK_FILE" --profile "$PROFILE" --agents "$AGENTS"; then
+    echo "The lock written by the build does not pin every image the $PROFILE profile starts; the stack was not started."
+    exit 1
+  fi
+
+  # The Coding Agent's sandbox images (ADR-0015, docs/api-contract-round-2.md §4): the sandbox
+  # manager lists them (`python -m slas_sandbox_manager.images list`), each is built from the
+  # repository root, their IDs go to sandbox-images.lock.json beside the image lock, and the
+  # toolchain manifest they satisfy is written for the sandbox manager to resolve versions
+  # against. They are not compose services and not in compose/images.lock.*.
+  echo
+  echo "Building the Coding Agent's sandbox images and writing the toolchain manifest to $DATA_ROOT/Toolchains/manifest.json."
+  sandbox_args=(build-sandbox-images --python "$PYTHON" --registry "$REGISTRY" --repo "$SCRIPT_DIR" \
+    --out "$DATA_ROOT/sandbox-images.lock.json" --manifest "$DATA_ROOT/Toolchains/manifest.json")
+  [[ $DRY_RUN -eq 1 ]] && sandbox_args+=(--dry-run)
+  if ! "$PYTHON" -m slas_deploy.installer "${sandbox_args[@]}"; then
+    echo
+    echo "Building the sandbox images did not finish; the messages above say which one and why."
+    echo "Likely cause: a sandbox Dockerfile could not fetch its pinned toolchain, or this checkout's sandbox manager does not list its images yet."
+    echo "What to do: fix what the message names, then run ./install.sh --build again; the platform images already built are kept and the stack was not started."
+    exit 1
+  fi
+fi
+
+# ---------------------------------------------------------------------------- 3b the runtime socket, .env, secrets, data directories
+# Which socket model-manager and sandbox-manager get (ADR-0015): what SLAS_RUNTIME_SOCKET says
+# (environment, then the existing .env), else Podman's when it exists, else Docker's.
+configured_socket="${SLAS_RUNTIME_SOCKET:-}"
+if [[ -z "$configured_socket" && -f "$ENV_FILE" ]]; then
+  configured_socket="$(sed -n 's/^SLAS_RUNTIME_SOCKET=//p' "$ENV_FILE" | tail -n 1 | tr -d '"')"
+fi
+socket_choice="$("$PYTHON" -m slas_deploy.installer runtime-socket --configured "$configured_socket" \
+  --podman "$PODMAN_SOCKET" --docker "$DOCKER_SOCKET" --json)"
+RUNTIME_SOCKET="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["path"])' "$socket_choice")"
 echo
+"$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["sentence"])' "$socket_choice"
+
+# The GPUs, as nvidia-smi sees them: SLAS_GPU_IDS and SLAS_GPU_VRAM_GIB in .env used to be the
+# reference host's guesses (four GPUs of 270 GiB); on any other host the model manager then
+# placed instances on GPUs that do not exist, and no model instance ever started.
+gpu_choice="$("$PYTHON" -m slas_deploy.installer gpus --json)"
+GPU_IDS="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["ids"])' "$gpu_choice")"
+GPU_VRAM_GIB="$("$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["vram_gib"])' "$gpu_choice")"
+"$PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["sentence"])' "$gpu_choice"
+
 if [[ $DRY_RUN -eq 1 ]]; then
-  echo "Would write $ENV_FILE ($PROFILE keys, registry $REGISTRY, version $VERSION; keys you set are kept)."
-  echo "Would create the missing secret files under $DATA_ROOT/secrets (0600)."
+  if [[ -n "$RUNTIME_SOCKET" ]]; then
+    echo "Would write $ENV_FILE ($PROFILE keys, registry $REGISTRY, version $VERSION, SLAS_RUNTIME_SOCKET=$RUNTIME_SOCKET; keys you set are kept)."
+  else
+    echo "Would write $ENV_FILE ($PROFILE keys, registry $REGISTRY, version $VERSION; keys you set are kept)."
+  fi
+  echo "Would create the missing secret files under $DATA_ROOT/secrets (0600) and $DATA_ROOT/tls for the edge's certificates."
+  "$PYTHON" -m slas_deploy.installer data-dirs --root "$DATA_ROOT" --dry-run
 else
   mkdir -p "$DATA_ROOT"
-  "$PYTHON" -m slas_deploy.installer write-env --example "$SCRIPT_DIR/config/.env.example" \
-    --target "$ENV_FILE" --profile "$PROFILE" --data-root "$DATA_ROOT" --version "$VERSION" \
-    --registry "$REGISTRY" --uid "$(id -u)" --gid "$(id -g)" --tls-names "$TLS_NAMES" \
-    --public-host "$PUBLIC_HOST"
+  env_args=(--example "$SCRIPT_DIR/config/.env.example" --target "$ENV_FILE" --profile "$PROFILE" \
+    --data-root "$DATA_ROOT" --version "$VERSION" --registry "$REGISTRY" --uid "$(id -u)" --gid "$(id -g)" \
+    --tls-names "$TLS_NAMES" --public-host "$PUBLIC_HOST" --runtime-socket "$RUNTIME_SOCKET" --agents "$AGENTS" \
+    --gpu-ids "$GPU_IDS" --gpu-vram-gib "$GPU_VRAM_GIB")
+  if [[ $PUBLIC_HOST_CHOSEN -eq 1 ]]; then env_args+=(--public-host-chosen); fi
+  "$PYTHON" -m slas_deploy.installer write-env "${env_args[@]}"
+  # The sign-in URL follows the file: a name pinned there (--public-host) stays.
+  env_public_host="$(sed -n 's/^SLAS_PUBLIC_HOST=//p' "$ENV_FILE" | tail -n 1 | tr -d '"')"
+  [[ -n "$env_public_host" ]] && PUBLIC_HOST="$env_public_host"
   "$PYTHON" -m slas_deploy.installer secrets --dir "$DATA_ROOT/secrets" --profile "$PROFILE"
+  # Every directory a service bind-mounts, created as the user the stack runs as (SLAS_UID):
+  # tls (the edge's CA), Coding, Toolchains, .git-broker, Tickets, Skills, SOP, Validation,
+  # Factory/{Templates,mes/inbox,ca}, Models, Knowledge, Backups/stations, qdrant. A missing
+  # bind-mount source would otherwise be created root-owned by the engine.
+  "$PYTHON" -m slas_deploy.installer data-dirs --root "$DATA_ROOT"
 fi
 
 if [[ "$SOURCE" == "bundle" ]]; then
@@ -250,6 +697,9 @@ if [[ "$SOURCE" == "bundle" ]]; then
     run_or_print docker load --quiet --input "$tarball"
   done
 fi
+
+# ---------------------------------------------------------------------------- 3c model weights
+place_models
 
 if [[ $DRY_RUN -eq 1 ]]; then
   COMPOSE_FILES=("$SCRIPT_DIR/compose/docker-compose.yml")
@@ -265,7 +715,37 @@ if [[ $DRY_RUN -eq 0 ]]; then COMPOSE+=(--env-file "$ENV_FILE"); fi
 if [[ "$SOURCE" == "registry" ]]; then
   run_or_print "${COMPOSE[@]}" pull --quiet
 fi
-run_or_print "${COMPOSE[@]}" up -d --pull never --remove-orphans
+if [[ -n "${COMPOSE_PROFILES:-}" ]]; then
+  echo "$PROFILES_SENTENCE"
+fi
+# `docker compose up` leaves the container of a service whose profile is off, so one an
+# earlier install started (the knowledge base before it became optional, an executor after
+# --agents dropped it) would keep restarting with its old settings and `ps --all` would
+# report it. Remove the containers of every part this install does not start (ADR-0017).
+for svc in ${OFF_SERVICES//,/ }; do
+  stale="$(docker ps -aq --filter label=com.docker.compose.project=slas --filter "label=com.docker.compose.service=$svc" 2>/dev/null | tr '\n' ' ')"
+  stale="${stale% }"
+  if [[ -n "$stale" ]]; then
+    echo "Removing the $svc container an earlier install started: $svc is off now (SLAS_AGENTS=$AGENTS); its data under $DATA_ROOT stays."
+    # shellcheck disable=SC2086 — one id per word
+    run_or_print docker rm -f $stale >/dev/null || echo "Could not remove the $svc container; \`docker rm -f $stale\` removes it by hand."
+  fi
+done
+if ! run_or_print "${COMPOSE[@]}" up -d --pull never --remove-orphans; then
+  echo
+  echo "docker compose could not start every service."
+  echo "Likely cause: a container exited at start, or a dependency never became healthy; the state of every container and the last 40 log lines of each one that is not running follow."
+  echo "What to do: read the lines below, fix what they name, then run ./install.sh again; \`slas status\` and \`slas logs <service>\` show the same at any time."
+  echo
+  "${COMPOSE[@]}" ps --all 2>&1 || true
+  failing="$("${COMPOSE[@]}" ps --all --format json 2>/dev/null | "$PYTHON" -m slas_deploy.installer unhealthy --ignore "$OFF_SERVICES" 2>/dev/null || true)"
+  for svc in $failing; do
+    echo
+    echo "--- $svc: last 40 log lines"
+    "${COMPOSE[@]}" logs --tail 40 --no-color "$svc" 2>&1 || echo "(no logs: the container may not have been created)"
+  done
+  exit 1
+fi
 
 if [[ "$PROFILE" == "prod" ]]; then
   run_or_print "${COMPOSE[@]}" exec -T vault sh /vault/bootstrap.sh
@@ -274,38 +754,131 @@ fi
 # ---------------------------------------------------------------------------- 4 wait and report
 if [[ $DRY_RUN -eq 1 ]]; then
   echo "Would wait until every service reports healthy, then print https://$PUBLIC_HOST and the one-time administrator password."
+  echo "Would wait up to ${SLAS_MODEL_WAIT_S:-900} s for the model instances and print each one's state; the install ends with the reason when the coder role has no healthy instance."
   echo
   echo "Dry run finished: every read-only step passed; nothing was changed on this host."
   exit 0
 fi
 
-echo "Waiting for the services to report healthy."
-for _ in $(seq 1 60); do
-  unhealthy="$("${COMPOSE[@]}" ps --format json | "$PYTHON" -c '
-import json, sys
-rows = [json.loads(l) for l in sys.stdin if l.strip()]
-bad = [r.get("Service") or r.get("Name") for r in rows
-       if (r.get("State") != "running" and r.get("State") != "exited") or (r.get("Health") not in ("", "healthy", None))]
-print(" ".join(str(b) for b in bad))' 2>/dev/null || echo "compose")"
+# A service counts as healthy when it is running and its healthcheck says healthy (or it has
+# none); restarting, created, health "starting" or "unhealthy", and a non-zero exit are not.
+# SLAS_HEALTH_WAIT_S (default 300) and SLAS_HEALTH_POLL_S (default 5) shape the wait.
+HEALTH_WAIT_S="${SLAS_HEALTH_WAIT_S:-300}"
+HEALTH_POLL_S="${SLAS_HEALTH_POLL_S:-5}"
+echo "Waiting up to $HEALTH_WAIT_S s for the services to report healthy."
+waited=0
+unhealthy=""
+while :; do
+  unhealthy="$("${COMPOSE[@]}" ps --all --format json 2>/dev/null | "$PYTHON" -m slas_deploy.installer unhealthy --ignore "$OFF_SERVICES" 2>/dev/null || echo "compose")"
   if [[ -z "$unhealthy" ]]; then
     break
   fi
-  sleep 5
+  if [[ $waited -ge $HEALTH_WAIT_S ]]; then
+    break
+  fi
+  sleep "$HEALTH_POLL_S"
+  waited=$((waited + HEALTH_POLL_S))
 done
-if [[ -n "${unhealthy:-}" ]]; then
-  echo "Some services are not healthy yet: $unhealthy."
-  echo "Likely cause: a slow first start (models, Keycloak) or a failed dependency."
-  echo "What to do: run \`slas status\` in a minute; \`slas logs <service>\` shows why one is not up."
+if [[ -n "$unhealthy" ]]; then
+  echo
+  echo "After $HEALTH_WAIT_S s these services are not healthy: $unhealthy."
+  echo "Likely cause: a slow first start (models, Keycloak), a failed dependency, or a container that keeps restarting; each one's last log lines follow."
+  echo "What to do: read the lines below, fix what they name, then run ./install.sh again; \`slas status\` and \`slas logs <service>\` show the same at any time."
+  for svc in $unhealthy; do
+    echo
+    echo "--- $svc: last 20 log lines"
+    "${COMPOSE[@]}" logs --tail 20 --no-color "$svc" 2>&1 || echo "(no logs: the container may not have been created)"
+  done
   exit 1
 fi
 
 echo
-echo "SW Local Agent Service is up. Sign in at https://$PUBLIC_HOST"
+also=""
+for addr in ${HOST_IPS//,/ }; do
+  [[ "$addr" == "$PUBLIC_HOST" ]] && continue
+  also="${also:+$also, }https://$addr"
+done
+echo "SW Local Agent Service is up. Sign in at https://$PUBLIC_HOST${also:+ (also at $also)}"
+echo "The certificate is self-signed: the browser asks once whether to continue."
+# The one-time administrator password is shown only while the api says the bootstrap is
+# still pending (ADR-0007, docs/api-contract.md: `slas-api bootstrap status`).
 ADMIN_PASSWORD_FILE="$DATA_ROOT/secrets/admin-initial-password"
-if [[ -f "$ADMIN_PASSWORD_FILE" ]]; then
-  echo "Administrator: admin@slas.local — one-time password: $(cat "$ADMIN_PASSWORD_FILE") (you will choose a new one at first sign-in)."
-fi
+bootstrap="$("${COMPOSE[@]}" exec -T api slas-api bootstrap status 2>/dev/null | tr -d '[:space:]' || true)"
+case "$bootstrap" in
+  pending)
+    if [[ -f "$ADMIN_PASSWORD_FILE" ]]; then
+      echo "Administrator: admin@slas.local — one-time password: $(cat "$ADMIN_PASSWORD_FILE") (you will choose a new one at first sign-in)."
+    else
+      echo "The administrator's one-time password is still pending, but $ADMIN_PASSWORD_FILE is missing. Likely cause: the secrets directory was changed by hand. What to do: reset it with \`docker compose exec api slas-api user add\` or restore the file from a backup."
+    fi ;;
+  done)
+    echo "Administrator: admin@slas.local — the administrator already chose a password; the one-time password is no longer valid." ;;
+  *)
+    echo "Could not ask the api whether the administrator's one-time password is still pending (it answered: ${bootstrap:-nothing})."
+    echo "Likely cause: the api is still starting, or its image does not carry the slas-api command yet."
+    echo "What to do: in a minute run \`docker compose exec api slas-api bootstrap status\`; while it prints pending, the password in $ADMIN_PASSWORD_FILE is the one to sign in with." ;;
+esac
 if [[ "$PROFILE" == "prod" ]]; then
   echo "Keycloak: https://$PUBLIC_HOST/auth (realm slas). Vault: unseal keys were printed by the bootstrap; store them offline now."
 fi
+
+# ---------------------------------------------------------------------------- 5 the model instances
+# The stack is up, but the Coding Agent needs a healthy coder instance, and a vLLM instance
+# loads its weights for minutes. Wait for it here and say what happened to every instance, so
+# a first install ends with "the coding model is ready" or with the reason it is not.
+# SLAS_MODEL_WAIT_S (default 900) and SLAS_MODEL_POLL_S (default 15) shape the wait.
+MODEL_WAIT_S="${SLAS_MODEL_WAIT_S:-900}"
+MODEL_POLL_S="${SLAS_MODEL_POLL_S:-15}"
+echo
+echo "Waiting up to $MODEL_WAIT_S s for the model instances; a large model loads its weights for several minutes on its first start."
+model_status() {
+  "${COMPOSE[@]}" exec -T model-manager python -c 'import sys, urllib.request; sys.stdout.write(urllib.request.urlopen("http://127.0.0.1:8000/v1/status", timeout=10).read().decode())' 2>/dev/null || true
+}
+waited=0
+unanswered=0
+instances_rc=3
+instances_report=""
+while :; do
+  set +e
+  instances_report="$(model_status | "$PYTHON" -m slas_deploy.installer instances --role coder)"
+  instances_rc=$?
+  set -e
+  # 2 = still loading: wait. 3 = the manager did not answer: it is replacing or pausing
+  # containers under its lock (a stop can take 30 s), so a few polls are forgiven before it
+  # is reported; the health wait above already saw it healthy. Anything else is final.
+  if [[ $instances_rc -eq 3 ]]; then
+    unanswered=$((unanswered + 1))
+    if [[ $unanswered -ge 4 ]]; then break; fi
+  elif [[ $instances_rc -ne 2 ]]; then
+    break
+  else
+    unanswered=0
+  fi
+  if [[ $waited -ge $MODEL_WAIT_S ]]; then break; fi
+  # Once a minute, the coder's line: how long it has loaded and what vLLM last logged.
+  if [[ $MODEL_POLL_S -gt 0 && $waited -gt 0 && $(( waited % 60 )) -eq 0 ]]; then
+    # The coder's own row ("  vllm-coder (coder): …"), not the summary that lists every name.
+    coder_line="$(printf '%s\n' "$instances_report" | grep -m1 -E '^ +vllm-coder \(' || true)"
+    echo "  after ${waited} s:${coder_line:-  no coder instance is listed yet}"
+  fi
+  sleep "$MODEL_POLL_S"
+  waited=$((waited + MODEL_POLL_S))
+done
+echo "$instances_report"
+case $instances_rc in
+  0)
+    echo "The coding model is ready; start a coding task from the Coding page." ;;
+  2)
+    echo "The model instances are still loading after $MODEL_WAIT_S s."
+    echo "Likely cause: large weights on a slow disk; the coder loads alone first (SLAS_START_CODER_FIRST=1), so nothing else competes for the disk."
+    echo "What to do: watch the Models page, or \`docker logs -f vllm-coder\` for vLLM's own progress; a coding task can start as soon as the coder row says healthy." ;;
+  3)
+    : ;;  # the report already says the model manager did not answer and how to look
+  *)
+    echo
+    echo "The coder role has no healthy instance, so a coding task cannot start yet."
+    echo "Likely cause: the sentences above name it: a crash (with its last log lines), a model that does not fit this host's GPUs, or no GPU at all."
+    echo "What to do: fix what they name — the Models page lets you give the coder role a smaller model or add one from a link — then run ./install.sh again or wait for the model manager's next reconcile."
+    exit 1 ;;
+esac
 exit 0

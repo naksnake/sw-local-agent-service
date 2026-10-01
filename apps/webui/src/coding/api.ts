@@ -1,7 +1,7 @@
 // The Coding page's view of the API (CLAUDE.md §9, §10.1). Types mirror the Python
 // schemas in slas_orchestrator.coding; the sentences the fake produces are the same ones
 // the toolchain resolver produces, so the UI copy is exercised end to end in tests.
-// `FakeCodingApi` stands in until apps/api exposes these calls over HTTP.
+// `HttpCodingApi` (./http.ts) is what production uses; `FakeCodingApi` serves `pnpm dev`.
 
 export type LanguageId =
   | "python"
@@ -89,14 +89,29 @@ export interface SkillSummary {
   name: string;
 }
 
+/** Whether the coding model is ready, and the sentence the wizard shows above Start task. */
+export interface Readiness {
+  ready: boolean;
+  sentence: string;
+}
+
 export interface CodingApi {
+  readiness(): Promise<Readiness>;
   detectLanguages(plan: string): Promise<LanguageId[]>;
   propose(plan: string, filename: string): Promise<Breakdown>;
   resolveToolchains(choices: LanguageChoice[]): Promise<ToolchainResolution[]>;
   listRemotes(): Promise<string[]>;
   listSkills(): Promise<SkillSummary[]>;
-  start(breakdown: Breakdown, plan: string): Promise<CodingTask>;
+  /** `filename` is the plan file's name (default plan.md); the api records it on the ticket. */
+  start(breakdown: Breakdown, plan: string, filename?: string): Promise<CodingTask>;
   listTasks(): Promise<CodingTask[]>;
+  /** Remove a finished task and its files; resolves to the sentence the service answers. */
+  remove(ticketId: string): Promise<string>;
+}
+
+/** A task that has stopped: Done, Failed or Needs review. Only these can be removed. */
+export function isFinished(task: CodingTask): boolean {
+  return ["Done", "Failed", "Needs review"].includes(task.state);
 }
 
 export function labelOf(language: LanguageId): string {
@@ -198,7 +213,21 @@ export class FakeCodingApi implements CodingApi {
   remotes: string[] = [];
   skills: SkillSummary[] = [{ id: "lint-and-test", name: "Lint and test" }];
   readonly tasks: CodingTask[] = [];
+  /** Whether the fake's coder instance is healthy; tests flip it to see the refusal. */
+  coderReady = true;
   private counter = 0;
+
+  async readiness(): Promise<Readiness> {
+    return this.coderReady
+      ? { ready: true, sentence: "The coding model is ready: vllm-coder (qwen3.8-27b-fp8) serves the coder role." }
+      : {
+          ready: false,
+          sentence:
+            "The coding model is not ready yet. vllm-coder is still starting, or the model manager has not " +
+            "reported it healthy; the first start of a large model can take several minutes. Watch the Models " +
+            "page and start the task when the coder role shows healthy.",
+        };
+  }
 
   async detectLanguages(plan: string): Promise<LanguageId[]> {
     const scores = new Map<LanguageId, number>();
@@ -340,5 +369,18 @@ export class FakeCodingApi implements CodingApi {
 
   async listTasks(): Promise<CodingTask[]> {
     return [...this.tasks];
+  }
+
+  async remove(ticketId: string): Promise<string> {
+    const index = this.tasks.findIndex((task) => task.ticketId === ticketId);
+    if (index === -1) {
+      throw new Error(`There is no ticket ${ticketId}.`);
+    }
+    const task = this.tasks[index];
+    if (task !== undefined && !isFinished(task)) {
+      throw new Error(`${ticketId} is still running.`);
+    }
+    this.tasks.splice(index, 1);
+    return `${ticketId} and its files were removed.`;
   }
 }

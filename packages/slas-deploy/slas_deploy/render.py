@@ -7,6 +7,7 @@ config/keycloak/slas-realm.json
 config/pgbackrest.conf, config/postgres/prod.conf
 config/loki/loki.yml, config/loki/grafana-datasources.yml, config/tempo/tempo.yml
 deploy/prod/minio-init.sh, deploy/prod/backup-runner.sh, deploy/prod/vault-bootstrap.sh
+images/<python service>/Dockerfile (slas_deploy.dockerfiles)
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import sys
 from pathlib import Path
 
 from slas_deploy import compose, keycloak, observability_prod, pgbackrest, vault
+from slas_deploy.dockerfiles import rendered_dockerfiles
 from slas_deploy.images import default_lock, render_lock_json, render_lock_yaml
 from slas_observability import yamlish
 
@@ -60,6 +62,7 @@ def rendered_files() -> dict[str, str]:
     files["deploy/prod/minio-init.sh"] = pgbackrest.minio_init_script()
     files["deploy/prod/backup-runner.sh"] = pgbackrest.backup_runner_script()
     files["deploy/prod/vault-bootstrap.sh"] = vault_bootstrap_script()
+    files.update(rendered_dockerfiles())
     return files
 
 

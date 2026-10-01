@@ -27,6 +27,8 @@ class AuditRow(SlasModel):
     result: Result
     duration_s: float = Field(ge=0)
     detail: str = ""
+    #: The request's trace id when the operation ran inside a service request (ADR-0015).
+    trace_id: str | None = None
 
     def sentence(self) -> str:
         where = f" to {self.remote_name}" if self.remote_name else ""

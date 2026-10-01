@@ -1,0 +1,22 @@
+# The WebUI behind the edge: static files on :8000, no TLS (the edge terminates it), the
+# single-page fallback to index.html, and /health for the compose healthcheck.
+{
+	admin off
+	auto_https off
+}
+
+:8000 {
+	root * /srv
+	encode gzip
+	handle /health {
+		respond 200
+	}
+	handle /assets/* {
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -12,7 +12,13 @@ dependencies = [
   "slas-skills",
   "slas-station-runner",
   "slas-triage",
+  "slas-http",
+  "pyyaml==6.0.3",
+  "types-PyYAML==6.0.12.20260906",
 ]
+
+[project.scripts]
+slas-factory-executor = "slas_factory_executor.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9.0"]
@@ -29,3 +35,4 @@ slas-schemas = { workspace = true }
 slas-skills = { workspace = true }
 slas-station-runner = { workspace = true }
 slas-triage = { workspace = true }
+slas-http = { workspace = true }

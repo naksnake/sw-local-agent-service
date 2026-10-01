@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Final, Literal
+from pathlib import Path
+from typing import Any, Final, Literal
 
+import yaml
 from pydantic import Field, ValidationError, model_validator
 
 from slas_llm_gateway.routing import ROLES, Routes
@@ -211,6 +213,221 @@ def example_registry() -> Registry:
     return registry_from_mapping(EXAMPLE_REGISTRY, source="models.example.yaml")
 
 
+# --- The registries install.sh ships ------------------------------------------------------
+#
+# `config/models.<profile>.yaml` is rendered from these and copied to Models/models.yaml by
+# install.sh when the data root has none yet. Paths match config/model-sources.txt, so the
+# weights scripts/fetch_models.py fetches are the ones these entries name. Sizes come from
+# the hub's file listings on 2026-09-16; vram_gib adds headroom for the KV cache at the
+# stated context and is an assumption until real instances run (same note as fit.py).
+# `quant` stays within fp8 | awq4 | bf16 until an ADR admits fp4.
+#
+# The model manager starts one vLLM instance per role and one per voter (reconcile.py), so a
+# model that is both a role and a voter runs twice; the layouts below count that. `slas model
+# fit` compares vram_gib with one GPU and has no tensor-parallel field yet, so the DeepSeek-V4
+# Pro entry reads as not fitting until the registry gains one (CLAUDE.md §15, decision 14).
+# TODO(SLAS-MODELS): add a gpus/tensor_parallel field with that ADR.
+
+_DEEPSEEK_V4_FLASH: Final[dict[str, object]] = {
+    "id": "deepseek-v4-flash",
+    "display_name": "DeepSeek-V4 Flash",
+    "family": "DeepSeek",
+    "path": "deepseek-v4-flash",
+    "quant": "fp8",
+    "vram_gib": 180.0,  # 149 GiB of FP8 weights on the hub
+    "context": 131072,
+    "roles": ["triage", "planner"],
+}
+_QWEN38_27B_FP8: Final[dict[str, object]] = {
+    "id": "qwen3.8-27b-fp8",
+    "display_name": "Qwen3.8-27B",
+    "family": "Qwen",
+    "path": "qwen3.8-27b-fp8",
+    "quant": "fp8",
+    "vram_gib": 40.0,  # 29 GiB of FP8 weights; a vision-language checkpoint served text-only
+    "context": 131072,
+    "roles": ["coder", "planner"],
+}
+_BGE_M3: Final[dict[str, object]] = {
+    "id": "bge-m3",
+    "display_name": "BGE-M3",
+    "family": "BAAI",
+    "path": "bge-m3",
+    "quant": "bf16",
+    "vram_gib": 3.0,
+    "context": 8192,
+    "roles": ["embed"],
+}
+_BGE_RERANKER_V2_M3: Final[dict[str, object]] = {
+    "id": "bge-reranker-v2-m3",
+    "display_name": "BGE Reranker v2 M3",
+    "family": "BAAI",
+    "path": "bge-reranker-v2-m3",
+    "quant": "bf16",
+    "vram_gib": 2.0,
+    "context": 8192,
+    "roles": ["rerank"],
+}
+_DEEPSEEK_V4_PRO: Final[dict[str, object]] = {
+    "id": "deepseek-v4-pro",
+    "display_name": "DeepSeek-V4 Pro",
+    "family": "DeepSeek",
+    "path": "deepseek-v4-pro",
+    "quant": "fp8",
+    "vram_gib": 900.0,  # 805 GiB of FP8 weights on the hub; tensor parallel over four GPUs
+    "context": 131072,
+    "roles": ["planner"],
+}
+_MINIMAX_M2_7: Final[dict[str, object]] = {
+    "id": "minimax-m2.7",
+    "display_name": "MiniMax-M2.7",
+    "family": "MiniMax",
+    "path": "minimax-m2.7",
+    "quant": "fp8",
+    "vram_gib": 235.0,  # 214 GiB of FP8 weights on the hub; the third voter family
+    "context": 131072,
+    "roles": ["planner"],
+}
+_QWEN38_27B_BF16: Final[dict[str, object]] = {
+    "id": "qwen3.8-27b-bf16",
+    "display_name": "Qwen3.8-27B (BF16 reference)",
+    "family": "Qwen",
+    "path": "qwen3.8-27b-bf16",
+    "quant": "bf16",
+    "vram_gib": 64.0,  # 52 GiB of BF16 weights on the hub
+    "context": 131072,
+    "roles": [],  # eval regression only (CLAUDE.md §7); the gateway never routes to it
+}
+
+#: Quickstart (CLAUDE.md §3): the planner role is a second instance of the small coder, so
+#: the instances are Flash ×2 (triage, voter), Qwen ×3 (coder, planner, voter) and the two
+#: BGE models: about 490 GiB over three GPUs of the B300 class. Two voters from two families,
+#: so every cross-check is reported as a weaker check (CLAUDE.md §15, decision 12).
+QUICKSTART_REGISTRY: Final[dict[str, object]] = {
+    "version": 1,
+    "models": [_DEEPSEEK_V4_FLASH, _QWEN38_27B_FP8, _BGE_M3, _BGE_RERANKER_V2_M3],
+    "roles": {
+        "coder": "qwen3.8-27b-fp8",
+        "planner": "qwen3.8-27b-fp8",
+        "triage": "deepseek-v4-flash",
+        "embed": "bge-m3",
+        "rerank": "bge-reranker-v2-m3",
+    },
+    "voters": ["deepseek-v4-flash", "qwen3.8-27b-fp8"],
+}
+
+#: Prod (docs/runbooks/deploy-hgx-b300.md §4): DeepSeek-V4 Pro as planner on GPUs 0-3, Flash
+#: as triage and as a voter (two instances), Qwen as coder and voter, MiniMax-M2.7 as the third
+#: voter family, the BF16 reference for eval regression. Eight GPUs, one instance each.
+PROD_REGISTRY: Final[dict[str, object]] = {
+    "version": 1,
+    "models": [
+        _DEEPSEEK_V4_PRO,
+        _DEEPSEEK_V4_FLASH,
+        _QWEN38_27B_FP8,
+        _MINIMAX_M2_7,
+        _QWEN38_27B_BF16,
+        _BGE_M3,
+        _BGE_RERANKER_V2_M3,
+    ],
+    "roles": {
+        "coder": "qwen3.8-27b-fp8",
+        "planner": "deepseek-v4-pro",
+        "triage": "deepseek-v4-flash",
+        "embed": "bge-m3",
+        "rerank": "bge-reranker-v2-m3",
+    },
+    "voters": ["deepseek-v4-flash", "qwen3.8-27b-fp8", "minimax-m2.7"],
+}
+
+PROFILE_REGISTRIES: Final[dict[str, dict[str, object]]] = {
+    "quickstart": QUICKSTART_REGISTRY,
+    "prod": PROD_REGISTRY,
+}
+
+
+def profile_registry_header(profile: str) -> str:
+    voters = (
+        "Two voters from two families: every cross-check is reported as a weaker check until a\n"
+        "third family is added (CLAUDE.md §15, decision 12; models.prod.yaml adds MiniMax-M2.7)."
+        if profile == "quickstart"
+        else "Three voters from three families (DeepSeek, Qwen, MiniMax); DeepSeek-V4 Pro serves\n"
+        "the planner only, tensor parallel over four GPUs."
+    )
+    return (
+        f"Models/models.yaml for the {profile} profile of SW Local Agent Service (CLAUDE.md §7).\n"
+        f"Rendered from slas_model_manager.registry.PROFILE_REGISTRIES[{profile!r}]; a unit test\n"
+        "keeps file and code in step. install.sh copies this file to ${SLAS_DATA_ROOT}/Models/\n"
+        "models.yaml when none exists there yet, and never overwrites one (INV-9).\n"
+        "Every `path` is a directory under Models/ that scripts/fetch_models.py fetches from the\n"
+        "matching line of config/model-sources.txt; never a URL (INV-1).\n"
+        "Assumes GPUs of about 288 GB each (HGX B300 class); on smaller GPUs pick smaller or\n"
+        "AWQ builds on the Models page. The model manager starts one instance per role and one\n"
+        "per voter. vram_gib is the weights on the hub plus headroom for the KV cache at\n"
+        "`context`; an assumption until real instances run. Change roles on the Models page or\n"
+        f"here; no restart is needed.\n{voters}"
+    )
+
+
+def profile_registry(profile: str) -> Registry:
+    return registry_from_mapping(PROFILE_REGISTRIES[profile], source=f"models.{profile}.yaml")
+
+
+def read_registry_file(path: Path) -> tuple[dict[str, Any], str]:
+    """The registry file as a mapping plus its leading comment lines (the header a rewrite
+    keeps), or a three-part `RegistryError` when the file is missing, not YAML or invalid.
+    The mapping is validated, so a caller may edit and re-validate it."""
+    source = str(path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RegistryError(
+            ThreePartMessage(
+                f"The model registry {source} could not be read.",
+                f"The file is missing or unreadable ({type(exc).__name__}).",
+                "Run `./install.sh` again, which writes the profile's registry when none "
+                "exists, or create it from services/model-manager/models.example.yaml.",
+            )
+        ) from exc
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise RegistryError(
+            ThreePartMessage(
+                f"The model registry {source} could not be used.",
+                f"It is not valid YAML ({str(exc).splitlines()[0][:120]}).",
+                f"Fix {source} on the Models page or by hand.",
+            )
+        ) from exc
+    registry_from_mapping(data, source=source)
+    header_lines: list[str] = []
+    for line in text.splitlines():
+        if not line.startswith("#"):
+            break
+        header_lines.append(line[1:].strip())
+    if not isinstance(data, dict):  # pragma: no cover — validated above
+        raise RegistryError(
+            ThreePartMessage(
+                f"The model registry {source} could not be used.",
+                "Its top level is not a mapping.",
+                f"Fix {source} on the Models page or by hand.",
+            )
+        )
+    return dict(data), "\n".join(header_lines)
+
+
+def write_registry_file(path: Path, data: Mapping[str, object], *, header: str = "") -> Registry:
+    """Validate `data`, render it and replace `path` atomically (a reader never sees a half
+    file, INV-9: the model manager picks the new file up on its next tick)."""
+    registry = registry_from_mapping(data, source=str(path))
+    rendered = render_registry_yaml(data, header=header)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(rendered, encoding="utf-8")
+    tmp.replace(path)
+    return registry
+
+
 def render_registry_yaml(data: Mapping[str, object], *, header: str = "") -> str:
     registry = registry_from_mapping(data)
     lines: list[str] = []
@@ -227,8 +444,9 @@ def render_registry_yaml(data: Mapping[str, object], *, header: str = "") -> str
         lines.append(f"    vram_gib: {model.vram_gib:g}")
         lines.append(f"    context: {model.context}")
         lines.append(f"    roles: [{', '.join(model.roles)}]")
-    lines.append("roles:")
+    # An empty mapping or list is written as such: a bare `roles:` reads back as null.
+    lines.append("roles:" if registry.roles else "roles: {}")
     lines.extend(f"  {role}: {model_id}" for role, model_id in registry.roles.items())
-    lines.append("voters:")
+    lines.append("voters:" if registry.voters else "voters: []")
     lines.extend(f"  - {model_id}" for model_id in registry.voters)
     return "\n".join(lines) + "\n"

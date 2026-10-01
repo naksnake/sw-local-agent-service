@@ -151,7 +151,7 @@ def test_agent_ingests_only_plan_uploads_and_plans_only_approved_breakdowns() ->
     ]
     assert plan.steps[0].title == "Toolchain: Python 3.11.10."
     assert plan.steps[0].args["resolutions"][0]["requested"] == "3.11"
-    assert plan.steps[1].args["image"] == "registry.internal/slas/sandbox-python:3.11.10"
+    assert plan.steps[1].args["image"] == "local/slas/sandbox-python:3.11.10"
     assert plan.summary.startswith(
         "The agent will work in an isolated sandbox with Python 3.11.10, do 2 tasks"
     )

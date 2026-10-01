@@ -1,0 +1,35 @@
+[project]
+name = "slas-model-fetcher"
+version = "0.0.1"
+description = "model-fetcher: the quickstart-only service that downloads weights from a pasted hub link into Models/ and imports the registry entry (ADR-0018)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+# The approved set of ADR-0005/ADR-0015: the HTTP surface through slas-http; the fetch logic
+# from slas-fetch (standard library); the registry loader from slas-model-manager, so an
+# imported entry is validated exactly as the manager reads it. No runtime socket, no store.
+dependencies = [
+  "slas-fetch",
+  "slas-http",
+  "slas-model-manager",
+  "slas-observability",
+  "slas-schemas",
+  "pyyaml==6.0.3",
+  "types-PyYAML==6.0.12.20260906",
+]
+
+[project.scripts]
+slas-model-fetcher = "slas_model_fetcher.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.uv.sources]
+slas-fetch = { workspace = true }
+slas-http = { workspace = true }
+slas-model-manager = { workspace = true }
+slas-observability = { workspace = true }
+slas-schemas = { workspace = true }

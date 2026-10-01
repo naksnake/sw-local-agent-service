@@ -10,11 +10,16 @@ import argparse
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
 
 from slas_cli.doctor.host import Host
-from slas_deploy.pgbackrest import BackupError, BackupRunner, RestoreDrill, compose_steps
-from slas_hal.hal import CommandResult as HalResult
+
+if TYPE_CHECKING:
+    from slas_hal.hal import CommandResult as HalResult
+
+# `add_backup_parser` runs on a bare host as part of `slas doctor` (install.sh), so this
+# module imports only the standard library at load time. The runner (`slas_deploy`,
+# `slas_hal`, and through them pydantic) is imported inside the functions that need it.
 
 EXIT_OK = 0
 EXIT_PROBLEMS = 1
@@ -34,6 +39,8 @@ class HostRunner:
         stdin: str | None = None,
         timeout_s: int = 600,
     ) -> HalResult:
+        from slas_hal.hal import CommandResult as HalResult
+
         result = self.host.run(list(argv), timeout_s=float(timeout_s))
         return HalResult(
             exit_code=result.returncode if result.returncode is not None else 127,
@@ -56,6 +63,8 @@ def compose_argv(compose_files: Sequence[str], env_file: str) -> list[str]:
 
 
 def run_backup(args: argparse.Namespace, host: Host, out: TextIO) -> int:
+    from slas_deploy.pgbackrest import BackupError, BackupRunner, RestoreDrill, compose_steps
+
     compose = compose_argv(args.compose_file, f"{args.data_root}/.env")
     backups = BackupRunner(HostRunner(host), prefix=[*compose, "exec", "-T", "backup-runner"])
     try:

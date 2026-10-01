@@ -7,8 +7,8 @@ blocks. INV-11: what comes back is a verdict object, nothing more.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import TypeVar
+from collections.abc import Callable, Mapping
+from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
@@ -16,11 +16,13 @@ from slas_llm_gateway.breaker import CircuitBreaker
 from slas_llm_gateway.consensus import ConsensusRules, TokenBudget, tally
 from slas_llm_gateway.redaction import Redaction, Redactor
 from slas_llm_gateway.routing import RoleRouter
+from slas_llm_gateway.schema_check import validate_json
 from slas_llm_gateway.structured import (
     SchemaViolationError,
     StructuredResult,
     VoterUnavailableError,
     generate_structured,
+    generate_validated,
 )
 from slas_llm_gateway.vllm import (
     CompletionRequest,
@@ -99,6 +101,7 @@ class Gateway:
         *,
         max_tokens: int = 1024,
         temperature: float = 0.0,
+        guided_json: dict[str, Any] | None = None,
     ) -> CompletionResponse:
         instance = self.router.instance_for(role)
         if not self.breaker.allow(instance):
@@ -107,6 +110,7 @@ class Gateway:
         request = CompletionRequest(
             instance=instance,
             messages=self._redact(messages),
+            guided_json=guided_json,
             max_tokens=max_tokens,
             temperature=temperature,
             trace_id=current_trace_id(),
@@ -129,22 +133,20 @@ class Gateway:
             "slas_gateway_tokens_total", response.completion_tokens, role=role, kind="completion"
         )
 
-    def generate(
-        self,
-        role: str,
-        messages: list[Message],
-        model_type: type[T],
-        *,
-        max_retries: int = 2,
-    ) -> StructuredResult[T]:
-        instance = self.router.instance_for(role)
-        request = CompletionRequest(
-            instance=instance, messages=self._redact(messages), trace_id=current_trace_id()
+    def _structured_request(
+        self, role: str, messages: list[Message], max_tokens: int
+    ) -> CompletionRequest:
+        return CompletionRequest(
+            instance=self.router.instance_for(role),
+            messages=self._redact(messages),
+            max_tokens=max_tokens,
+            trace_id=current_trace_id(),
         )
+
+    @staticmethod
+    def _counted[R](role: str, run: Callable[[], StructuredResult[R]]) -> StructuredResult[R]:
         try:
-            result = generate_structured(
-                self.client, request, model_type, breaker=self.breaker, max_retries=max_retries
-            )
+            result = run()
         except SchemaViolationError:
             metrics.inc("slas_gateway_requests_total", role=role, outcome="schema_violation")
             raise
@@ -154,6 +156,47 @@ class Gateway:
         metrics.inc("slas_gateway_requests_total", role=role, outcome="ok")
         metrics.inc("slas_gateway_tokens_total", result.tokens, role=role, kind="completion")
         return result
+
+    def generate(
+        self,
+        role: str,
+        messages: list[Message],
+        model_type: type[T],
+        *,
+        max_tokens: int = 1024,
+        max_retries: int = 2,
+    ) -> StructuredResult[T]:
+        """An answer validated into `model_type` (tiers 0 and 1 of §11)."""
+        request = self._structured_request(role, messages, max_tokens)
+        return self._counted(
+            role,
+            lambda: generate_structured(
+                self.client, request, model_type, breaker=self.breaker, max_retries=max_retries
+            ),
+        )
+
+    def generate_json(
+        self,
+        role: str,
+        messages: list[Message],
+        schema: Mapping[str, Any],
+        *,
+        max_tokens: int = 1024,
+        max_retries: int = 2,
+    ) -> StructuredResult[Any]:
+        """An answer checked against a JSON Schema the caller supplies (the HTTP surface)."""
+        request = self._structured_request(role, messages, max_tokens)
+        return self._counted(
+            role,
+            lambda: generate_validated(
+                self.client,
+                request,
+                schema,
+                lambda text: validate_json(text, schema),
+                breaker=self.breaker,
+                max_retries=max_retries,
+            ),
+        )
 
     # --- Consensus Router -------------------------------------------------------------
 

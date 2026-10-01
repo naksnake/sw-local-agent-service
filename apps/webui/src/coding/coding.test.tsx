@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { ApiError } from "../api/http";
 import { FakeCodingApi, reviewSentence, toolchainSentence } from "./api";
 import { CodingPage } from "./CodingPage";
 
@@ -77,6 +78,68 @@ describe("New coding task wizard", () => {
     expect(within(card).getByText(/Task 2: Add a pytest test for the parser and the CLI\./)).toBeTruthy();
     expect(within(card).getByText(/Cross-check the final diff with 3 voters/)).toBeTruthy();
     expect(api.tasks[0]?.title).toBe("Fan controller");
+  });
+
+  it("says on the Review step whether the coding model is ready, and shows the service's refusal", async () => {
+    const api = new FakeCodingApi();
+    api.coderReady = false;
+    api.start = async () => {
+      throw new ApiError({
+        status: 503,
+        parts: {
+          whatHappened: "The coding model is not ready yet.",
+          likelyCause: "vllm-coder is still starting.",
+          whatToDo: "Watch the Models page.",
+        },
+      });
+    };
+    render(<CodingPage api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New coding task" }));
+    fireEvent.change(screen.getByLabelText("Plan"), { target: { value: PLAN } });
+    fireEvent.click(screen.getByRole("button", { name: "Next: Setup" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Next: Review" }));
+    const readiness = await screen.findByTestId("readiness");
+    expect(readiness.textContent).toMatch(/^The coding model is not ready yet\./);
+    fireEvent.click(await screen.findByRole("button", { name: "Start task" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The coding model is not ready yet. vllm-coder is still starting. Watch the Models page.",
+    );
+    expect(screen.queryByLabelText(/T-coding-/)).toBeNull();
+  });
+
+  it("removes finished tasks one at a time or all at once, never a running one", async () => {
+    const api = new FakeCodingApi();
+    const finished = (ticketId: string, state: string) => ({
+      ticketId,
+      title: `Plan ${ticketId}`,
+      state,
+      sentence: `${ticketId} ${state === "Done" ? "is done." : "failed: the sandbox did not open."}`,
+      steps: [],
+      feed: [],
+    });
+    api.tasks.push(finished("T-coding-0003", "Failed"), finished("T-coding-0002", "Done"), {
+      ticketId: "T-coding-0001",
+      title: "Running one",
+      state: "Running",
+      sentence: "T-coding-0001 is running: step 2 of 6.",
+      steps: [],
+      feed: [],
+    });
+    render(<CodingPage api={api} />);
+    const failed = await screen.findByLabelText("T-coding-0003");
+    expect(screen.queryByRole("button", { name: "Remove T-coding-0001" })).toBeNull();
+    fireEvent.click(within(failed).getByRole("button", { name: "Remove T-coding-0003" }));
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "T-coding-0003 and its files were removed.",
+    );
+    await waitFor(() => expect(screen.queryByLabelText("T-coding-0003")).toBeNull());
+    expect(api.tasks.map((t) => t.ticketId)).toEqual(["T-coding-0002", "T-coding-0001"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear finished tasks" }));
+    await waitFor(() => expect(screen.queryByLabelText("T-coding-0002")).toBeNull());
+    expect(screen.getByLabelText("T-coding-0001")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Clear finished tasks" })).toBeNull();
+    expect(api.tasks.map((t) => t.ticketId)).toEqual(["T-coding-0001"]);
   });
 
   it("keeps pinned versions the bundle has and says so", async () => {

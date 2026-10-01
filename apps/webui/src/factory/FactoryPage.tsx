@@ -1,11 +1,14 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
+import { isLive, POLL_INTERVAL_MS, usePolling } from "../api/polling";
+import { agents } from "../copy/en";
 import { type CellStatus, type ControlView, type FactoryApi, type FactoryJob, STATUS_WORD } from "./api";
 import { NewFactoryJobWizard } from "./NewFactoryJobWizard";
 
 // The Factory page (CLAUDE.md §9, §10.3): jobs with their test-step map and the station's
 // screenshot strip, the verdict as a sentence, and the line lead's decision when a unit is
-// held. One primary action — New factory job. Copy: docs/ui/factory.md.
+// held. One primary action — New factory job. The list is re-read every few seconds while a
+// job is still running (live progress). Copy: docs/ui/factory.md.
 
 interface Props {
   api: FactoryApi;
@@ -29,9 +32,14 @@ export function FactoryPage({ api, user = "you", startWizardOpen = false }: Prop
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [controls, setControls] = useState<Record<string, ControlView>>({});
 
+  const refresh = useCallback(async () => setJobs(await api.listJobs()), [api]);
+
   useEffect(() => {
-    void api.listJobs().then(setJobs);
-  }, [api]);
+    void refresh().catch(() => {
+      // The page stays on "Loading jobs…"; the next poll or visit tries again.
+    });
+  }, [refresh]);
+  usePolling(refresh, jobs?.some((job) => isLive(job.state) && !job.held) === true ? POLL_INTERVAL_MS : null);
 
   function replace(job: FactoryJob) {
     setJobs((current) => (current ?? []).map((j) => (j.ticketId === job.ticketId ? job : j)));
@@ -194,6 +202,16 @@ export function FactoryPage({ api, user = "you", startWizardOpen = false }: Prop
                   <p className="text-sm" data-testid={`${job.ticketId}-verdict`}>
                     {job.verdictSentence || "Not decided yet."}
                   </p>
+                  {job.votes !== undefined && job.votes.length > 0 && (
+                    <div className="mt-1">
+                      <h5 className="text-sm font-medium">{agents.votesHeading}</h5>
+                      <ul className="space-y-1 text-sm text-slate-700 dark:text-slate-300" aria-label={`${job.ticketId} votes`}>
+                        {job.votes.map((vote, index) => (
+                          <li key={index}>{vote}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   {job.draftTicketId !== null && (
                     <p className="text-sm">
                       A ticket is drafted for the line lead.{" "}

@@ -17,7 +17,30 @@ No cloud. No external APIs. Nothing leaves the perimeter.
 | Driving the build with prompts | [`docs/PROMPTS.md`](docs/PROMPTS.md) — copy-paste prompts per phase |
 | Reviewing the intended UI | [`docs/ui-demo/slas-ui-demo.html`](docs/ui-demo/slas-ui-demo.html) — open in a browser, no server needed. The WebUI follows it: shell, tokens and Home in `apps/webui`, copy in `docs/ui/home.md` |
 
-## Quick start (target state, Phase 1)
+## Quick start
+
+On a connected Ubuntu host with Docker and Compose (ADR-0014; quickstart profile):
+
+```bash
+git clone <this repository> && cd sw-local-agent-service
+./install.sh --build --fetch-models   # preflight → weights → build and pull images → .env → up → sign-in URL
+# Starts the Coding Agent (ADR-0017). Add --agents coding,validation,factory,knowledge for the rest.
+# Run it again after a failure: weights already here are recognised and never downloaded twice.
+```
+
+The images are built from this checkout with every base pinned by digest and every
+dependency from the lock files; the filled image lock lands under `/AI/Agent`. Round 2
+(ADR-0015, `docs/api-contract-round-2.md`) puts the agents on the wire: every service serves
+HTTP on 8000 and finds the others through `SLAS_*_URL`; the model manager starts the vLLM
+instances (`vllm-<role>`, `vllm-voter-<model id>`) from the pinned `vllm/vllm-openai` image
+over the runtime socket — Podman's by default, Docker's when only that one exists, which
+the installer writes into `.env` and says; the sandbox images are built from
+`images/sandbox-*/Dockerfile` and their toolchain manifest written. `--dry-run` first prints
+what would be built, pulled and written; the preflight says which engine serves the socket,
+whether gVisor is registered and whether the NVIDIA runtime answers. The operator SOP's §7
+walks through what is up afterwards and the first coding task.
+
+The air-gapped path (target state, Phase 1), from a signed bundle built on a release host:
 
 ```bash
 tar xzf slas-bundle-<version>.tar.gz
@@ -26,6 +49,19 @@ cd slas-bundle-<version>
 ```
 
 One command, one `.env`, one page to manage models. Details in `CLAUDE.md` §3.
+
+Model weights come from a connected host, never from the platform (INV-1). The sources file
+ships filled in and pinned; fetch the set your profile needs, carry it over, and let the
+installer verify, place it and write `models.yaml`:
+
+```bash
+./install.sh --fetch-models --models-only    # one command: download, verify, place, write models.yaml
+```
+
+Or in two steps, when the platform host has no route to the hub: run
+`scripts/fetch_models.py fetch --sources config/model-sources.txt --profile quickstart --dest ./models`
+on a connected host, carry `models/` next to `install.sh`, and run `./install.sh --models-only`.
+The full `./install.sh` finds the weights in place once the bundle exists.
 
 Deploying to a specific GPU host, and what runs today versus what still waits on a
 dependency decision: [`docs/runbooks/deploy-hgx-b300.md`](docs/runbooks/deploy-hgx-b300.md).

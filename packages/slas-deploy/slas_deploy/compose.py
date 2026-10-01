@@ -15,6 +15,13 @@ immutable tag whose digest and image ID live in `compose/images.lock.*`; every s
 `no-new-privileges`, `cap_drop: [ALL]` (plus what it must add back), has a healthcheck, and
 only `edge` publishes a port. INV-4: no X11 socket and no `/dev/input` anywhere; the
 container-runtime socket reaches only model-manager and sandbox-manager, never an agent.
+
+Round 2 (ADR-0015, docs/api-contract-round-2.md): every service serves HTTP on 8000 through
+`slas_http`; the SLAS_*_URL variables below tell each caller where the others are; the
+model manager gets what it needs to start the vllm-* containers itself (the vLLM image from
+the lock, the inference network's fixed name, the host Models directory); the sandbox manager
+gets the host data root, the toolchain manifest and the registry label of the sandbox images.
+The vLLM image is in the image lock but is never a compose service.
 """
 
 from __future__ import annotations
@@ -35,6 +42,9 @@ AIRGAP_ENV: Final[dict[str, str]] = {
 DATA: Final = "${SLAS_DATA_ROOT}"
 SECRETS: Final = f"{DATA}/secrets"
 
+#: The compose project name install.sh passes (`--project-name slas`; also `name:` below).
+PROJECT_NAME: Final = "slas"
+
 #: Network name → whether it is internal (no route to the host's default network).
 NETWORKS: Final[dict[str, bool]] = {
     "slas-edge": False,
@@ -47,18 +57,98 @@ NETWORKS: Final[dict[str, bool]] = {
     "slas-lab": False,
     "slas-factory": False,
     "slas-git": False,
+    # The only egress of the stack (ADR-0018): model-fetcher alone, to the hub allowlist, on
+    # the quickstart profile only. Every other network with a route out belongs to one zone.
+    "slas-egress": False,
 }
+
+#: The Docker network the vLLM containers join. Compose names a network
+#: `<project>_<key>`; the model manager creates containers outside compose, so the name is
+#: fixed here (`name:` on the network) and handed to it as SLAS_INFERENCE_NETWORK.
+INFERENCE_NETWORK_NAME: Final = f"{PROJECT_NAME}_slas-inference"
+
+#: Every service listens on this inside its container (contract round 2 §1): what the
+#: healthcheck probes, Prometheus scrapes and the URLs below point at.
+SERVICE_BIND: Final = "0.0.0.0:8000"
+
+#: The service URLs of contract round 2 §1 — one variable per service, read by the services
+#: that call it. `service_urls(*names)` picks the ones a service needs.
+SERVICE_URLS: Final[dict[str, str]] = {
+    "SLAS_GATEWAY_URL": "http://llm-gateway:8000",
+    "SLAS_MODEL_MANAGER_URL": "http://model-manager:8000",
+    "SLAS_SANDBOX_MANAGER_URL": "http://sandbox-manager:8000",
+    "SLAS_ORCHESTRATOR_URL": "http://agent-core-orchestrator:8000",
+    "SLAS_GIT_BROKER_URL": "http://git-broker:8000",
+    "SLAS_VALIDATION_EXECUTOR_URL": "http://validation-executor:8000",
+    "SLAS_FACTORY_EXECUTOR_URL": "http://factory-executor:8000",
+    "SLAS_MODEL_FETCHER_URL": "http://model-fetcher:8000",
+}
+
+#: Which service reads which URL variables (contract round 2 §1, "Read by").
+URL_READERS: Final[dict[str, tuple[str, ...]]] = {
+    "api": (
+        "SLAS_MODEL_MANAGER_URL",
+        "SLAS_SANDBOX_MANAGER_URL",
+        "SLAS_ORCHESTRATOR_URL",
+        "SLAS_GIT_BROKER_URL",
+        "SLAS_FACTORY_EXECUTOR_URL",
+        "SLAS_MODEL_FETCHER_URL",
+    ),
+    "agent-core-orchestrator": (
+        "SLAS_GATEWAY_URL",
+        "SLAS_SANDBOX_MANAGER_URL",
+        "SLAS_GIT_BROKER_URL",
+        "SLAS_VALIDATION_EXECUTOR_URL",
+        "SLAS_FACTORY_EXECUTOR_URL",
+    ),
+    "model-manager": ("SLAS_GATEWAY_URL",),
+}
+
+#: Directories under the data root that a compose service bind-mounts or a round-2 route
+#: reads. install.sh creates them as the user the stack runs as (`data-dirs`), so a missing
+#: bind-mount source is never created root-owned by the engine.
+DATA_DIRECTORIES: Final[tuple[str, ...]] = (
+    "Coding",
+    "Toolchains",
+    ".git-broker",
+    "Tickets",
+    "Skills/library",
+    "SOP",
+    "Validation",
+    "Factory/Templates",
+    "Factory/mes/inbox",
+    "Factory/ca",
+    "Models",
+    "Knowledge",
+    "Backups/stations",
+    "qdrant",
+    "tls",
+)
+
+
+def service_urls(*names: str) -> dict[str, str]:
+    return {name: SERVICE_URLS[name] for name in names}
+
 
 #: Networks with exactly one member (CLAUDE.md §4.1 zones B, B', G).
 SOLE_MEMBERS: Final[dict[str, str]] = {
     "slas-lab": "validation-executor",
     "slas-factory": "factory-executor",
     "slas-git": "git-broker",
+    "slas-egress": "model-fetcher",
 }
+
+#: The hub hosts the model fetcher may reach (ADR-0018), as compose hands them to it; a
+#: person narrows or widens the list in .env (SLAS_HUB_HOSTS) and names a mirror (HF_ENDPOINT).
+HUB_HOSTS_DEFAULT: Final = "huggingface.co,cdn-lfs.huggingface.co,*.hf.co"
+HUB_ENDPOINT_DEFAULT: Final = "https://huggingface.co"
 
 #: Services allowed to see the container runtime socket (§12: they start containers).
 RUNTIME_SOCKET_HOLDERS: Final[frozenset[str]] = frozenset({"model-manager", "sandbox-manager"})
-RUNTIME_SOCKET: Final = "/run/podman/podman.sock"
+#: The host side of that mount: rootless Podman by default; SLAS_RUNTIME_SOCKET in .env points
+#: at another socket (an empty value keeps the default). Inside the container the path is fixed.
+RUNTIME_SOCKET: Final = "${SLAS_RUNTIME_SOCKET:-/run/podman/podman.sock}"
+RUNTIME_SOCKET_IN_CONTAINER: Final = "/run/podman/podman.sock"
 
 #: Every file secret the installer generates (ADR-0003) plus the prod additions.
 QUICKSTART_SECRETS: Final[tuple[str, ...]] = (
@@ -68,6 +158,9 @@ QUICKSTART_SECRETS: Final[tuple[str, ...]] = (
     "minio_root_password",
     "secret_key",
     "admin-initial-password",
+    # The model fetcher's token for gated hub repositories (ADR-0018): created empty, a person
+    # pastes a token into the file when a repository needs one; never an environment variable.
+    "hf_token",
 )
 PROD_SECRETS: Final[tuple[str, ...]] = (
     "vault_approle_role_id",
@@ -80,10 +173,29 @@ PROD_SECRETS: Final[tuple[str, ...]] = (
 )
 
 HEALTH_INTERVAL: Final = {"interval": "15s", "timeout": "5s", "retries": 8, "start_period": "30s"}
+#: Open-file limit for the services that hold many files at once (Qdrant's segments); the
+#: model manager gives the vllm-* containers the same number (`slas_container.spec.NOFILE`).
+NOFILE_LIMIT: Final = {"soft": 65536, "hard": 65536}
 
 
 def _health(*argv: str) -> dict[str, Any]:
     return {"test": ["CMD", *argv], **HEALTH_INTERVAL}
+
+
+def _health_shell(command: str) -> dict[str, Any]:
+    """A probe that needs a shell (`$(…)`, `/dev/tcp`); `CMD` form runs no shell at all."""
+    return {"test": ["CMD-SHELL", command], **HEALTH_INTERVAL}
+
+
+def _wget(url: str) -> dict[str, Any]:
+    """Busybox and Alpine images (Prometheus, Alertmanager, the exporters, Loki, Tempo) ship
+    `wget` and nothing else; `slas-health` is only in first-party images."""
+    return _health("wget", "-q", "--spider", "-T", "5", url)
+
+
+def _tcp(port: int) -> dict[str, Any]:
+    """Images with bash but neither curl nor wget (Qdrant, DCGM, Keycloak): a TCP connect."""
+    return _health_shell(f"bash -c ':> /dev/tcp/127.0.0.1/{port}' || exit 1")
 
 
 def _service(
@@ -153,17 +265,32 @@ def base_compose() -> dict[str, Any]:
         first_party("edge"),
         networks=["slas-edge", "slas-frontend"],
         ports=["${SLAS_HTTPS_PORT}:443"],
-        environment={"SLAS_TLS_MODE": "${SLAS_TLS_MODE}", "SLAS_TLS_NAMES": "${SLAS_TLS_NAMES}"},
+        environment={
+            "SLAS_TLS_MODE": "${SLAS_TLS_MODE}",
+            "SLAS_TLS_NAMES": "${SLAS_TLS_NAMES}",
+            # The sign-in name's certificate is Caddy's default for a browser that opens an IP
+            # address (no server name in the handshake).
+            "SLAS_PUBLIC_HOST": "${SLAS_PUBLIC_HOST}",
+        },
         volumes=[f"{DATA}/tls:/data/tls"],
         cap_add=["NET_BIND_SERVICE"],
         healthcheck=_health("slas-health", "https://127.0.0.1/healthz", "--insecure-local"),
         depends_on=["webui", "api"],
+        # Port 443 as ${SLAS_UID}:${SLAS_GID}: a non-root uid does not keep NET_BIND_SERVICE
+        # across Caddy's execve (no ambient capabilities), so the container's own port
+        # threshold is lowered instead. It affects this network namespace only.
+        extra={"sysctls": {"net.ipv4.ip_unprivileged_port_start": "0"}},
     )
     services["webui"] = _slas(
         "webui",
         networks=["slas-frontend"],
         read_only=True,
         tmpfs=["/tmp"],  # noqa: S108 — the container's own tmpfs
+        # The Caddy image gives its binary the file capability cap_net_bind_service. With
+        # every capability dropped the kernel refuses to exec such a binary as a non-root
+        # uid ("operation not permitted"), so the one capability stays in the bounding set;
+        # the uid still gains nothing at exec (no-new-privileges), and it serves on 8000.
+        cap_add=["NET_BIND_SERVICE"],
     )
     services["api"] = _slas(
         "api",
@@ -171,11 +298,15 @@ def base_compose() -> dict[str, Any]:
         environment={
             "SLAS_PROFILE": "${SLAS_PROFILE}",
             "SLAS_DATA_ROOT": "/data",
+            "SLAS_BIND": SERVICE_BIND,
             "SLAS_SOP_CHINESE": "${SLAS_SOP_CHINESE}",
             "SLAS_AUTH_MODES": "builtin",
+            # Which agents this install starts; the WebUI shows only their pages (ADR-0017).
+            "SLAS_AGENTS": "${SLAS_AGENTS:-coding}",
             "POSTGRES_DB": "${POSTGRES_DB}",
             "POSTGRES_USER": "${POSTGRES_USER}",
             "SLAS_ROLES_FILE": "/etc/slas/rbac-roles.yaml",
+            **service_urls(*URL_READERS["api"]),
         },
         volumes=[f"{DATA}:/data", "../config/rbac-roles.yaml:/etc/slas/rbac-roles.yaml:ro"],
         secrets=["postgres_password", "redis_password", "secret_key", "admin-initial-password"],
@@ -192,15 +323,22 @@ def base_compose() -> dict[str, Any]:
         ],
         environment={
             "SLAS_DATA_ROOT": "/data",
+            "SLAS_BIND": SERVICE_BIND,
             "SLAS_GLOSSARY": "/etc/slas/glossary.yaml",
             "SLAS_OWNER_ROUTING": "/etc/slas/owner-routing.yaml",
+            **service_urls(*URL_READERS["agent-core-orchestrator"]),
         },
+        # The whole data root: Tickets/, Skills/, SOP/, Validation/, Factory/ and Coding/ are
+        # what the /v1/coding, /v1/validation, /v1/factory, /v1/skills and /v1/tickets routes
+        # read (contract round 2 §5).
         volumes=[
             f"{DATA}:/data",
             "../docs/glossary.yaml:/etc/slas/glossary.yaml:ro",
             "../config/owner-routing.yaml:/etc/slas/owner-routing.yaml:ro",
         ],
-        depends_on=["api", "llm-gateway"],
+        # Its health needs the gateway and the sandbox manager; the executors and the broker
+        # are optional zones (contract round 2 §5).
+        depends_on=["api", "llm-gateway", "sandbox-manager"],
     )
     services["screen-worker"] = _slas(
         "screen-worker",
@@ -212,6 +350,7 @@ def base_compose() -> dict[str, Any]:
         "llm-gateway",
         networks=["slas-backend", "slas-inference", "slas-observability"],
         environment={
+            "SLAS_BIND": SERVICE_BIND,
             "SCHEMA_ENFORCE": "strict",
             "CONSENSUS_DEFAULT_VOTERS": "3",
             "CONSENSUS_TOKEN_BUDGET_PCT": "5",
@@ -223,11 +362,33 @@ def base_compose() -> dict[str, Any]:
             "../config/redaction.yaml:/etc/slas/redaction.yaml:ro",
         ],
     )
+    # Owns every vllm-* container (contract round 2 §3): it creates them over the runtime
+    # socket from the vLLM image the lock pins, on the inference network, with the host's
+    # Models directory bind-mounted read-only, and publishes the table to the gateway.
     services["model-manager"] = _slas(
         "model-manager",
         networks=["slas-backend", "slas-inference"],
-        environment={"SLAS_GPU_IDS": "${SLAS_GPU_IDS}", "VLLM_NO_USAGE_STATS": "1"},
-        volumes=[f"{RUNTIME_SOCKET}:{RUNTIME_SOCKET}", f"{DATA}/Models:/data/Models"],
+        environment={
+            "SLAS_DATA_ROOT": "/data",
+            "SLAS_BIND": SERVICE_BIND,
+            "SLAS_RUNTIME_SOCKET": RUNTIME_SOCKET_IN_CONTAINER,
+            "SLAS_GPU_IDS": "${SLAS_GPU_IDS}",
+            "SLAS_GPU_VRAM_GIB": "${SLAS_GPU_VRAM_GIB:-270}",
+            "SLAS_HOST_MODELS_DIR": f"{DATA}/Models",
+            "SLAS_INFERENCE_NETWORK": INFERENCE_NETWORK_NAME,
+            "SLAS_VLLM_IMAGE": third_party("vllm"),
+            "SLAS_VLLM_SHM": "16g",
+            "SLAS_RECONCILE_INTERVAL_S": "30",
+            # The coder's instance loads alone, the rest once it answers (the Coding Agent
+            # needs that one first); 0 starts everything at once.
+            "SLAS_START_CODER_FIRST": "${SLAS_START_CODER_FIRST:-1}",
+            "VLLM_NO_USAGE_STATS": "1",
+            **service_urls(*URL_READERS["model-manager"]),
+        },
+        volumes=[
+            f"{RUNTIME_SOCKET}:{RUNTIME_SOCKET_IN_CONTAINER}",
+            f"{DATA}/Models:/data/Models",
+        ],
     )
     services["vector-db"] = _service(
         "vector-db",
@@ -235,7 +396,11 @@ def base_compose() -> dict[str, Any]:
         networks=["slas-knowledge", "slas-observability"],
         environment={"QDRANT__TELEMETRY_DISABLED": "true"},
         volumes=[f"{DATA}/qdrant:/qdrant/storage"],
-        healthcheck=_health("slas-health", "http://127.0.0.1:6333/readyz"),
+        healthcheck=_tcp(6333),
+        # The knowledge base starts only when SLAS_AGENTS names knowledge (ADR-0017).
+        # Qdrant opens one descriptor per segment file and panics at Docker's default soft
+        # limit of 1024 ("Too many open files"), so the limit is raised for this container.
+        extra={"profiles": ["knowledge"], "ulimits": {"nofile": NOFILE_LIMIT}},
     )
     services["local-search-api"] = _slas(
         "local-search-api",
@@ -243,22 +408,41 @@ def base_compose() -> dict[str, Any]:
         environment={"SEARCH_MODE": "internal_corpus"},
         volumes=[f"{DATA}/Knowledge:/data/Knowledge:ro"],
         depends_on=["vector-db"],
+        extra={"profiles": ["knowledge"]},
     )
+    # Opens sandboxes over the runtime socket (contract round 2 §4): the host data root is
+    # what it names in bind mounts, the toolchain manifest is what install.sh --build wrote
+    # from the sandbox images, and the registry label is the one those images were tagged with.
     services["sandbox-manager"] = _slas(
         "sandbox-manager",
         networks=["slas-backend"],
         environment={
+            "SLAS_DATA_ROOT": "/data",
+            "SLAS_BIND": SERVICE_BIND,
+            "SLAS_RUNTIME_SOCKET": RUNTIME_SOCKET_IN_CONTAINER,
+            "SLAS_HOST_DATA_ROOT": DATA,
+            "SLAS_TOOLCHAIN_MANIFEST": "/data/Toolchains/manifest.json",
+            "SLAS_SANDBOX_REGISTRY": "${SLAS_REGISTRY}",
+            "SLAS_SANDBOX_USER": "${SLAS_UID}:${SLAS_GID}",
             "DEFAULT_RUNTIME": "runsc",
             "SANDBOX_TIER": "gvisor",
             "DEFAULT_NETWORK": "none",
             "PIDS_LIMIT": "512",
         },
-        volumes=[f"{RUNTIME_SOCKET}:{RUNTIME_SOCKET}", f"{DATA}/Coding:/data/Coding"],
+        volumes=[
+            f"{RUNTIME_SOCKET}:{RUNTIME_SOCKET_IN_CONTAINER}",
+            f"{DATA}/Coding:/data/Coding",
+            f"{DATA}/Toolchains:/data/Toolchains:ro",
+        ],
     )
+    # The credential store and audit log live under ${SLAS_DATA_ROOT}/.git-broker (contract
+    # round 2 §7); config/git-hosts.yaml is writable because POST /v1/hosts renders it.
     services["git-broker"] = _slas(
         "git-broker",
         networks=["slas-backend", "slas-git"],
         environment={
+            "SLAS_DATA_ROOT": "/data",
+            "SLAS_BIND": SERVICE_BIND,
             "GIT_HOSTS_ALLOWLIST": "/etc/slas/git-hosts.yaml",
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_TERMINAL_PROMPT": "0",
@@ -266,16 +450,42 @@ def base_compose() -> dict[str, Any]:
         },
         volumes=[
             f"{DATA}/Coding:/data/Coding",
-            "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:ro",
+            f"{DATA}/.git-broker:/data/.git-broker",
+            "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:rw",
         ],
         secrets=["secret_key", "postgres_password"],
         tmpfs=["/run/slas-keys:mode=700,size=16m"],
         depends_on=["postgres"],
     )
+    # The only component with a route out (ADR-0018; CLAUDE.md §4.1 zone F): sole member of
+    # slas-egress, to the hub allowlist alone, through HTTPS_PROXY when .env names one. It
+    # writes Models/<id>/, SHA256SUMS, manifest.json and models.yaml and nothing else; no
+    # runtime socket, no credential store. Behind the `fetch` compose profile, which install.sh
+    # turns on for quickstart and never for prod (prod keeps the signed bundle path).
+    services["model-fetcher"] = _slas(
+        "model-fetcher",
+        networks=["slas-backend", "slas-egress"],
+        environment={
+            "SLAS_BIND": SERVICE_BIND,
+            "SLAS_MODELS_DIR": "/data/Models",
+            "SLAS_HUB_HOSTS": f"${{SLAS_HUB_HOSTS:-{HUB_HOSTS_DEFAULT}}}",
+            "HF_ENDPOINT": f"${{HF_ENDPOINT:-{HUB_ENDPOINT_DEFAULT}}}",
+            "HTTPS_PROXY": "${HTTPS_PROXY:-}",
+            "HF_TOKEN_FILE": "/run/secrets/hf_token",
+            # This one container is online by decision; the flag says so for whoever reads it.
+            "HF_HUB_OFFLINE": "0",
+        },
+        volumes=[f"{DATA}/Models:/data/Models"],
+        secrets=["hf_token"],
+        extra={"profiles": ["fetch"]},
+    )
     services["validation-executor"] = _slas(
         "validation-executor",
         networks=["slas-backend", "slas-observability", "slas-lab"],
         environment={
+            "SLAS_DATA_ROOT": "/data",
+            "SLAS_BIND": SERVICE_BIND,
+            "SLAS_TARGETS_REGISTRY": "/data/Validation/targets.json",
             "GUARDRAIL_POLICY": "/etc/slas/guardrails.yaml",
             "BMC_QUIRKS": "/etc/slas/bmc-quirks.yaml",
             "SYSLOG_LISTEN": "0.0.0.0:5514",
@@ -289,12 +499,25 @@ def base_compose() -> dict[str, Any]:
             "../config/bmc-quirks.yaml:/etc/slas/bmc-quirks.yaml:ro",
         ],
         tmpfs=["/run/slas-keys:mode=700,size=16m"],
+        # Started only when SLAS_AGENTS names validation (ADR-0017): COMPOSE_PROFILES=validation.
+        extra={"profiles": ["validation"]},
     )
+    # The shipped test-loop templates arrive read-only at /etc/slas/templates; the executor
+    # copies them into Factory/Templates when that directory is empty (copy semantics, contract
+    # round 2 §6) so a line's own templates and edits live under the data root. The enrolment
+    # endpoint (8444) listens on the factory network; the macvlan overlay gives it an address
+    # station runners can reach, and no port is published on the host (only edge does).
     services["factory-executor"] = _slas(
         "factory-executor",
         networks=["slas-backend", "slas-observability", "slas-factory"],
         environment={
+            "SLAS_DATA_ROOT": "/data",
+            "SLAS_BIND": SERVICE_BIND,
+            "SLAS_FACTORY_TEMPLATES": "/etc/slas/templates",
+            "ENROLMENT_LISTEN": "0.0.0.0:8444",
+            "STATION_RUNNER_PORT": "8443",
             "MES_ADAPTER": "file_drop",
+            "MES_INBOX": "/data/Factory/mes/inbox",
             "RUNNER_MTLS_CA": "/data/Factory/ca/ca.pem",
             "LLM_IN_CONTROL_LOOP": "false",
             "CREDENTIAL_SOURCE": "env",
@@ -305,7 +528,10 @@ def base_compose() -> dict[str, Any]:
             f"{DATA}/Backups/stations:/data/Backups/stations",
             f"{DATA}/Tickets:/data/Tickets",
             "../config/factory.yaml:/etc/slas/factory.yaml:ro",
+            "../templates/factory:/etc/slas/templates:ro",
         ],
+        # Started only when SLAS_AGENTS names factory (ADR-0017): COMPOSE_PROFILES=factory.
+        extra={"profiles": ["factory"]},
     )
     services["postgres"] = _service(
         "postgres",
@@ -330,7 +556,9 @@ def base_compose() -> dict[str, Any]:
         command=["redis-server", "/run/secrets/redis.conf"],
         volumes=["redis_data:/data"],
         secrets=["redis.conf"],
-        healthcheck=_health("redis-cli", "-a", "$(cat /run/secrets/redis_password)", "ping"),
+        healthcheck=_health_shell(
+            'redis-cli --no-auth-warning -a "$(cat /run/secrets/redis_password)" ping | grep -q PONG'
+        ),
     )
     services["redis"]["secrets"] = ["redis.conf", "redis_password"]
     services["minio"] = _service(
@@ -364,7 +592,7 @@ def base_compose() -> dict[str, Any]:
             "../observability/prometheus/rules.yml:/etc/prometheus/rules.yml:ro",
             "prometheus_data:/prometheus",
         ],
-        healthcheck=_health("slas-health", "http://127.0.0.1:9090/-/ready"),
+        healthcheck=_wget("http://127.0.0.1:9090/-/ready"),
     )
     services["alertmanager"] = _service(
         "alertmanager",
@@ -379,7 +607,7 @@ def base_compose() -> dict[str, Any]:
             "../observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro",
             "alertmanager_data:/alertmanager",
         ],
-        healthcheck=_health("slas-health", "http://127.0.0.1:9093/-/ready"),
+        healthcheck=_wget("http://127.0.0.1:9093/-/ready"),
     )
     services["grafana"] = _service(
         "grafana",
@@ -402,7 +630,7 @@ def base_compose() -> dict[str, Any]:
             "grafana_data:/var/lib/grafana",
         ],
         secrets=["grafana_admin_password"],
-        healthcheck=_health("slas-health", "http://127.0.0.1:3000/api/health"),
+        healthcheck=_health("curl", "-fsS", "-m", "5", "http://127.0.0.1:3000/api/health"),
         depends_on=["prometheus"],
     )
     services["dcgm-exporter"] = _service(
@@ -420,7 +648,7 @@ def base_compose() -> dict[str, Any]:
                 }
             }
         },
-        healthcheck=_health("slas-health", "http://127.0.0.1:9400/metrics"),
+        healthcheck=_tcp(9400),
     )
     services["node-exporter"] = _service(
         "node-exporter",
@@ -439,7 +667,7 @@ def base_compose() -> dict[str, Any]:
         ],
         volumes=["/:/host:ro,rslave"],
         extra={"pid": "host"},
-        healthcheck=_health("slas-health", "http://127.0.0.1:9100/metrics"),
+        healthcheck=_wget("http://127.0.0.1:9100/metrics"),
     )
     services["postgres-exporter"] = _service(
         "postgres-exporter",
@@ -452,7 +680,7 @@ def base_compose() -> dict[str, Any]:
             "DATA_SOURCE_PASS_FILE": "/run/secrets/postgres_password",
         },
         secrets=["postgres_password"],
-        healthcheck=_health("slas-health", "http://127.0.0.1:9187/metrics"),
+        healthcheck=_wget("http://127.0.0.1:9187/metrics"),
         depends_on=["postgres"],
     )
 
@@ -460,11 +688,15 @@ def base_compose() -> dict[str, Any]:
         name: {"file": f"{SECRETS}/{name}"}
         for name in (*QUICKSTART_SECRETS, "grafana_admin_password")
     }
+    networks: dict[str, Any] = {
+        name: ({"internal": True} if internal else {}) for name, internal in NETWORKS.items()
+    }
+    # Fixed name: the model manager attaches the vllm-* containers it creates to this network
+    # by name (SLAS_INFERENCE_NETWORK), and Prometheus and the gateway resolve them on it.
+    networks["slas-inference"]["name"] = INFERENCE_NETWORK_NAME
     return {
-        "name": "slas",
-        "networks": {
-            name: ({"internal": True} if internal else {}) for name, internal in NETWORKS.items()
-        },
+        "name": PROJECT_NAME,
+        "networks": networks,
         "volumes": {
             name: {}
             for name in (
@@ -528,7 +760,7 @@ def prod_override() -> dict[str, Any]:
         },
         volumes=["../config/keycloak/slas-realm.json:/opt/keycloak/data/import/slas-realm.json:ro"],
         secrets=["keycloak_admin_password", "keycloak_db_password"],
-        healthcheck=_health("slas-health", "http://127.0.0.1:9000/auth/health/ready"),
+        healthcheck=_tcp(9000),
         depends_on=["postgres"],
     )
     services["loki"] = _service(
@@ -538,7 +770,7 @@ def prod_override() -> dict[str, Any]:
         user="10001:10001",
         command=["-config.file=/etc/loki/loki.yml"],
         volumes=["../config/loki/loki.yml:/etc/loki/loki.yml:ro", "loki_data:/loki"],
-        healthcheck=_health("slas-health", "http://127.0.0.1:3100/ready"),
+        healthcheck=_wget("http://127.0.0.1:3100/ready"),
     )
     services["tempo"] = _service(
         "tempo",
@@ -547,7 +779,7 @@ def prod_override() -> dict[str, Any]:
         user="10001:10001",
         command=["-config.file=/etc/tempo/tempo.yml"],
         volumes=["../config/tempo/tempo.yml:/etc/tempo/tempo.yml:ro", "tempo_data:/var/tempo"],
-        healthcheck=_health("slas-health", "http://127.0.0.1:3200/ready"),
+        healthcheck=_wget("http://127.0.0.1:3200/ready"),
     )
     services["backup-runner"] = _service(
         "backup-runner",
@@ -638,11 +870,21 @@ def prod_override() -> dict[str, Any]:
         },
         "volumes": [
             f"{DATA}/Coding:/data/Coding",
-            "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:ro",
+            f"{DATA}/.git-broker:/data/.git-broker",
+            "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:rw",
             f"{DATA}/tls/vault/ca.crt:/vault-ca/ca.crt:ro",
         ],
         "secrets": ["vault_approle_role_id", "vault_approle_secret_id"],
         "depends_on": {"vault": {"condition": "service_healthy"}},
+    }
+    # Prod declares a third voter (config/models.prod.yaml), so Prometheus scrapes the prod
+    # list of vllm-voter-* instances; the base file's list is the quickstart one.
+    services["prometheus"] = {
+        "volumes": [
+            "../observability/prometheus/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro",
+            "../observability/prometheus/rules.yml:/etc/prometheus/rules.yml:ro",
+            "prometheus_data:/prometheus",
+        ]
     }
     for executor in ("validation-executor", "factory-executor"):
         services[executor] = {
@@ -665,6 +907,10 @@ def prod_override() -> dict[str, Any]:
         }
     }
     services["screen-worker"] = {"environment": {"DISPLAY_ISOLATION": "kata"}}
+    # model-fetcher (ADR-0018) stays off on prod: compose cannot remove a service in an
+    # override, so the base file keeps it behind the `fetch` profile, install.sh never adds
+    # `fetch` to COMPOSE_PROFILES for prod, and a leftover container is removed like the parts
+    # ADR-0017 turns off. Prod installs weights from the signed bundle only.
     for service in (
         "llm-gateway",
         "agent-core-orchestrator",
@@ -754,7 +1000,12 @@ HEADERS: Final[dict[str, str]] = {
         "unit test keeps file and code in step. No env_file: each service names the install-time\n"
         "keys it reads from .env; secrets are files under ${SLAS_DATA_ROOT}/secrets. Third-party\n"
         "images are pinned by an immutable tag whose digest and image ID live in\n"
-        "compose/images.lock.*; install.sh refuses to start an image the lock does not pin."
+        "compose/images.lock.*; install.sh refuses to start an image the lock does not pin.\n"
+        "Round 2 (ADR-0015): services reach each other through the SLAS_*_URL variables; the\n"
+        "vllm-* containers are not services here — model-manager starts them from SLAS_VLLM_IMAGE\n"
+        "on the slas_slas-inference network (docs/api-contract-round-2.md §3).\n"
+        "ADR-0018: model-fetcher, behind the `fetch` profile (COMPOSE_PROFILES on quickstart,\n"
+        "never on prod), is the only service with a route out: slas-egress, hub allowlist only."
     ),
     "prod.override.yml": (
         "The prod profile (CLAUDE.md §3, ADR-0012): Vault (credentials resolved at dispatch),\n"

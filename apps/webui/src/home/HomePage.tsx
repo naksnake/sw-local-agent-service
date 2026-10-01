@@ -3,10 +3,12 @@ import { useEffect, useState } from "react";
 import type { CodingApi, CodingTask } from "../coding/api";
 import type { FactoryApi, FactoryJob } from "../factory/api";
 import type { RunView, ValidationApi } from "../validation/api";
+import type { HomeListsApi } from "./api";
 
 // Home (docs/ui/home.md, from docs/ui-demo/slas-ui-demo.html): what is running now, and
 // what needs you. Everything here is derived from the three agents' own lists; Home never
-// holds state of its own.
+// holds state of its own. The lists come from `lists` (the api's list-only calls) when it is
+// given, otherwise from the agent APIs; the buttons need the agent APIs either way.
 
 export type AgentPage = "coding" | "validation" | "factory";
 
@@ -47,14 +49,15 @@ export interface ResultItem {
 const RUNNING_STATES = new Set(["Running", "Planned", "Approved", "Open", "Analysing"]);
 
 export async function snapshot(apis: {
+  lists?: HomeListsApi;
   codingApi?: CodingApi;
   validationApi?: ValidationApi;
   factoryApi?: FactoryApi;
 }): Promise<Snapshot> {
   const [tasks, runs, jobs] = await Promise.all([
-    apis.codingApi?.listTasks() ?? Promise.resolve([]),
-    apis.validationApi?.listRuns() ?? Promise.resolve([]),
-    apis.factoryApi?.listJobs() ?? Promise.resolve([]),
+    apis.lists?.listTasks() ?? apis.codingApi?.listTasks() ?? Promise.resolve([]),
+    apis.lists?.listRuns() ?? apis.validationApi?.listRuns() ?? Promise.resolve([]),
+    apis.lists?.listJobs() ?? apis.factoryApi?.listJobs() ?? Promise.resolve([]),
   ]);
   return { tasks, runs, jobs };
 }
@@ -207,33 +210,43 @@ export function healthSentence(s: Snapshot | null): string {
 }
 
 interface Props {
+  /** The api's list-only calls; when given, the lists come from here. */
+  lists?: HomeListsApi;
   codingApi?: CodingApi;
   validationApi?: ValidationApi;
   factoryApi?: FactoryApi;
+  /** "Signed in as Pat Lin. You can …" (docs/ui/sign-in.md, Home); absent when nobody is signed in. */
+  welcome?: string;
   /** Go to an agent's page; `wizard` opens its New … wizard on arrival. */
   onOpen: (page: AgentPage, wizard: boolean) => void;
   /** Called with every fresh snapshot so the shell can phrase the health line. */
   onSnapshot?: (s: Snapshot) => void;
 }
 
-export function HomePage({ codingApi, validationApi, factoryApi, onOpen, onSnapshot }: Props) {
+export function HomePage({ lists, codingApi, validationApi, factoryApi, welcome, onOpen, onSnapshot }: Props) {
   const [s, setS] = useState<Snapshot | null>(null);
   useEffect(() => {
     let live = true;
     void snapshot({
+      ...(lists !== undefined ? { lists } : {}),
       ...(codingApi !== undefined ? { codingApi } : {}),
       ...(validationApi !== undefined ? { validationApi } : {}),
       ...(factoryApi !== undefined ? { factoryApi } : {}),
-    }).then((snap) => {
-      if (live) {
-        setS(snap);
-        onSnapshot?.(snap);
-      }
-    });
+    })
+      .then((snap) => {
+        if (live) {
+          setS(snap);
+          onSnapshot?.(snap);
+        }
+      })
+      .catch(() => {
+        // A list that did not answer leaves Home empty rather than blank; the health line
+        // keeps "Looking at what is running…" and the next visit tries again.
+      });
     return () => {
       live = false;
     };
-  }, [codingApi, validationApi, factoryApi, onSnapshot]);
+  }, [lists, codingApi, validationApi, factoryApi, onSnapshot]);
 
   const attention = s === null ? [] : needsYou(s);
   const running = s === null ? [] : runningNow(s);
@@ -266,6 +279,11 @@ export function HomePage({ codingApi, validationApi, factoryApi, onOpen, onSnaps
       </div>
 
       <div className="stack">
+        {welcome !== undefined && (
+          <p className="sentence" data-testid="welcome">
+            {welcome}
+          </p>
+        )}
         {s === null && <p className="muted">Looking at what is running…</p>}
 
         {attention.map((item) => (

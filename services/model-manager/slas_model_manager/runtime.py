@@ -1,14 +1,19 @@
 """The container runtime boundary and the vLLM container spec (CLAUDE.md §7, §12).
 
-`--enable-prefix-caching` and `--guided-decoding-backend xgrammar` are mandatory on every
-generate instance; the airgap environment is mandatory on every container (INV-1, INV-2).
+`--enable-prefix-caching` and structured outputs with the xgrammar backend are mandatory on
+every generate instance (CLAUDE.md §7); the airgap environment is mandatory on every container
+(INV-1, INV-2). The backend travels as `--structured-outputs-config {"backend": "xgrammar"}`:
+vLLM removed the older `--guided-decoding-backend` flag, and an instance given it exits at
+start with "unrecognized arguments" before it loads a single weight.
 The Podman driver implementing `ContainerRuntime` arrives with its approved dependency;
 tests run against `FakeRuntime`.
 """
 
 from __future__ import annotations
 
-from typing import Final, Protocol
+import re
+from collections.abc import Mapping, Sequence
+from typing import Final, Literal, Protocol
 
 from pydantic import Field, model_validator
 
@@ -22,12 +27,77 @@ AIRGAP_ENV: Final[dict[str, str]] = {
     "HF_HUB_DISABLE_TELEMETRY": "1",
     "VLLM_NO_USAGE_STATS": "1",
 }
+#: The JSON vLLM's `--structured-outputs-config` takes (a fixed string, never built from
+#: input); `backend` names the grammar engine every generate instance must use.
+STRUCTURED_OUTPUTS_CONFIG: Final = '{"backend": "xgrammar"}'
 MANDATORY_GENERATE_FLAGS: Final[tuple[str, ...]] = (
     "--enable-prefix-caching",
-    "--guided-decoding-backend",
+    "--structured-outputs-config",
 )
 GENERATE_ROLES: Final[frozenset[str]] = frozenset({"coder", "planner", "triage"})
 INFERENCE_NETWORK: Final = "slas-inference"
+
+#: What a vLLM instance does: chat completions, embeddings, or reranking scores
+#: (docs/api-contract-round-2.md §3). vLLM removed `--task`; a pooling instance is asked for
+#: with `--runner pooling`, and an embedding model is converted with `--convert embed`. A
+#: reranker (a sequence-classification cross-encoder) scores as it is, so `score` carries
+#: the runner alone. Neither carries the generate flags.
+VllmTask = Literal["generate", "embed", "score"]
+TASK_FOR_ROLE: Final[dict[str, VllmTask]] = {"embed": "embed", "rerank": "score"}
+POOLING_FLAGS: Final[dict[VllmTask, tuple[str, ...]]] = {
+    "embed": ("--runner", "pooling", "--convert", "embed"),
+    "score": ("--runner", "pooling"),
+}
+
+
+#: The smallest context the manager falls back to when a model's stated context does not fit
+#: the GPU's KV cache; below this a coding task cannot hold a plan and a diff.
+MIN_CONTEXT: Final = 8192
+#: What vLLM logs before exiting when `--max-model-len` exceeds what the KV cache can hold
+#: after the weights are loaded. It exits within a minute or two of starting; with
+#: `restart: unless-stopped` that is an endless loop unless the context shrinks.
+KV_CACHE_TOO_SMALL: Final[tuple[str, ...]] = (
+    # Every vLLM version's wording ends with this advice; the two before it are the
+    # older and the newer statement of the problem, the last the cache-block variant.
+    "decreasing `max_model_len`",
+    "larger than the maximum number of tokens that can be stored in KV cache",
+    "larger than the available KV cache memory",
+    "No available memory for the cache blocks",
+)
+#: Newer vLLM says how long a context would fit; the manager never goes above that.
+KV_CACHE_ESTIMATE: Final = re.compile(r"estimated maximum model length is (\d+)")
+#: vLLM's flag for eager execution: no torch.compile, no CUDA graph capture. Slower, but it
+#: sidesteps a compiler or graph-capture crash on a GPU the build does not know well.
+EAGER_FLAG: Final = "--enforce-eager"
+
+
+def context_of(argv: Sequence[str]) -> int | None:
+    """The `--max-model-len` a container was created with, or None."""
+    for i, flag in enumerate(argv[:-1]):
+        value = str(argv[i + 1])
+        if flag == "--max-model-len" and value.isdigit():
+            return int(value)
+    return None
+
+
+def kv_cache_too_small(lines: Sequence[str]) -> bool:
+    return any(marker in line for line in lines for marker in KV_CACHE_TOO_SMALL)
+
+
+def kv_cache_estimate(lines: Sequence[str]) -> int | None:
+    """The context vLLM itself estimated would fit, rounded down to 1024 tokens, or None."""
+    for line in reversed(lines):
+        found = KV_CACHE_ESTIMATE.search(line)
+        if found:
+            return int(found.group(1)) // 1024 * 1024
+    return None
+
+
+def task_for_role(role: str | None) -> VllmTask:
+    """The vLLM task an instance serving `role` runs; a voter (no role) generates."""
+    if role is None:
+        return "generate"
+    return TASK_FOR_ROLE.get(role, "generate")
 
 
 class ContainerSpec(SlasModel):
@@ -66,7 +136,7 @@ class ContainerRef(SlasModel):
 class ContainerRuntime(Protocol):
     def start(self, spec: ContainerSpec) -> ContainerRef: ...
 
-    def stop(self, ref: ContainerRef) -> None: ...
+    def stop(self, ref: ContainerRef, *, timeout_s: int = 30) -> None: ...
 
     def is_healthy(self, ref: ContainerRef) -> bool: ...
 
@@ -81,14 +151,29 @@ def vllm_spec(
     image: str,
     models_dir: str = "/data/Models",
     generate: bool = True,
+    task: VllmTask = "generate",
+    max_model_len: int | None = None,
+    extra_args: Sequence[str] = (),
+    extra_env: Mapping[str, str] | None = None,
 ) -> ContainerSpec:
+    """The vLLM container for `entry` as `name` on `gpu_ids`.
+
+    `task` decides the flags: a generate instance carries the mandatory prefix-caching and
+    xgrammar flags (CLAUDE.md §7); an embed or score instance carries the pooling runner
+    flags and none of them. `generate=False` keeps the older meaning "no generate flags" for
+    callers that have no task to name. `max_model_len` lowers the registry's context when
+    the GPU's KV cache could not hold it (the registry's value stays the cap).
+    """
+    # `extra_args` and `extra_env` are the remedies the manager learnt from this instance's
+    # crashes (controller.REMEDIES): appended last, so they win over the defaults.
+    context = entry.context if max_model_len is None else min(entry.context, max_model_len)
+    # The model is `vllm serve`'s positional argument; `--model` is deprecated there.
     argv = [
-        "--model",
         f"{models_dir}/{entry.path}",
         "--served-model-name",
         entry.id,
         "--max-model-len",
-        str(entry.context),
+        str(context),
         "--tensor-parallel-size",
         str(len(gpu_ids)),
     ]
@@ -96,13 +181,24 @@ def vllm_spec(
         argv += ["--quantization", "fp8"]
     elif entry.quant == "awq4":
         argv += ["--quantization", "awq_marlin"]
-    if generate:
-        argv += ["--enable-prefix-caching", "--guided-decoding-backend", "xgrammar"]
+    if task != "generate":
+        argv += list(POOLING_FLAGS[task])
+    elif generate:
+        argv += [
+            "--enable-prefix-caching",
+            "--structured-outputs-config",
+            STRUCTURED_OUTPUTS_CONFIG,
+        ]
+    argv += list(extra_args)
     return ContainerSpec(
         name=name,
         image=image,
         argv=argv,
-        env={**AIRGAP_ENV, "CUDA_VISIBLE_DEVICES": ",".join(str(i) for i in gpu_ids)},
+        env={
+            **AIRGAP_ENV,
+            "CUDA_VISIBLE_DEVICES": ",".join(str(i) for i in gpu_ids),
+            **dict(extra_env or {}),
+        },
         gpu_ids=list(gpu_ids),
         model_id=entry.id,
     )
@@ -130,7 +226,7 @@ class FakeRuntime:
         self.started.append(spec.name)
         return ref
 
-    def stop(self, ref: ContainerRef) -> None:
+    def stop(self, ref: ContainerRef, *, timeout_s: int = 30) -> None:
         self._running.pop(ref.name, None)
         self.stopped.append(ref.name)
 

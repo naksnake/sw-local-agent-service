@@ -13,8 +13,28 @@ directly (CLAUDE.md §11).
 | `executor.py` | `CodingExecutor` (kernel-side, deterministic): opens the sandbox, runs the iterate loop with the `Coder` protocol and stall detection after 3 iterations without progress, commits with `Slas-Agent`/`Slas-Ticket` trailers, exports a ZIP, sends the final diff to the Consensus Router. |
 | `export.py` | Reproducible ZIP of the project without `.git`. |
 
-The gateway-backed `Coder`, `Breakdowner` and cross-checker adapters, and the service's HTTP
-surface, wait on the dependency decisions; everything here runs against fakes.
+| `coder.py` | `GatewayLike` (the gateway's `complete`/`generate`/`cross_check` signatures) and `GatewayCoder`: `Coder.propose_edits` through `generate(role="coder", …, EditSet)`; the prompt carries the task, the file snapshot and the last check output, never a credential. |
+
+## `slas_orchestrator.service` — the HTTP surface (round 2, ADR-0015)
+
+`slas-orchestrator serve` reads the settings from the environment (`SLAS_GATEWAY_URL`,
+`SLAS_SANDBOX_MANAGER_URL`, `SLAS_GIT_BROKER_URL`, `SLAS_VALIDATION_EXECUTOR_URL`,
+`SLAS_FACTORY_EXECUTOR_URL`, `SLAS_DATA_ROOT`, `SLAS_BIND`, `SLAS_GLOSSARY`,
+`SLAS_OWNER_ROUTING`) and serves `docs/api-contract-round-2.md` §5.
+
+| Module | What it does |
+|---|---|
+| `settings.py` | `Settings.from_env()`; which health checks are mandatory (gateway, sandbox manager). |
+| `app.py` | `create_app(...)` with every collaborator injectable; `/health` per the contract (optional zones reported, never fatal); the lazy `slas_llm_gateway.client.HttpGateway` import; one kernel per run (`build_coding_kernel`). |
+| `runs.py` | `RunRegistry`: one daemon thread per `Kernel.run()`, the ticket id learned through `TrackingStore`, a run that raises ends its ticket Failed with the sentence journalled. |
+| `coding.py` · `skills.py` · `tickets.py` | The routers of contract §5 for `/v1/coding`, `/v1/skills`, `/v1/tickets`. `validation.py` and `factory.py` arrive with the executor slice and are included in `app.py`. |
+| `views.py` | `coding_task_view()` (steps from the plan and the step records, feed from the journal, first line the toolchain choice) and the Home ticket rows. |
+| `deps.py` | The `Deps` container the routes share; `workspace_user()` (the email's local part is the name on disk and on tickets). |
+
+`slas_orchestrator.clients.HttpSandboxManager` is the sandbox manager over HTTP: it satisfies
+the executor's `SandboxAccess` protocol, computing paths locally (both containers mount the
+same `/data`) and sending open/exec over the wire; `TicketBoundExecutor` binds the ticket
+each step runs for, so the session request can name it.
 
 ## `slas_orchestrator.validation` — the Validation Agent (P7)
 

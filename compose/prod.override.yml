@@ -98,9 +98,8 @@ services:
       - ALL
     healthcheck:
       test:
-        - CMD
-        - slas-health
-        - http://127.0.0.1:9000/auth/health/ready
+        - CMD-SHELL
+        - "bash -c ':> /dev/tcp/127.0.0.1/9000' || exit 1"
       interval: 15s
       timeout: 5s
       retries: 8
@@ -140,7 +139,11 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - wget
+        - "-q"
+        - "--spider"
+        - "-T"
+        - "5"
         - http://127.0.0.1:3100/ready
       interval: 15s
       timeout: 5s
@@ -175,7 +178,11 @@ services:
     healthcheck:
       test:
         - CMD
-        - slas-health
+        - wget
+        - "-q"
+        - "--spider"
+        - "-T"
+        - "5"
         - http://127.0.0.1:3200/ready
       interval: 15s
       timeout: 5s
@@ -330,7 +337,8 @@ services:
       VAULT_KV_MOUNT: slas
     volumes:
       - "${SLAS_DATA_ROOT}/Coding:/data/Coding"
-      - "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:ro"
+      - "${SLAS_DATA_ROOT}/.git-broker:/data/.git-broker"
+      - "../config/git-hosts.yaml:/etc/slas/git-hosts.yaml:rw"
       - "${SLAS_DATA_ROOT}/tls/vault/ca.crt:/vault-ca/ca.crt:ro"
     secrets:
       - vault_approle_role_id
@@ -338,6 +346,11 @@ services:
     depends_on:
       vault:
         condition: service_healthy
+  prometheus:
+    volumes:
+      - "../observability/prometheus/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro"
+      - "../observability/prometheus/rules.yml:/etc/prometheus/rules.yml:ro"
+      - prometheus_data:/prometheus
   validation-executor:
     environment:
       CREDENTIAL_SOURCE: vault

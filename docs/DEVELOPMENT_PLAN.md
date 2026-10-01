@@ -7,6 +7,23 @@ when" is green in CI.
 
 Estimated effort is in Claude Code sessions of roughly 1–2 hours with review.
 
+## Focus after round 2 (ADR-0017, 2026-09-17)
+
+The owner set the delivery focus on the **Coding Agent**. Rounds 3 onward work in this order,
+each against the running quickstart install on the first GPU host:
+
+1. **Coding on real weights** — the coder loop against vLLM: prompt shape, edit-set schema,
+   check loop, stall handling, token budget; the walkthrough in both languages.
+2. **Git panel and terminal on the page** — status, commit, history, push through the broker,
+   bundles; the xterm.js terminal into the sandbox; a clone route.
+3. **Coding UX** — the activity feed, artefact download, per-task settings, skills for coding
+   (lint-and-test), the virtual desktop when a plan needs an IDE.
+4. **Validation and Factory** resume when a lab or a line is connected; they stay built and
+   tested against fakes meanwhile, and `./install.sh --agents coding,validation,factory`
+   starts them.
+
+P7–P10 below are complete against fakes; P8 and P10 wait for hardware and for this focus.
+
 ## Dependency map
 
 ```

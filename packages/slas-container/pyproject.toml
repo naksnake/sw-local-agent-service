@@ -1,0 +1,23 @@
+[project]
+name = "slas-container"
+version = "0.0.1"
+description = "The container runtime client: Docker Engine / Podman compat API over the runtime socket, for the model manager and the sandbox manager"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+# httpx is in the approved dependency set (ADR-0005, ADR-0015); it speaks HTTP over a Unix
+# socket, which is all this package needs. Nothing here reaches the network.
+dependencies = [
+  "httpx==0.28.1",
+  "pydantic==2.13.5",
+  "slas-schemas",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.uv.sources]
+slas-schemas = { workspace = true }

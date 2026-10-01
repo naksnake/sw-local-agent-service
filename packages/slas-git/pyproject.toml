@@ -4,7 +4,9 @@ version = "0.0.1"
 description = "Git engine shared by the broker and the workspace tooling"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = ["slas-schemas"]
+# cryptography seals Git credentials with AES-256-GCM (CLAUDE.md §5.7; ADR-0016). Pinned with ==
+# (INV-8); it ships wheels, so the offline bundle carries it like every other dependency.
+dependencies = ["cryptography==50.0.1", "slas-schemas"]
 
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9.0"]

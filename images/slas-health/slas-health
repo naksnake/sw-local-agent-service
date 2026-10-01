@@ -1,0 +1,111 @@
+#!/bin/sh
+# slas-health — the probe every compose healthcheck runs (CLAUDE.md §12, ADR-0003).
+#
+#   slas-health URL [--insecure-local]
+#
+# Exit 0 when the URL answers with HTTP 2xx, 1 otherwise, 2 for wrong usage. Uses whichever
+# of curl, wget (busybox is fine) or python3 the image has, so a slim image needs nothing
+# extra. --insecure-local skips TLS verification, and only for a loopback host: the edge
+# probes its own self-signed certificate at https://127.0.0.1/healthz; any other host is
+# refused, so the flag can never weaken a check against another service.
+#
+# Environment: SLAS_HEALTH_TIMEOUT (seconds, default 5); SLAS_HEALTH_TOOL=curl|wget|python3
+# forces one tool (the unit test exercises each).
+set -u
+
+usage() {
+  echo "Usage: slas-health URL [--insecure-local]" >&2
+  exit 2
+}
+
+url=""
+insecure=0
+for arg in "$@"; do
+  case "$arg" in
+    --insecure-local) insecure=1 ;;
+    -h|--help) usage ;;
+    -*) echo "slas-health: unknown option $arg" >&2; usage ;;
+    *) [ -z "$url" ] || usage; url="$arg" ;;
+  esac
+done
+[ -n "$url" ] || usage
+timeout="${SLAS_HEALTH_TIMEOUT:-5}"
+
+if [ "$insecure" -eq 1 ]; then
+  host="${url#*://}"
+  host="${host%%/*}"
+  case "$host" in
+    \[*) host="${host%%]*}]" ;;
+    *) host="${host%%:*}" ;;
+  esac
+  case "$host" in
+    127.0.0.1|localhost|"[::1]") ;;
+    *)
+      echo "slas-health: --insecure-local is only for 127.0.0.1, localhost or [::1], not $host." >&2
+      exit 2 ;;
+  esac
+fi
+
+tool="${SLAS_HEALTH_TOOL:-}"
+if [ -z "$tool" ]; then
+  if command -v curl >/dev/null 2>&1; then tool=curl
+  elif command -v wget >/dev/null 2>&1; then tool=wget
+  elif command -v python3 >/dev/null 2>&1; then tool=python3
+  else
+    echo "slas-health: none of curl, wget or python3 is in this image." >&2
+    exit 1
+  fi
+fi
+
+status=""
+case "$tool" in
+  curl)
+    # -L: follow redirects like wget and urllib do; the final answer is what counts.
+    set -- -s -o /dev/null -w '%{http_code}' --max-time "$timeout" -L --max-redirs 5
+    [ "$insecure" -eq 1 ] && set -- "$@" -k
+    status="$(curl "$@" "$url" 2>/dev/null || true)"
+    ;;
+  wget)
+    # -S prints the response headers (busybox and GNU alike); the last status line is the
+    # answer after redirects. GNU wget retries by default, busybox has no such option.
+    set -- -S -O /dev/null -T "$timeout"
+    if wget --version 2>/dev/null | grep -q GNU; then set -- "$@" -t 1; fi
+    [ "$insecure" -eq 1 ] && set -- "$@" --no-check-certificate
+    output="$(wget "$@" "$url" 2>&1 >/dev/null || true)"
+    status="$(printf '%s\n' "$output" | sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' | tail -n 1)"
+    ;;
+  python3)
+    status="$(python3 - "$url" "$insecure" "$timeout" <<'PY' 2>/dev/null || true
+import ssl
+import sys
+import urllib.error
+import urllib.request
+
+url, insecure, timeout = sys.argv[1], sys.argv[2] == "1", float(sys.argv[3])
+context = None
+if insecure:
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+try:
+    with urllib.request.urlopen(url, timeout=timeout, context=context) as response:
+        print(response.status)
+except urllib.error.HTTPError as error:
+    print(error.code)
+except Exception:  # noqa: BLE001 — any transport failure is "not healthy"
+    print("000")
+PY
+)"
+    ;;
+  *)
+    echo "slas-health: SLAS_HEALTH_TOOL must be curl, wget or python3, not $tool." >&2
+    exit 2 ;;
+esac
+
+[ "$status" = "000" ] && status=""   # curl and urllib say 000 when nothing answered
+case "$status" in
+  2[0-9][0-9]) exit 0 ;;
+  *)
+    echo "slas-health: $url answered ${status:-nothing} (a 2xx status is healthy)." >&2
+    exit 1 ;;
+esac

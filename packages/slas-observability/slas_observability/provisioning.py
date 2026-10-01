@@ -2,6 +2,7 @@
 writes them; `tests/unit/test_observability_files_in_step.py` fails when either side drifts.
 
     observability/prometheus/prometheus.yml            scrape jobs, rule file, Alertmanager
+    observability/prometheus/prometheus.prod.yml       the same with the prod registry's voters
     observability/prometheus/rules.yml                 recording and alert rules
     observability/alertmanager/alertmanager.yml        one receiver: the local channel webhook
     observability/grafana/provisioning/datasources/prometheus.yml
@@ -74,7 +75,9 @@ def render_json(document: Mapping[str, Any]) -> str:
 def rendered_files() -> dict[str, str]:
     """Relative path under `observability/` → content."""
     files = {
-        "prometheus/prometheus.yml": render_yaml(prometheus_config()),
+        "prometheus/prometheus.yml": render_yaml(prometheus_config("quickstart")),
+        # Mounted by compose/prod.override.yml: the same file with the prod registry's voters.
+        "prometheus/prometheus.prod.yml": render_yaml(prometheus_config("prod")),
         "prometheus/rules.yml": render_yaml(rules_config()),
         "alertmanager/alertmanager.yml": render_yaml(alertmanager_config()),
         "grafana/provisioning/datasources/prometheus.yml": render_yaml(grafana_datasource()),

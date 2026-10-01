@@ -10,7 +10,14 @@ import pytest
 
 from slas_cli.cli import EXIT_OK, EXIT_PROBLEMS, main
 from slas_cli.doctor.fakes import FakeHost
-from slas_sandbox_manager.images import DEBIAN_BASE, image_files, render_dockerfile
+from slas_sandbox_manager.images import (
+    BASES,
+    DEBIAN_BASE,
+    RECIPES,
+    image_files,
+    images_manifest,
+    render_dockerfile,
+)
 from slas_sandbox_manager.toolchains import (
     BY_ID,
     LANGUAGES,
@@ -22,6 +29,7 @@ from slas_sandbox_manager.toolchains import (
     image_for,
     language_spec,
     load_manifest,
+    load_manifest_file,
     manifest_path,
     resolve,
     resolve_all,
@@ -64,7 +72,10 @@ def test_resolver_picks_newest_honours_pins_and_explains_fallbacks() -> None:
     assert newest.sentence == (
         "Python: no version pinned, so the newest bundled python 3.12.6 is used."
     )
-    assert newest.image == "registry.internal/slas/sandbox-python:3.12.6"
+    assert newest.image == "local/slas/sandbox-python:3.12.6"
+    assert resolve("python", None, manifest, registry="registry.internal/").image == (
+        "registry.internal/slas/sandbox-python:3.12.6"
+    )
 
     pinned = resolve("python", "3.11.10", manifest)
     assert pinned.version == "3.11.10" and pinned.honoured
@@ -85,10 +96,11 @@ def test_resolver_picks_newest_honours_pins_and_explains_fallbacks() -> None:
     )
     assert rust.to_record() == {
         "language": "rust",
+        "label": "Rust",
         "requested": "1.99",
         "version": "1.80.1",
         "honoured": False,
-        "image": "registry.internal/slas/sandbox-rust:1.80.1",
+        "image": "local/slas/sandbox-rust:1.80.1",
         "sentence": rust.sentence,
     }
 
@@ -116,6 +128,8 @@ def test_manifest_round_trips_and_rejects_bad_shapes(tmp_path: Path) -> None:
     loaded = load_manifest(tmp_path)
     assert loaded.versions("python") == ["3.11.10", "3.12.6", "3.13.1"]
     assert loaded.companions["node"] == "22.22.2"
+    assert load_manifest_file(path).versions("python") == loaded.versions("python")
+    assert load_manifest_file(tmp_path / "absent.json").source == "<bundled default>"
     assert loaded.sentences()[0] == "Python (python): 3.11.10, 3.12.6, 3.13.1; newest 3.13.1."
     assert Manifest(toolchains={"c": ["13.2.0"]}).sentences()[0] == "Python: not in the bundle."
 
@@ -200,18 +214,48 @@ def test_slas_toolchain_list_and_add(tmp_path: Path) -> None:
 
 def test_sandbox_dockerfiles_are_rendered_from_code() -> None:
     files = image_files()
-    assert set(files) == {f"sandbox-{spec.id}/Dockerfile" for spec in LANGUAGES}
+    assert set(files) == {recipe.dockerfile for recipe in RECIPES}
+    assert {Path(rel).parent.name for rel in files} == {f"sandbox-{spec.id}" for spec in LANGUAGES}
+    assert "images/sandbox-python/Dockerfile.3.11.10" in files, "the older Python stays buildable"
+    digests = {base.reference for base in BASES}
     for rel, content in files.items():
-        path = REPO_ROOT / "images" / rel
-        assert path.read_text(encoding="utf-8") == content, path
-        assert f"FROM {DEBIAN_BASE}" in content and ":latest" not in content
-        assert "COPY toolchains/" in content and "--network" not in content
-        assert 'CMD ["sleep", "infinity"]' in content
+        path = REPO_ROOT / rel
+        assert path.read_text(encoding="utf-8") == content, (
+            f"{path} drifted; run `uv run python -m slas_sandbox_manager.images render`"
+        )
+        from_line = next(line for line in content.splitlines() if line.startswith("FROM "))
+        assert from_line.removeprefix("FROM ") in digests, f"{rel}: base not pinned by digest"
+        assert ":latest" not in content and "--network" not in content
+        assert "COPY toolchains/" not in content, "the connected variant downloads no bundle"
+        assert "COPY images/sandbox-common/slas-check.sh /usr/local/bin/slas-check" in content
+        assert 'CMD ["sleep", "infinity"]' in content and "USER 10001:10001" in content
         assert "GIT_CONFIG_GLOBAL=/etc/slas/gitconfig" in content
-    rust = render_dockerfile(BY_ID["rust"], "1.80.1")
-    assert "COPY toolchains/rust/1.80.1/ /opt/toolchain/" in rust
-    assert "SLAS_LANGUAGE=rust SLAS_TOOLCHAIN_VERSION=1.80.1" in rust
-    assert image_for("rust", "1.80.1") == "registry.internal/slas/sandbox-rust:1.80.1"
+        assert " git " in content, f"{rel} must install git"
+        assert 'grep -F "' in content, f"{rel} must check the toolchain version at build time"
+        assert not any(tool in content for tool in ("curl", "wget", "credential.helper")), rel
+    connected = render_dockerfile(BY_ID["rust"], "1.80.1")
+    assert "FROM docker.io/library/rust@sha256:" in connected
+    assert "rustup component add clippy rustfmt" in connected
+    assert 'RUN rustc --version 2>&1 | grep -F "1.80.1"' in connected
+    assert "SLAS_LANGUAGE=rust SLAS_TOOLCHAIN_VERSION=1.80.1" in connected
+    shell = render_dockerfile(BY_ID["shell"], "5.2.21")
+    assert "apk add --no-cache git make coreutils shellcheck bats" in shell
+    assert "adduser -D -u 10001" in shell, "the bash image is Alpine-based"
+    with pytest.raises(ValueError, match=r"no connected recipe builds Rust 1\.99"):
+        render_dockerfile(BY_ID["rust"], "1.99")
+
+    bundle = render_dockerfile(BY_ID["rust"], "1.80.1", source="bundle")
+    assert f"FROM {DEBIAN_BASE}" in bundle
+    assert "COPY toolchains/rust/1.80.1/ /opt/toolchain/" in bundle
+    assert "SLAS_LANGUAGE=rust SLAS_TOOLCHAIN_VERSION=1.80.1" in bundle
+    bundled = image_files(source="bundle")
+    assert set(bundled) == {f"images/sandbox-{spec.id}/Dockerfile" for spec in LANGUAGES}
+    assert all("COPY toolchains/" in content for content in bundled.values())
+
+    assert image_for("rust", "1.80.1") == "local/slas/sandbox-rust:1.80.1"
+    assert images_manifest().to_mapping() == default_manifest().to_mapping(), (
+        "the images provide exactly the toolchain versions the bundled manifest lists"
+    )
     script = REPO_ROOT / "images" / "sandbox-common" / "slas-check.sh"
     assert script.read_text(encoding="utf-8").startswith("#!/usr/bin/env bash")
     assert "set -euo pipefail" in script.read_text(encoding="utf-8")

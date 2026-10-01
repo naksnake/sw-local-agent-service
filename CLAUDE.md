@@ -4,9 +4,24 @@
 > this file first and treats it as authoritative. Where this file conflicts with a
 > request, surface the conflict; never resolve it silently.
 >
-> **Version 3.1 · 2026-09-10** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
+> **Version 3.6 · 2026-09-18** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
 > (phases, done criteria) and `docs/PROMPTS.md` (copy-paste session prompts).
-> 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14).
+> 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14). 3.2 records open decisions
+> 12–14 (model weights and voters) raised by the shipped model registries. 3.3 accepts the
+> `apps/api` stack (ADR-0005) and the build-from-source path for a connected quickstart host
+> (ADR-0014: `./install.sh --build` builds and pulls images and fetches weights on that host
+> before the stack starts; the running platform still downloads nothing, INV-1). 3.4 accepts
+> ADR-0015 (round 2, `docs/api-contract-round-2.md`): every service gets an HTTP surface
+> through `slas_http` and its console script's `serve` as container command; containers are
+> driven over the runtime socket with the Engine API (`slas_container`), so the model manager
+> starts the vLLM instances and the sandbox manager the sandboxes on Docker or Podman alike;
+> `install.sh --build` also builds the sandbox images, pulls the pinned vLLM image and names
+> the socket that exists; ADR-0016 pins `cryptography` for the git broker's AES-GCM credential sealer.
+> 3.5 records ADR-0017: the Coding Agent is the delivery focus; `SLAS_AGENTS` (default `coding`)
+> names the agents an installation starts, and the others stay built, tested and off (§1.4).
+> 3.6 records ADR-0018, the one recorded quickstart exception to INV-1 beside ADR-0014: the
+> `model-fetcher` service downloads weights from a pasted hub link on the Models page and
+> imports them into the registry; roles and voters change on that page (§4.1 zone F, §11).
 
 ---
 
@@ -86,13 +101,25 @@ extended by importing user-written skills.
 A cloud service · a chatbot · anything that flashes firmware, files tickets, marks a unit
 PASS or merges code without a human · a replacement for engineering judgement.
 
+### 1.4 Delivery focus: the Coding Agent (ADR-0017)
+The owner's decision of 2026-09-17: **the Coding Agent comes first.** An installation starts
+the agents named in `SLAS_AGENTS` (`./install.sh --agents …`); the default is `coding`. With
+that default the Validation and Factory executors and the knowledge base (Qdrant, local
+search; the Coding Agent reads it only from the RCA round on) are not built or started, their
+compose profiles stay off, and the WebUI shows Coding, Runs, Models, Skills and Admin without
+the Validation, Factory and Stations pages. Both agents stay in the repository, built on the same
+kernel and tested against fakes, and `--agents coding,validation,factory,knowledge` turns them
+on when a lab or a production line is connected. Work after round 2 improves the Coding Agent first:
+the model loop on real weights, the Git panel and terminal, the walkthrough, the virtual
+desktop. Nothing in §1.1, §2 or §4 changes; this is scope, not architecture.
+
 ---
 
 ## §2 HARD INVARIANTS (release blockers)
 
 | ID | Invariant |
 |---|---|
-| **INV-1** | No external network dependency at runtime — weights, images, packages, fonts, telemetry, CA, NTP. |
+| **INV-1** | No external network dependency at runtime — weights, images, packages, fonts, telemetry, CA, NTP. The one recorded quickstart exception is ADR-0018: `model-fetcher`, sole member of `slas-egress`, reaches the model hub allowlist and nothing else; prod does not start it. |
 | **INV-2** | No cloud AI services (OpenAI, Anthropic API, Azure/Vertex/Bedrock, Copilot, Codex, LangSmith, W&B cloud, HF Inference…). Offline libraries allowed with tracing off. |
 | **INV-3** | **The LLM is never in the hardware control loop.** Models compile plans and analyse results; a deterministic executor performs actions. Applies to power, firmware, GUI on stations, and anything with physical effect. |
 | **INV-4** | **Agents never touch the platform host.** OS-level control is of the machine the agent works *on* — sandbox, target server, factory station — never the host running the platform. No host X11 socket, `/dev/input`, or runtime socket is mounted into anything that runs model-authored or skill-authored steps. |
@@ -148,6 +175,7 @@ Node, shell tooling, yamllint/jsonschema); `slas toolchain list` shows what is a
 | **G Git broker** | clone/pull/push with injected credentials; bundle export/import | backend + `slas-git` (allowlisted Git hosts only) | plain container, no sockets, sole `slas-git` member |
 | **C Inference** | vLLM instances | inference net, no egress | GPU containers, managed |
 | **S Screen worker** | Xvfb + VNC + screen driver, per session | none (talks to orchestrator only) | gVisor |
+| **F Model fetcher** | downloads weights from a pasted hub link into `Models/`, imports the registry entry (ADR-0018) | backend + `slas-egress` (hub allowlist only); quickstart only | plain container, no sockets, sole `slas-egress` member |
 | **D Targets** | servers, stations | lab / factory | not ours |
 
 Zone A and Zone S never talk to vLLM. The kernel calls the gateway, then sends concrete
@@ -557,7 +585,15 @@ hot-swap; the Model Manager provides one by starting the candidate alongside, sm
 switching the gateway route, and draining the incumbent. `slas model fit` states VRAM need
 vs. free in a sentence before any load. Quantisation: FP8 on Hopper/Blackwell, AWQ 4-bit on
 Ada/Ampere, one BF16 reference kept for eval regression. `--enable-prefix-caching` and
-`--guided-decoding-backend xgrammar` are mandatory on every generate instance.
+`--structured-outputs-config {"backend": "xgrammar"}` are mandatory on every generate instance
+(the latter replaced vLLM's removed `--guided-decoding-backend xgrammar`; an instance given the
+old flag exits at start). `context` in the registry is a cap: when vLLM exits because that
+length does not fit the GPU's KV cache beside the weights, the Model Manager starts the instance
+again with half the context (never below 8192), says so on the Models page, and keeps the value.
+A crash with a known fix is a remedy the Model Manager applies once and keeps (an FP8 KV cache
+for DeepSeek's MLA layout, Marlin FP8 kernels when the build's CUTLASS kernels fail on the GPU,
+`--enforce-eager` for a warm-up death without an error); a crash-looping row names the stage
+the engine died in and its last lines.
 
 ## §8 LLMOps
 **8.1 Eval** — Ragas/TruLens configured against local vLLM only (`slas_eval/judges.py` is
@@ -673,9 +709,16 @@ parsed with macros/external entities off · TypeScript strict, no `any` without 
 component talking to vLLM; hosts the Consensus Router) · `services/model-manager` (only
 one starting inference containers) · `services/sandbox-manager` · `services/screen-worker`
 · `services/git-broker` (only component holding Git credentials or reaching Git hosts)
+· `services/model-fetcher` (the only component with hub egress, quickstart only, ADR-0018)
 · `services/validation-executor` and `services/factory-executor` (only ones touching
 targets, via `slas_hal` / station runner) · `packages/slas-kernel`, `slas-hal`,
-`slas-skills`, `slas-authz` (shared; authz runs where the action executes).
+`slas-skills`, `slas-authz` (shared; authz runs where the action executes). Every service
+exposes HTTP through `packages/slas-http` (ADR-0015): `create_service_app()` gives it
+`/health` with named checks, `/metrics`, the trace middleware and three-part errors; uvicorn
+on `0.0.0.0:8000`; callers use `ServiceClient` with the identity headers, never a token. The
+routes are in `docs/api-contract-round-2.md`; compose hands every caller the `SLAS_*_URL` of
+what it calls. The two socket holders create containers through `packages/slas-container`
+(the Engine API over `SLAS_RUNTIME_SOCKET`), never a CLI.
 
 **Tool-call fallback tiers:** 0 constrained decoding (`guided_json`, mandatory) → 1 retry
 ≤ 2 with the validation error as a tool result → 2 simplified schema + one-shot → 3
@@ -709,6 +752,7 @@ networks:
   slas-lab: {}                                    # validation-executor ONLY (macvlan in prod)
   slas-factory: {}                                # factory-executor ONLY
   slas-git: {}                                    # git-broker ONLY; egress allowlisted to config/git-hosts.yaml
+  slas-egress: {}                                 # model-fetcher ONLY; the hub allowlist (ADR-0018); quickstart only
 services:
   edge:        { <<: *common, image: registry.internal/slas/edge@sha256:…, networks: [slas-edge, slas-frontend], ports: ["443:443"] }
   webui:       { <<: *common, image: registry.internal/slas/webui@sha256:…, networks: [slas-frontend] }
@@ -728,25 +772,46 @@ services:
                  environment: { <<: *airgap, SCHEMA_ENFORCE: strict, CONSENSUS_DEFAULT_VOTERS: "3", CONSENSUS_TOKEN_BUDGET_PCT: "5" } }
   model-manager: { <<: *common, image: registry.internal/slas/model-manager@sha256:…,
                  networks: [slas-backend, slas-inference],
-                 volumes: ["/run/podman/podman.sock:/run/podman/podman.sock", "${SLAS_DATA_ROOT}/Models:/data/Models"] }
-  # vllm-cluster: vllm-coder, vllm-planner, vllm-triage, vllm-embed, vllm-rerank are CREATED by model-manager
-  #               from Models/models.yaml (networks: [slas-inference], ipc: host, shm 16g, VLLM_NO_USAGE_STATS=1, GPU ids per role).
+                 environment: { SLAS_GATEWAY_URL: "http://llm-gateway:8000", SLAS_VLLM_IMAGE: "${SLAS_REGISTRY}/vllm/vllm-openai:v0.29.0-x86_64-cu129",
+                                SLAS_INFERENCE_NETWORK: slas_slas-inference, SLAS_HOST_MODELS_DIR: "${SLAS_DATA_ROOT}/Models", SLAS_GPU_VRAM_GIB: "270" },
+                 volumes: ["${SLAS_RUNTIME_SOCKET:-/run/podman/podman.sock}:/run/podman/podman.sock", "${SLAS_DATA_ROOT}/Models:/data/Models"] }
+  # vllm-cluster: vllm-coder, vllm-planner, vllm-triage, vllm-embed, vllm-rerank and one vllm-voter-<model-id> per voter are
+  #               CREATED by model-manager over the runtime socket (Engine API, ADR-0015) from Models/models.yaml and the vLLM
+  #               image the lock pins (`started_by: model-manager`; pulled by install.sh --build, saved in the bundle, never a
+  #               compose service): network slas_slas-inference, ipc: host, shm 16g, VLLM_NO_USAGE_STATS=1, GPUs per placement.
+  # Round 2 (ADR-0015): every first-party service serves HTTP on 0.0.0.0:8000 (SLAS_BIND) and finds the others through
+  #               SLAS_GATEWAY_URL · SLAS_MODEL_MANAGER_URL · SLAS_SANDBOX_MANAGER_URL · SLAS_ORCHESTRATOR_URL ·
+  #               SLAS_GIT_BROKER_URL · SLAS_VALIDATION_EXECUTOR_URL · SLAS_FACTORY_EXECUTOR_URL (http://<service>:8000),
+  #               set by compose on the services that read them (docs/api-contract-round-2.md §1).
   vector-db:   { <<: *common, image: registry.internal/qdrant/qdrant@sha256:…, networks: [slas-knowledge, slas-observability],
                  environment: { QDRANT__TELEMETRY_DISABLED: "true" } }
   local-search-api: { <<: *common, image: registry.internal/slas/local-search-api@sha256:…,  # §8.3 Option A by default
                  networks: [slas-knowledge, slas-inference], environment: { SEARCH_MODE: internal_corpus } }
   sandbox-manager: { <<: *common, image: registry.internal/slas/sandbox-manager@sha256:…, networks: [slas-backend],
-                 environment: { DEFAULT_RUNTIME: runsc, DEFAULT_NETWORK: none, PIDS_LIMIT: "512" },
-                 volumes: ["/run/podman/podman.sock:/run/podman/podman.sock", "${SLAS_DATA_ROOT}/Coding:/data/Coding"],
+                 environment: { DEFAULT_RUNTIME: runsc, DEFAULT_NETWORK: none, PIDS_LIMIT: "512", SLAS_HOST_DATA_ROOT: "${SLAS_DATA_ROOT}",
+                                SLAS_TOOLCHAIN_MANIFEST: /data/Toolchains/manifest.json, SLAS_SANDBOX_REGISTRY: "${SLAS_REGISTRY}" },
+                 volumes: ["${SLAS_RUNTIME_SOCKET:-/run/podman/podman.sock}:/run/podman/podman.sock", "${SLAS_DATA_ROOT}/Coding:/data/Coding",
+                           "${SLAS_DATA_ROOT}/Toolchains:/data/Toolchains:ro"],
                  security_opt: ["no-new-privileges:true"], cap_drop: [ALL] }
-                 # sandbox images ship `git` for local commits; sandboxes get NO remote route and NO credentials (INV-14)
+                 # sandbox images ship `git` for local commits; sandboxes get NO remote route and NO credentials (INV-14).
+                 # install.sh --build builds them from the sandbox manager's list (`python -m slas_sandbox_manager.images list`)
+                 # and writes Toolchains/manifest.json; they are not compose services and not in compose/images.lock.*.
+                 # SLAS_RUNTIME_SOCKET: install.sh names Docker's socket when it exists (the stack runs on `docker compose`,
+                 # so the images it builds or loads live in Docker's store); Podman's is the default only without Docker.
   git-broker:  { <<: *common, image: registry.internal/slas/git-broker@sha256:…,           # §5.7 — the ONLY holder of Git credentials
                  networks: [slas-backend, slas-git],                                       # ONLY member of slas-git
                  environment: { <<: *airgap, GIT_HOSTS_ALLOWLIST: /etc/slas/git-hosts.yaml, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0",
                                 CRED_STORE: "postgres+aesgcm" },                           # prod override: CRED_STORE: vault
-                 volumes: ["${SLAS_DATA_ROOT}/Coding:/data/Coding", "./config/git-hosts.yaml:/etc/slas/git-hosts.yaml:ro"],
+                 volumes: ["${SLAS_DATA_ROOT}/Coding:/data/Coding", "${SLAS_DATA_ROOT}/.git-broker:/data/.git-broker",
+                           "./config/git-hosts.yaml:/etc/slas/git-hosts.yaml:rw"],        # rw: Admin → Git hosts renders it (round 2)
                  tmpfs: ["/run/slas-keys:mode=700,size=16m"],                              # per-operation SSH key files, shredded after use
                  security_opt: ["no-new-privileges:true"], cap_drop: [ALL] }
+  model-fetcher: { <<: *common, image: registry.internal/slas/model-fetcher@sha256:…,       # ADR-0018 — the ONLY component with egress; quickstart only
+                 networks: [slas-backend, slas-egress], profiles: [fetch],                 # COMPOSE_PROFILES gains `fetch` on quickstart, never on prod
+                 environment: { SLAS_MODELS_DIR: /data/Models, SLAS_HUB_HOSTS: "huggingface.co,cdn-lfs.huggingface.co,*.hf.co",
+                                HF_ENDPOINT: "${HF_ENDPOINT}", HTTPS_PROXY: "${HTTPS_PROXY}", HF_TOKEN_FILE: /run/secrets/hf_token },
+                 volumes: ["${SLAS_DATA_ROOT}/Models:/data/Models"], secrets: [hf_token],   # writes Models/<path>/, SHA256SUMS, manifest.json, models.yaml
+                 security_opt: ["no-new-privileges:true"], cap_drop: [ALL] }               # no runtime socket, no credential store, no model context
   validation-executor: { <<: *common, image: registry.internal/slas/validation-executor@sha256:…,   # + NVQual, MFT, fio, stress-ng, perftest
                  networks: [slas-backend, slas-observability, slas-lab],
                  environment: { GUARDRAIL_POLICY: /etc/slas/guardrails.yaml, SYSLOG_LISTEN: "0.0.0.0:5514", LLM_IN_CONTROL_LOOP: "false" } }
@@ -774,10 +839,10 @@ sw-local-agent-service/
 ├── CLAUDE.md  README.md  install.sh
 ├── docs/{DEVELOPMENT_PLAN.md, PROMPTS.md, adr/, runbooks/, ui/, ui-demo/, golden-set/, glossary.yaml}
 ├── apps/{webui, api}
-├── services/{agent-core-orchestrator, llm-gateway, model-manager, sandbox-manager, screen-worker,
+├── services/{agent-core-orchestrator, llm-gateway, model-manager, model-fetcher, sandbox-manager, screen-worker,
 │             git-broker, validation-executor, factory-executor, station-runner, local-search-api, edge}
 ├── packages/{slas-kernel, slas-schemas, slas-authz, slas-hal, slas-skills, slas-screen, slas-git,
-│             slas-diff, slas-triage, slas-rag, slas-sop, slas-eval, slas-cli}
+│             slas-diff, slas-triage, slas-rag, slas-sop, slas-eval, slas-cli, slas-fetch}
 ├── plans/{schema/plan.schema.json, primitives/}          # Validation/Factory plan verbs
 ├── skills/{schema/skill.schema.json, library/}           # shipped skills
 ├── templates/factory/                                    # test-loop templates
@@ -809,6 +874,18 @@ PDU vs relay; (4) BMC fleet homogeneity → HAL quirk scope; (5) `.xlsx` suite s
 (8) MES integration: file drop, REST, or database; (9) Chinese default zh-Hant confirmed?
 (10) Git host allowlist — internal GitLab/Gitea only, or is `github.com` an approved INV-1
 exception? (11) Default remote auth — deploy keys / project tokens recommended over personal
-credentials; confirm the policy.
+credentials; confirm the policy. (12) Quickstart voters — `config/models.quickstart.yaml`
+ships two voters from two families (DeepSeek-V4 Flash, Qwen3.8), so with the router's fixed
+panel of 3 (§5.3) every quickstart cross-check is reported as a weaker check and unanimous
+decisions cannot be met; accept that for quickstart, add a third family (about 215 GiB more
+on a fourth GPU, as `models.prod.yaml` does with MiniMax-M2.7), or make the panel size a
+per-profile rule. (13) Fetching weights on the platform host — INV-1 covers the running
+platform; the runbooks assume a separate connected build host, and `scripts/fetch_models.py`
+also works on the platform host before it is installed. ADR-0014 allows that preparation
+window on a connected quickstart host (`--fetch-models`, `--build`); the prod path keeps the
+separate build host and the signed bundle. (14) Voter instances — the model manager starts one vLLM instance per
+role and one per voter; a voter that is the same model as a role gets a second instance. The
+shipped registries are laid out for that; letting a voter share the role's instance would
+free GPUs and needs an ADR (boundary of `services/model-manager`).
 
 *End of CLAUDE.md*

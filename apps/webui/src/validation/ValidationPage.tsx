@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
+import { isLive, POLL_INTERVAL_MS, usePolling } from "../api/polling";
+import { agents } from "../copy/en";
 import { type CycleStatus, type RunView, STATUS_WORD, type ValidationApi } from "./api";
 import { NewValidationRunWizard } from "./NewValidationRunWizard";
 
 // The Validation page (CLAUDE.md §9, §10.2): runs with their LED cycle map, console and
-// findings, and one primary action — New validation run. Copy: docs/ui/validation.md.
+// findings, and one primary action — New validation run. The list is re-read every few
+// seconds while a run is still moving (live progress). Copy: docs/ui/validation.md.
 
 interface Props {
   api: ValidationApi;
@@ -27,9 +30,14 @@ export function ValidationPage({ api, user = "you", startWizardOpen = false }: P
   const [runs, setRuns] = useState<RunView[] | null>(null);
   const [wizardOpen, setWizardOpen] = useState(startWizardOpen);
 
+  const refresh = useCallback(async () => setRuns(await api.listRuns()), [api]);
+
   useEffect(() => {
-    void api.listRuns().then(setRuns);
-  }, [api]);
+    void refresh().catch(() => {
+      // The page stays on "Loading runs…"; the next poll or visit tries again.
+    });
+  }, [refresh]);
+  usePolling(refresh, runs?.some((run) => isLive(run.state)) === true ? POLL_INTERVAL_MS : null);
 
   function replace(run: RunView) {
     setRuns((current) => (current ?? []).map((r) => (r.ticketId === run.ticketId ? run : r)));
@@ -136,17 +144,29 @@ export function ValidationPage({ api, user = "you", startWizardOpen = false }: P
                       </p>
                     ) : (
                       <ul className="mt-1 space-y-2" aria-label={`${run.ticketId} findings`}>
-                        {run.findings.map((finding) => (
-                          <li key={finding.ticketId} className="text-sm">
-                            {finding.sentence}. Owner: {finding.owner}.{" "}
-                            <button
-                              type="button"
-                              className="rounded-md border border-slate-300 px-2 py-0.5 text-sm dark:border-slate-700"
-                              aria-label={`Review ticket ${finding.ticketId}`}
-                            >
-                              Review ticket
-                            </button>
+                        {run.findings.map((finding, index) => (
+                          <li key={finding.ticketId || `finding-${index}`} className="text-sm">
+                            {finding.sentence}. {finding.owner === "" ? agents.ownerUnknown : `Owner: ${finding.owner}.`}
+                            {finding.ticketId !== "" && (
+                              <>
+                                {" "}
+                                <button
+                                  type="button"
+                                  className="rounded-md border border-slate-300 px-2 py-0.5 text-sm dark:border-slate-700"
+                                  aria-label={`Review ticket ${finding.ticketId}`}
+                                >
+                                  Review ticket
+                                </button>
+                              </>
+                            )}
                           </li>
+                        ))}
+                      </ul>
+                    )}
+                    {run.votes !== undefined && run.votes.length > 0 && (
+                      <ul className="mt-2 space-y-1 text-sm text-slate-700 dark:text-slate-300" aria-label={`${run.ticketId} votes`}>
+                        {run.votes.map((vote, index) => (
+                          <li key={index}>{vote}</li>
                         ))}
                       </ul>
                     )}

@@ -1,20 +1,24 @@
 # Sandbox image for TypeScript (typescript 5.9.3) — CLAUDE.md §4.1 Zone A.
-# Rendered from slas_sandbox_manager.images; a unit test keeps this file in step.
-# The toolchain is copied from the offline bundle at build time; nothing is downloaded.
-# Base pinned by digest (INV-8): debian:bookworm-20250908-slim
-FROM docker.io/library/debian@sha256:df52e55e3361a81ac1bead266f3373ee55d29aa50cf0975d440c2be3483d8ed3
+# Rendered from slas_sandbox_manager.images; a unit test keeps this file in step. Build
+# from the repository root:  docker build -f images/sandbox-typescript/Dockerfile -t local/slas/sandbox-typescript:5.9.3 .
+# Connected build (ADR-0014): the toolchain comes from the pinned upstream image and the
+# pinned installs below; the offline bundle variant is rendered with --source bundle.
+# Base pinned by digest (INV-8): node:22.22.2-bookworm-slim
+FROM docker.io/library/node@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e
 
-# TODO(SLAS-IMAGES): pin apt package versions from a snapshot mirror in the bundle build
-# (INV-8); the platform builds images offline from a vendored apt cache.
+# TODO(SLAS-IMAGES): pin apt package versions from a snapshot mirror in the bundle
+# build (INV-8); on the connected path this reaches the Debian mirror (ADR-0014).
 RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates make \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git make \
  && rm -rf /var/lib/apt/lists/*
 
-# The bundled toolchain: Toolchains/typescript/5.9.3/ from the offline bundle.
-COPY toolchains/typescript/5.9.3/ /opt/toolchain/
-ENV PATH="/opt/toolchain/bin:${PATH}" SLAS_LANGUAGE=typescript SLAS_TOOLCHAIN_VERSION=5.9.3
+RUN npm install -g typescript@5.9.3 && npm cache clean --force
+ENV SLAS_LANGUAGE=typescript SLAS_TOOLCHAIN_VERSION=5.9.3 npm_config_update_notifier=false npm_config_fund=false
+# The image provides exactly the version the toolchain manifest lists; the build fails
+# otherwise, so the images and Toolchains/manifest.json cannot drift apart.
+RUN tsc --version 2>&1 | grep -F "5.9.3"
 
-COPY sandbox-common/slas-check.sh /usr/local/bin/slas-check
+COPY images/sandbox-common/slas-check.sh /usr/local/bin/slas-check
 RUN chmod 0755 /usr/local/bin/slas-check \
  && useradd --create-home --uid 10001 --shell /usr/sbin/nologin workspace \
  && mkdir -p /workspace /scratch /etc/slas && chown 10001:10001 /workspace /scratch
@@ -25,4 +29,5 @@ ENV GIT_CONFIG_GLOBAL=/etc/slas/gitconfig GIT_TERMINAL_PROMPT=0 HOME=/scratch
 
 USER 10001:10001
 WORKDIR /workspace
+ENTRYPOINT []
 CMD ["sleep", "infinity"]

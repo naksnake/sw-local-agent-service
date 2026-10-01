@@ -164,7 +164,8 @@ def test_one_trace_id_spans_webui_api_orchestrator_gateway_vllm_and_executor(
         for headers in vllm.headers:
             assert tracing.parse_traceparent(headers["traceparent"]) == trace_id
             assert headers["x-slas-trace-id"] == trace_id
-        assert all(body["guided_json"] for body in vllm.bodies)
+        assert all(isinstance(body.get("response_format"), dict) for body in vllm.bodies)
+        assert all("guided_json" not in body for body in vllm.bodies), "removed in vLLM"
 
         # orchestrator → executor: every step's context carried it.
         assert {context.trace_id for context in executor.contexts} == {trace_id}

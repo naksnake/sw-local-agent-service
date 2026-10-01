@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import stat
 from datetime import UTC, datetime
@@ -143,15 +142,17 @@ def test_fake_sealer_round_trips_and_detects_tampering() -> None:
         sealer.open(sealed[:-1] + bytes([sealed[-1] ^ 1]), aad=b"cred-1|pat")
 
 
-def test_aes_gcm_sealer_says_what_it_needs_when_the_package_is_absent() -> None:
-    if importlib.util.find_spec("cryptography") is not None:  # pragma: no cover — once approved
-        sealer = AesGcmSealer(derive_key(SECRET_KEY))
-        assert sealer.open(sealer.seal(b"x", aad=b"a"), aad=b"a") == b"x"
-        return
-    with pytest.raises(CredentialError) as raised:
-        AesGcmSealer(derive_key(SECRET_KEY))
-    assert raised.value.message.what_happened == "The AES-GCM sealer is not available on this host."
-    assert "cryptography" in raised.value.message.likely_cause
+def test_aes_gcm_sealer_seals_and_refuses_a_wrong_owner_or_altered_ciphertext() -> None:
+    """AES-256-GCM via `cryptography` (ADR-0016): the production sealer of the git broker."""
+    sealer = AesGcmSealer(derive_key(SECRET_KEY))
+    sealed = sealer.seal(b"glpat-secret", aad=b"cred-1|pat")
+    assert b"glpat-secret" not in sealed
+    assert sealer.open(sealed, aad=b"cred-1|pat") == b"glpat-secret"
+    assert sealer.seal(b"glpat-secret", aad=b"cred-1|pat") != sealed  # a fresh nonce every time
+    with pytest.raises(Exception, match=""):
+        sealer.open(sealed, aad=b"cred-1|someone-else")
+    with pytest.raises(ValueError, match="32-byte key"):
+        AesGcmSealer(b"short")
 
 
 def test_encrypted_store_keeps_ciphertext_by_reference_and_scopes_by_owner(tmp_path: Path) -> None:

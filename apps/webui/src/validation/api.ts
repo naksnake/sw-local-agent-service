@@ -1,8 +1,11 @@
 // The Validation page's view of the API (CLAUDE.md §9, §10.2). Types mirror the Python
 // schemas in slas_orchestrator.validation and slas_validation_executor; the sentences the
 // fake produces are the ones the compiler, the guardrails and the executor produce, so the
-// UI copy is exercised end to end. `FakeValidationApi` stands in until apps/api exists.
-// Nothing here carries a credential: targets are opaque references, the vault holds the rest.
+// UI copy is exercised end to end. `HttpValidationApi` (./http.ts) is what production uses;
+// `FakeValidationApi` serves `pnpm dev`. Nothing here carries a credential: targets are opaque
+// references, the vault holds the rest.
+
+import { agents } from "../copy/en";
 
 export interface SuiteItemView {
   n: number;
@@ -13,6 +16,9 @@ export interface SuiteItemView {
   /** The suite author flagged the destructive step as approved; without it the plan is refused. */
   approved: boolean;
   sentence: string;
+  /** The primitive the compiler chose (api only); carried back unchanged on preview and start. */
+  action?: string;
+  params?: Record<string, string>;
 }
 
 export interface SuiteView {
@@ -20,6 +26,9 @@ export interface SuiteView {
   items: SuiteItemView[];
   /** A three-part sentence when the suite could not be read; items is then empty. */
   problem: string | null;
+  /** The file the api parsed and its own one-line summary (api only); carried back unchanged. */
+  source?: string;
+  sentence?: string;
 }
 
 export interface TargetView {
@@ -28,6 +37,9 @@ export interface TargetView {
   free: boolean;
   /** "lab-gx8-02 is leased to T-validation-0007 (lee) until …" when busy. */
   holder: string | null;
+  /** Armed for destructive steps by an administrator (api only). */
+  armed?: boolean;
+  sentence?: string;
 }
 
 export interface PlanPreview {
@@ -52,7 +64,9 @@ export interface CycleCellView {
 
 export interface FindingView {
   sentence: string;
+  /** Empty when the api has not routed the finding yet. */
   owner: string;
+  /** The child bug ticket; empty when none has been spawned yet. */
   ticketId: string;
 }
 
@@ -67,6 +81,8 @@ export interface RunView {
   findings: FindingView[];
   /** Step titles still waiting for a person; empty once the run may act. */
   approvalsPending: string[];
+  /** The Consensus Router's sentences on the plan and the analysis (api only). */
+  votes?: string[];
 }
 
 export interface ValidationApi {
@@ -153,6 +169,9 @@ export class FakeValidationApi implements ValidationApi {
     const lines = text.split(/\r?\n/);
     const heading = lines.find((l) => l.startsWith("# "))?.slice(2).trim();
     const title = heading ?? filename.replace(/\.(md|xlsx)$/i, "").replace(/[-_]/g, " ");
+    if (/\.xlsx$/i.test(filename)) {
+      return { title, items: [], problem: agents.xlsxNotInFake(filename) };
+    }
     if (text.trim() === "") {
       return {
         title,

@@ -31,7 +31,29 @@ class FakeHost:
     files: dict[str, str] = field(default_factory=dict)
     ports: dict[int, bool | None] = field(default_factory=dict)
     environment: dict[str, str] = field(default_factory=dict)
+    sockets: set[str] = field(default_factory=set)
+    #: (socket path, URL path) → the body a 2xx answer carries; anything else answers None.
+    http: dict[tuple[str, str], str] = field(default_factory=dict)
     calls: list[tuple[str, ...]] = field(default_factory=list)
+    http_calls: list[tuple[str, str]] = field(default_factory=list)
+
+    #: What Docker's `GET /version` answers, cut to what the checks read.
+    DOCKER_VERSION_BODY = (
+        '{"Platform":{"Name":"Docker Engine - Community"},"Components":[{"Name":"Engine",'
+        '"Version":"29.0.1"},{"Name":"containerd","Version":"2.1.4"}],"Version":"29.0.1",'
+        '"ApiVersion":"1.52"}'
+    )
+    #: Podman's compat API answer to the same route.
+    PODMAN_VERSION_BODY = (
+        '{"Platform":{"Name":"linux/amd64/ubuntu-24.04"},"Components":[{"Name":"Podman Engine",'
+        '"Version":"4.9.3"},{"Name":"Conmon","Version":"2.1.10"}],"Version":"4.9.3",'
+        '"ApiVersion":"1.41"}'
+    )
+    #: `GET /info` cut to the runtimes, as both engines report them.
+    INFO_BODY_RUNSC_NVIDIA = (
+        '{"Runtimes":{"runc":{"path":"runc"},"runsc":{"path":"/usr/local/bin/runsc"},'
+        '"nvidia":{"path":"nvidia-container-runtime"}},"DefaultRuntime":"runc"}'
+    )
 
     @classmethod
     def healthy(cls, data_root: str = "/AI/Agent") -> FakeHost:
@@ -68,7 +90,20 @@ class FakeHost:
         host.files["/proc/sys/user/max_user_namespaces"] = "28633\n"
         host.files["/sys/fs/cgroup/cgroup.controllers"] = "cpuset cpu io memory pids\n"
         host.ports[443] = False
+        # Docker serves the runtime socket (the first target host, ADR-0014), with gVisor and
+        # the NVIDIA runtime registered; there is no Podman socket.
+        host.sockets.add("/var/run/docker.sock")
+        host.http[("/var/run/docker.sock", "/version")] = cls.DOCKER_VERSION_BODY
+        host.http[("/var/run/docker.sock", "/info")] = cls.INFO_BODY_RUNSC_NVIDIA
         return host
+
+    def serve_podman(self, path: str = "/run/podman/podman.sock") -> None:
+        """Make Podman's socket the one that answers, as on a rootless-Podman host."""
+        self.sockets.discard("/var/run/docker.sock")
+        self.http = {k: v for k, v in self.http.items() if k[0] != "/var/run/docker.sock"}
+        self.sockets.add(path)
+        self.http[(path, "/version")] = self.PODMAN_VERSION_BODY
+        self.http[(path, "/info")] = self.INFO_BODY_RUNSC_NVIDIA
 
     # --- Host protocol -------------------------------------------------------------
 
@@ -130,3 +165,12 @@ class FakeHost:
 
     def env(self, name: str) -> str | None:
         return self.environment.get(name)
+
+    def is_socket(self, path: str) -> bool:
+        return path in self.sockets
+
+    def http_get_unix(self, socket_path: str, url_path: str) -> str | None:
+        self.http_calls.append((socket_path, url_path))
+        if socket_path not in self.sockets:
+            return None
+        return self.http.get((socket_path, url_path))

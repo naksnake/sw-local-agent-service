@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { App } from "../App";
 import { FakeCodingApi } from "../coding/api";
 import { FakeFactoryApi } from "../factory/api";
+import { renderApp } from "../test-utils";
 import { FakeValidationApi } from "../validation/api";
 import { healthSentence, needsYou, recentResults, runningNow, snapshot } from "./HomePage";
 
@@ -62,7 +62,7 @@ describe("Home page", () => {
   it("renders needs-you, running-now and the buttons, and opens a page's wizard", async () => {
     const apis = await fakes();
     await startOneOfEach(apis);
-    render(<App {...apis} />);
+    renderApp(apis);
     expect(await screen.findByText(/is waiting for your approval\./)).toBeTruthy();
     const running = screen.getByRole("region", { name: "Running now" });
     await waitFor(() => expect(within(running).getAllByRole("listitem").length).toBe(3));
@@ -76,7 +76,7 @@ describe("Home page", () => {
   });
 
   it("shows the two empty states in sentences", async () => {
-    render(<App {...(await fakes())} />);
+    renderApp(await fakes());
     expect(await screen.findByText("Nothing is running. Start a task, run or job with the buttons above.")).toBeTruthy();
     expect(screen.getByText("No results yet. Finished tasks, runs and jobs appear here with their outcome.")).toBeTruthy();
     expect(screen.getByRole("navigation", { name: "Pages" }).textContent).toContain("Validation");
