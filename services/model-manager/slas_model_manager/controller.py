@@ -71,6 +71,8 @@ CRASH_LOOP_RESTARTS: Final = 3
 #: A vLLM instance that is still loading ignores SIGTERM until the runtime kills it, and it
 #: has nothing to lose; pausing one waits this long, not the 30 s a serving instance gets.
 PAUSE_STOP_TIMEOUT_S: Final = 2
+#: How long `status()` waits for a running reconcile before reporting the last snapshot.
+STATUS_LOCK_WAIT_S: Final = 2.0
 #: How far back the manager reads a restarted container's log for the reason it exited,
 #: and what an error line looks like there (Python tracebacks, vLLM errors, the OOM killer).
 CRASH_EVIDENCE_LINES: Final = 400
@@ -162,6 +164,9 @@ class Remedy:
     note: str
     #: The stop reason when it is applied.
     reason: str
+    #: A remedy for the same crash that this one replaces when the crash persists (its
+    #: flags leave the argv; the two never travel together).
+    supersedes: str | None = None
 
     def applied_in(self, argv: Sequence[str], env: Mapping[str, str]) -> bool:
         if self.args and all(arg in argv for arg in self.args):
@@ -184,20 +189,38 @@ REMEDIES: Final[tuple[Remedy, ...]] = (
             "with --kv-cache-dtype fp8_ds_mla"
         ),
     ),
+    # vLLM 0.29 chooses the linear-layer kernel with `--linear-backend` (KernelConfig); the
+    # older VLLM_TEST_FORCE_FP8_MARLIN variable is gone and was a no-op on the first host.
     Remedy(
         id="fp8-marlin",
         marker="cutlass_gemm_caller",
-        args=(),
-        env=(("VLLM_TEST_FORCE_FP8_MARLIN", "1"),),
+        args=("--linear-backend", "marlin"),
+        env=(),
         note=(
-            "It runs its FP8 layers on the Marlin kernels: this vLLM build's CUTLASS FP8 kernels "
-            "fail on this GPU."
+            "It runs its FP8 layers on the Marlin kernels (--linear-backend marlin): this vLLM "
+            "build's CUTLASS FP8 kernels fail on this GPU."
         ),
         reason=(
             "crashed inside the CUTLASS FP8 GEMM kernel, which this vLLM build compiled for "
             "another Blackwell variant than this GPU; started again on the Marlin FP8 kernels "
-            "(VLLM_TEST_FORCE_FP8_MARLIN=1)"
+            "(--linear-backend marlin)"
         ),
+    ),
+    Remedy(
+        id="fp8-triton",
+        marker="cutlass_gemm_caller",
+        args=("--linear-backend", "triton"),
+        env=(),
+        note=(
+            "It runs its FP8 layers on the Triton kernels (--linear-backend triton), compiled "
+            "for this GPU at start: the CUTLASS and the Marlin FP8 kernels of this vLLM build "
+            "both failed on it."
+        ),
+        reason=(
+            "crashed inside the CUTLASS FP8 GEMM kernel again with the Marlin kernels selected; "
+            "started again on the Triton linear kernels (--linear-backend triton)"
+        ),
+        supersedes="fp8-marlin",
     ),
     Remedy(
         id="eager",
@@ -261,8 +284,9 @@ KNOWN_CRASHES: Final[tuple[tuple[str, str, str], ...]] = (
         "This vLLM build's CUTLASS FP8 GEMM kernels were compiled for another Blackwell variant "
         "than this GPU (arch-specific kernels do not run across variants), so every FP8 layer "
         "fails.",
-        "The manager retries once on the Marlin FP8 kernels; if this row still says so, pin a "
-        "vLLM image built for this GPU's architecture or use a BF16 or AWQ checkpoint.",
+        "The manager retries on the Marlin FP8 kernels, then on the Triton ones "
+        "(--linear-backend); if this row still says so, pin a vLLM image built for this GPU's "
+        "architecture or use a BF16 or AWQ checkpoint.",
     ),
 )
 FRAME_LINE: Final = re.compile(r'^\s*File ".*", line \d+')
@@ -390,6 +414,9 @@ class Controller:
         #: Remedies (REMEDIES ids) in force per instance, learnt from crash loops and read back
         #: from a running container's argv and `slas.env` label after a manager restart.
         self._applied: dict[str, set[str]] = {}
+        #: Remedies tried per instance, superseded ones included, so a remedy a later one
+        #: replaced is never tried again (Marlin → Triton → Marlin would loop for ever).
+        self._tried: dict[str, set[str]] = {}
         self.registry_path = registry_path
         self.gateway = gateway
         self.gpu_ids = list(gpu_ids)
@@ -866,7 +893,15 @@ class Controller:
             self._context_note[name] = self._context_sentence(current, entry.context)
         # The same for remedies: a container already running with one keeps it.
         applied = self._applied.setdefault(name, set())
-        applied.update(r.id for r in REMEDIES if r.applied_in(ref.spec.argv, ref.spec.env))
+        tried = self._tried.setdefault(name, set())
+        for remedy in REMEDIES:
+            if remedy.applied_in(ref.spec.argv, ref.spec.env):
+                applied.add(remedy.id)
+                tried.add(remedy.id)
+                superseded = remedy.supersedes
+                while superseded is not None:  # what it replaced was tried before it
+                    tried.add(superseded)
+                    superseded = REMEDY_BY_ID[superseded].supersedes
         crash_looping = status == "failed" and self._restarts.get(name, 0) >= CRASH_LOOP_RESTARTS
         report = self._crash_report(name) if crash_looping else None
         if report is not None:
@@ -918,21 +953,26 @@ class Controller:
         capture, typically on a GPU the build knows badly). The reason to replace it, or None."""
         name = ref.name
         applied = self._applied.setdefault(name, set())
+        tried = self._tried.setdefault(name, set())
         for remedy in REMEDIES:
-            if remedy.marker is None or remedy.id in applied:
+            if remedy.marker is None or remedy.id in tried:
                 continue
             if any(remedy.marker in line for line in report.attempt):
+                if remedy.supersedes is not None:
+                    applied.discard(remedy.supersedes)
                 applied.add(remedy.id)
+                tried.add(remedy.id)
                 self.log.warning("instance.remedy", instance=name, remedy=remedy.id)
                 return remedy.reason
         eager = REMEDY_BY_ID["eager"]
-        if not EAGER_FALLBACK or eager.id in applied or task_for_role(role) != "generate":
+        if not EAGER_FALLBACK or eager.id in tried or task_for_role(role) != "generate":
             return None
         if report.stage not in EAGER_STAGES or report.engine_exception:
             return None
         if _known_crash(report.attempt) is not None:
             return None  # a known cause has its own fix; eager execution is not it
         applied.add(eager.id)
+        tried.add(eager.id)
         self.log.warning("instance.remedy", instance=name, remedy=eager.id, stage=report.stage)
         return eager.reason.format(stage=report.stage)
 
@@ -1234,22 +1274,41 @@ class Controller:
     # --- status -------------------------------------------------------------------------------
 
     def states(self) -> list[InstanceState]:
-        with self._lock:
-            return sorted(self._states.values(), key=lambda s: (s.kind != "role", s.name))
+        # `_states` is replaced whole at the end of a tick, so the last snapshot reads safely
+        # without the lock; the lock only keeps a half-built row out of the Models page.
+        snapshot = self._states
+        return sorted(snapshot.values(), key=lambda s: (s.kind != "role", s.name))
 
     def status(self) -> dict[str, Any]:
-        with self._lock:
+        """The Models page and the install read this; it must answer while a reconcile runs.
+
+        A tick holds the lock while it stops and starts containers (a stop of a loading
+        instance can take 30 s, a replacement several), and the first host's install gave up
+        on "the model manager did not answer" in exactly that window. So the lock is waited
+        for briefly; past that the last snapshot is reported, and the sentence says so.
+        """
+        acquired = self._lock.acquire(timeout=STATUS_LOCK_WAIT_S)
+        try:
             states = self.states()
             gpus: dict[int, list[str]] = {gpu: [] for gpu in self.gpu_ids}
             for state in states:
                 for gpu in state.gpu_ids:
                     gpus.setdefault(gpu, []).append(state.name)
+            sentence = self._status_sentence(states)
+            if not acquired:
+                sentence += (
+                    " The manager is in the middle of a reconcile (stopping or starting an "
+                    "instance); this is its last snapshot."
+                )
             return {
-                "sentence": self._status_sentence(states),
+                "sentence": sentence,
                 "engine": self._engine,
                 "gpus": [{"id": gpu, "instances": names} for gpu, names in sorted(gpus.items())],
                 "instances": [self._instance_row(state) for state in states],
             }
+        finally:
+            if acquired:
+                self._lock.release()
 
     def _instance_row(self, state: InstanceState) -> dict[str, Any]:
         row = state.model_dump(exclude={"container"})

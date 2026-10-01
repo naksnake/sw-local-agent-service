@@ -835,6 +835,7 @@ model_status() {
   "${COMPOSE[@]}" exec -T model-manager python -c 'import sys, urllib.request; sys.stdout.write(urllib.request.urlopen("http://127.0.0.1:8000/v1/status", timeout=10).read().decode())' 2>/dev/null || true
 }
 waited=0
+unanswered=0
 instances_rc=3
 instances_report=""
 while :; do
@@ -842,9 +843,17 @@ while :; do
   instances_report="$(model_status | "$PYTHON" -m slas_deploy.installer instances --role coder)"
   instances_rc=$?
   set -e
-  # 2 = still loading: wait. Anything else is final; the health wait above already saw the
-  # model manager healthy, so a status it does not give (3) is reported, not waited for.
-  if [[ $instances_rc -ne 2 ]]; then break; fi
+  # 2 = still loading: wait. 3 = the manager did not answer: it is replacing or pausing
+  # containers under its lock (a stop can take 30 s), so a few polls are forgiven before it
+  # is reported; the health wait above already saw it healthy. Anything else is final.
+  if [[ $instances_rc -eq 3 ]]; then
+    unanswered=$((unanswered + 1))
+    if [[ $unanswered -ge 4 ]]; then break; fi
+  elif [[ $instances_rc -ne 2 ]]; then
+    break
+  else
+    unanswered=0
+  fi
   if [[ $waited -ge $MODEL_WAIT_S ]]; then break; fi
   # Once a minute, the coder's line: how long it has loaded and what vLLM last logged.
   if [[ $MODEL_POLL_S -gt 0 && $waited -gt 0 && $(( waited % 60 )) -eq 0 ]]; then

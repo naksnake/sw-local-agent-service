@@ -1116,17 +1116,19 @@ def test_a_known_crash_with_a_remedy_is_started_again_with_the_fix_and_keeps_it(
     makes them start; the manager applies it once, says so, and keeps it across restarts."""
     h = Harness(tmp_path, coder_first=True)
     h.controller.reconcile()
-    # The coder crashes in the CUTLASS FP8 kernel: Marlin FP8 kernels instead, via the env.
+    # The coder crashes in the CUTLASS FP8 kernel: the Marlin FP8 kernels instead, through
+    # vLLM 0.29's --linear-backend (the VLLM_TEST_FORCE_FP8_MARLIN variable is gone).
     h.api.logs_text["vllm-coder"] = _engine_exception(CUTLASS_FP8)
     h.api.restarting("vllm-coder", times=56)
     report = h.controller.reconcile()
     stop = next(a for a in report.actions if a.kind == "stop" and a.name == "vllm-coder")
     assert stop.reason.startswith("crashed inside the CUTLASS FP8 GEMM kernel")
-    assert stop.reason.endswith("(VLLM_TEST_FORCE_FP8_MARLIN=1)")
+    assert stop.reason.endswith("(--linear-backend marlin)")
     created = h.api.bodies["vllm-coder"]
-    assert "VLLM_TEST_FORCE_FP8_MARLIN=1" in created["Env"]
+    assert created["Cmd"][-2:] == ["--linear-backend", "marlin"]
+    assert not any(e.startswith("VLLM_TEST_FORCE_FP8_MARLIN") for e in created["Env"])
     assert "--enforce-eager" not in created["Cmd"], "a crash with a reason gets its fix, not eager"
-    assert created["Labels"]["slas.env"] == '{"VLLM_TEST_FORCE_FP8_MARLIN": "1"}'
+    assert created["Labels"]["slas.env"] == "{}"
     row = h.rows()["vllm-coder"]
     assert row["state"] == "starting"
     assert "It runs its FP8 layers on the Marlin kernels" in row["sentence"]
@@ -1166,13 +1168,33 @@ def test_a_known_crash_with_a_remedy_is_started_again_with_the_fix_and_keeps_it(
     row = again.rows()["vllm-triage"]
     assert row["state"] == "failed" and "fp8_ds_mla layout only supports" in row["sentence"]
 
-    # The CUTLASS crash again with Marlin already in force: a known cause, said in words.
+    # The CUTLASS crash again with Marlin in force: the Triton kernels supersede Marlin
+    # (one --linear-backend in the argv, never two).
     again.api.logs_text["vllm-coder"] = _engine_exception(CUTLASS_FP8)
     again.api.restarting("vllm-coder", times=3)
     again.prober.healthy = set()
     report = again.controller.reconcile()
-    assert not [a for a in report.actions if a.kind == "stop" and a.name == "vllm-coder"]
+    stop = next(a for a in report.actions if a.kind == "stop" and a.name == "vllm-coder")
+    assert stop.reason.endswith("(--linear-backend triton)")
+    cmd = again.api.bodies["vllm-coder"]["Cmd"]
+    assert cmd[-2:] == ["--linear-backend", "triton"] and "marlin" not in cmd
+    assert cmd.count("--linear-backend") == 1
     row = again.rows()["vllm-coder"]
+    assert row["state"] == "starting" and "Triton kernels" in row["sentence"]
+    assert "Marlin kernels" not in row["sentence"]
+    assert again.controller._applied["vllm-coder"] == {"fp8-triton"}
+
+    # A manager restart adopts the Triton flag, not Marlin, from the argv.
+    adopted = Harness(tmp_path, api=again.api, coder_first=True)
+    adopted.controller.reconcile()
+    assert adopted.controller._applied["vllm-coder"] == {"fp8-triton"}
+
+    # And once more: nothing left to try, a known cause said in words.
+    adopted.api.logs_text["vllm-coder"] = _engine_exception(CUTLASS_FP8)
+    adopted.api.restarting("vllm-coder", times=3)
+    report = adopted.controller.reconcile()
+    assert not [a for a in report.actions if a.kind == "stop" and a.name == "vllm-coder"]
+    row = adopted.rows()["vllm-coder"]
     assert row["state"] == "failed"
     assert "Likely cause: This vLLM build's CUTLASS FP8 GEMM kernels" in row["sentence"]
     assert "pin a vLLM image built for this GPU's architecture" in row["sentence"]
@@ -1187,13 +1209,50 @@ def test_a_known_crash_with_a_remedy_is_started_again_with_the_fix_and_keeps_it(
     both.api.restarting("vllm-coder", times=3)
     both.controller.reconcile()
     body = both.api.bodies["vllm-coder"]
-    assert body["Cmd"][-2:] == ["--kv-cache-dtype", "fp8_ds_mla"]
-    assert "VLLM_TEST_FORCE_FP8_MARLIN=1" in body["Env"]
+    assert body["Cmd"][-4:] == ["--kv-cache-dtype", "fp8_ds_mla", "--linear-backend", "marlin"]
     later = Harness(tmp_path, api=both.api, coder_first=True)
     assert all(
         a.kind == "keep" for a in later.controller.reconcile().actions if a.name == "vllm-coder"
     )
     assert later.controller._applied["vllm-coder"] == {"fp8-kv-cache", "fp8-marlin"}
+
+
+def test_status_answers_with_the_last_snapshot_while_a_reconcile_holds_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first host: the install's model wait gave up on "the model manager did not
+    answer" while the manager was replacing instances under its lock. Status waits briefly,
+    then reports the last snapshot and says a reconcile is under way."""
+    import threading
+
+    from slas_model_manager import controller as controller_module
+
+    monkeypatch.setattr(controller_module, "STATUS_LOCK_WAIT_S", 0.05)
+    h = Harness(tmp_path, coder_first=True)
+    h.controller.reconcile()
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold_the_lock() -> None:
+        with h.controller._lock:  # the test stands in for a long tick
+            held.set()
+            release.wait(5)
+
+    worker = threading.Thread(target=hold_the_lock)
+    worker.start()
+    assert held.wait(5)
+    try:
+        status = h.status()
+    finally:
+        release.set()
+        worker.join(5)
+    assert status["instances"], "the last snapshot, not an empty page"
+    assert status["sentence"].endswith(
+        "The manager is in the middle of a reconcile (stopping or starting an instance); "
+        "this is its last snapshot."
+    )
+    # With the lock free the sentence carries no such note.
+    assert "last snapshot" not in h.status()["sentence"]
 
 
 def test_a_fatal_signal_line_is_the_error_cluster(tmp_path: Path) -> None:

@@ -121,7 +121,9 @@ API server's first line) minus traceback frames, with the engine process's last 
 the start-up stage it died in ("It died while loading its weights"). Crash signatures with a
 known fix are remedies (`controller.REMEDIES`): DeepSeek's FP8 MLA layout wanting an FP8 KV
 cache gets `--kv-cache-dtype fp8_ds_mla`; a failure inside the CUTLASS FP8 GEMM kernel (built
-for another Blackwell variant) gets `VLLM_TEST_FORCE_FP8_MARLIN=1`; an engine that died
+for another Blackwell variant) gets `--linear-backend marlin`, and if it persists
+`--linear-backend triton` in its place (vLLM 0.29's KernelConfig flag; the old
+`VLLM_TEST_FORCE_FP8_MARLIN` variable no longer exists); an engine that died
 during warm-up without an exception of its own gets `--enforce-eager` (generate only). Each is
 applied once, said on the row, and kept across manager restarts from the container's argv and
 its `slas.env` label.
