@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -259,3 +261,27 @@ def test_sandbox_dockerfiles_are_rendered_from_code() -> None:
     script = REPO_ROOT / "images" / "sandbox-common" / "slas-check.sh"
     assert script.read_text(encoding="utf-8").startswith("#!/usr/bin/env bash")
     assert "set -euo pipefail" in script.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(("pytest_exit", "expected"), [(0, 0), (5, 0), (1, 1)])
+def test_python_test_check_treats_no_tests_as_nothing_to_run(
+    tmp_path: Path, pytest_exit: int, expected: int
+) -> None:
+    """pytest exits 5 when it collects nothing; that must not fail every coding iteration."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "pytest"
+    fake.write_text(f"#!/usr/bin/env bash\nexit {pytest_exit}\n", encoding="utf-8")
+    fake.chmod(0o755)
+    script = REPO_ROOT / "images" / "sandbox-common" / "slas-check.sh"
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "SLAS_LANGUAGE": "python",
+        "SLAS_WORKSPACE": str(tmp_path),
+    }
+    result = subprocess.run(
+        ["bash", str(script), "test"], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == expected, result.stdout + result.stderr
+    if pytest_exit == 5:
+        assert "pytest found no tests; nothing to run." in result.stdout

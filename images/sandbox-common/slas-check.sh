@@ -6,14 +6,19 @@ set -euo pipefail
 
 kind="${1:-}"
 lang="${SLAS_LANGUAGE:-}"
-cd /workspace
+cd "${SLAS_WORKSPACE:-/workspace}"
 
 skip() { echo "slas-check: $kind is not defined for $lang; nothing to run."; exit 0; }
 
 case "$lang:$kind" in
   python:lint)      exec ruff check . ;;
   python:type)      exec mypy . ;;
-  python:test)      exec pytest -q ;;
+  python:test)
+    # pytest exits 5 when it collects no tests; a project without tests has nothing to run,
+    # as for shell, instead of failing every iteration of the Coding Agent.
+    rc=0; pytest -q || rc=$?
+    if [ "$rc" -eq 5 ]; then echo "slas-check: pytest found no tests; nothing to run."; exit 0; fi
+    exit "$rc" ;;
   c:build|cpp:build)
     if [ -f CMakeLists.txt ]; then cmake -S . -B build >/dev/null && exec cmake --build build; fi
     exec make ;;
