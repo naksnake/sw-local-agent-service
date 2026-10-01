@@ -23,6 +23,8 @@ CODER_ROLE: Final = "coder"
 #: Bound on the snapshot the model sees per request, in characters (about 30k tokens).
 MAX_PROMPT_CHARS: Final = 120_000
 MAX_CHECK_OUTPUT_CHARS: Final = 4_000
+#: Bound on the plan text in the prompt; the rest of the budget is the file snapshot.
+MAX_PLAN_PROMPT_CHARS: Final = 24_000
 
 SYSTEM_INSTRUCTION: Final = (
     "You are the Coding Agent of SW Local Agent Service, working inside an isolated sandbox "
@@ -30,7 +32,9 @@ SYSTEM_INSTRUCTION: Final = (
     "project-relative path to the complete new content of that file, or to null to delete "
     "it; `note` is one sentence on what you changed. Change only what the task needs, keep "
     "every file complete and runnable, and never write outside the project or into .git. "
-    "The checks listed must pass; when a check failed, fix its cause."
+    "The checks listed must pass; when a check failed, fix its cause. The plan below is "
+    "the person's whole request: implement what it asks for in real, working code (no "
+    "placeholders), and add tests for it where the language has a test runner."
 )
 
 
@@ -101,7 +105,9 @@ def build_messages(request: EditRequest) -> list[Message]:
         check_text = "\n".join(checks)
     else:
         check_text = "No check has run yet." if request.iteration == 1 else "Every check passed."
-    fixed = "\n".join(header) + "\n\n" + check_text + "\n\nProject files:\n"
+    plan = request.plan.strip()[:MAX_PLAN_PROMPT_CHARS]
+    plan_text = f"The plan:\n{plan}\n\n" if plan else ""
+    fixed = "\n".join(header) + "\n\n" + plan_text + check_text + "\n\nProject files:\n"
     budget = max(MAX_PROMPT_CHARS - len(fixed), 2_000)
     body = fixed + _snapshot_section(request.files, budget)
     return [

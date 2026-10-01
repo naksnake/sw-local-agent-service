@@ -25,6 +25,8 @@ from slas_schemas.plan import Plan, Step
 from slas_schemas.sop import SopTemplate
 from slas_schemas.ticket import Observation, StepVerdict
 
+#: The plan text every coding step carries for the model (its prompt caps it again).
+MAX_PLAN_CONTEXT_CHARS = 24_000
 PRIMITIVES = ("toolchain", "sandbox_open", "iterate", "commit", "export_zip", "cross_check")
 
 
@@ -115,6 +117,8 @@ class CodingAgent:
             raise BreakdownNotApprovedError(job)
         resolutions = breakdown.resolutions(self.manifest)
         primary = resolutions[0]
+        document = self._plans.get(job.id)
+        plan_text = document.text[:MAX_PLAN_CONTEXT_CHARS] if document is not None else ""
         slug = slugify(breakdown.title)
         steps: list[Step] = [
             Step(
@@ -160,6 +164,7 @@ class CodingAgent:
                         "checks": checks,
                         "max_iterations": breakdown.max_iterations,
                         "languages": [r.language for r in resolutions],
+                        "plan": plan_text,
                     },
                 )
             )

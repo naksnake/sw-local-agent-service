@@ -25,6 +25,7 @@ from slas_orchestrator.coding.breakdown import (
     TaskItem,
     propose,
 )
+from slas_orchestrator.coding.coder import build_messages
 from slas_orchestrator.coding.executor import (
     CodingExecutor,
     EditError,
@@ -378,6 +379,34 @@ def test_stall_detection_stops_after_three_iterations_without_progress(tmp_path:
 
 
 @needs_git
+@needs_git
+def test_every_coding_round_carries_the_whole_plan(tmp_path: Path) -> None:
+    """A task line alone ("plan", "coding") told the model too little to write anything."""
+    coder = FakeCoder(EditSet(files={"fan_ctl.py": "def parse(t):\n    return t\n"}))
+    harness = Harness(
+        tmp_path, coder=coder, checker=FakeCrossChecker(votes("approve"), agreed=True)
+    )
+    harness.start()
+    assert coder.requests and all(r.plan == PLAN for r in coder.requests)
+    prompt = build_messages(coder.requests[0])[1].content
+    assert "The plan:\n# Fan controller" in prompt and "Add a `pytest` test" in prompt
+
+
+@needs_git
+def test_an_empty_project_is_never_done_even_when_every_check_passes(tmp_path: Path) -> None:
+    coder = FakeCoder()  # the model proposes nothing at all
+    harness = Harness(
+        tmp_path, coder=coder, checker=FakeCrossChecker(votes("approve"), agreed=True)
+    )
+    ticket = harness.kernel.store.load(harness.start())
+    assert ticket.state is TicketState.NEEDS_REVIEW
+    task = ticket.steps[2]
+    assert task.status == "failed" and task.verdict is not None
+    assert "files failed" in task.verdict.sentence
+    assert "The project is still empty" in coder.requests[-1].failures[-1].output
+    assert ticket.steps[3].status == "pending", "nothing was committed"
+
+
 def test_a_disagreeing_panel_sends_the_ticket_to_review_with_the_concerns(tmp_path: Path) -> None:
     coder = FakeCoder(EditSet(files={"fan_ctl.py": "def parse(t):\n    return t\n"}))
     checker = FakeCrossChecker(votes("approve", "reject", "reject"), agreed=False)

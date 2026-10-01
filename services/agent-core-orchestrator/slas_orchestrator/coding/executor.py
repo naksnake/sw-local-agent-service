@@ -68,6 +68,8 @@ class EditRequest(SlasModel):
     #: Current text files in the workspace (bounded), for the model's context.
     files: dict[str, str]
     failures: list[CheckResult] = Field(default_factory=list)
+    #: The person's whole plan.md: a task line alone ("plan", "coding") says too little.
+    plan: str = ""
 
 
 class EditSet(SlasModel):
@@ -323,6 +325,7 @@ class CodingExecutor:
         checks = list(step.args.get("checks", []))
         max_iterations = int(step.args.get("max_iterations", 6))
         languages = [str(lang) for lang in step.args.get("languages", [])]
+        plan_text = str(step.args.get("plan", ""))
         failures: list[CheckResult] = []
         log: list[str] = []
         stall = 0
@@ -335,6 +338,7 @@ class CodingExecutor:
                 languages=languages,
                 files=snapshot(project),
                 failures=failures,
+                plan=plan_text,
             )
             edits = self.coder.propose_edits(request)
             try:
@@ -344,6 +348,16 @@ class CodingExecutor:
                     exit_code=2, summary=exc.message.what_happened, stdout="\n".join(log)
                 )
             results = self._run_checks(session, checks)
+            if not snapshot(project):
+                # Every check passes on an empty project; that is not the task done.
+                results.append(
+                    CheckResult(
+                        kind="files",
+                        description="the project has files",
+                        exit_code=1,
+                        output="The project is still empty: write the files the plan asks for.",
+                    )
+                )
             failures = [r for r in results if not r.ok]
             passed = ", ".join(f"{r.kind} ok" for r in results if r.ok) or "no checks"
             failed = ", ".join(f"{r.kind} failed" for r in failures)
