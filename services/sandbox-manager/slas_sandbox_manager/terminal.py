@@ -15,7 +15,7 @@ import json
 import shlex
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Final, Literal, Protocol
 
 from pydantic import Field
 
@@ -24,6 +24,8 @@ from slas_sandbox_manager.manager import PUSH_EXPLANATION, SandboxManager
 from slas_schemas.common import SlasModel
 
 MAX_LINE_CHARS = 4000
+#: A terminal line waits this long; the agent's own checks keep the 600 s limit.
+TERMINAL_TIMEOUT_S: Final = 120
 
 
 class Clock(Protocol):
@@ -72,8 +74,16 @@ class TerminalSession:
             return None
         if len(text) > MAX_LINE_CHARS:
             text = text[:MAX_LINE_CHARS]
-        result = self.manager.exec(self.session_id, ["bash", "-lc", text])
+        # `bash -c`, not a login shell: /etc/profile resets PATH and hides the toolchain.
+        result = self.manager.exec(
+            self.session_id, ["bash", "-c", text], timeout_s=TERMINAL_TIMEOUT_S
+        )
         output = (result.stdout + result.stderr).rstrip("\n")
+        if result.timed_out:
+            output = (output + "\n" if output else "") + (
+                f"Stopped after {TERMINAL_TIMEOUT_S} s: the terminal runs one command at a time "
+                "and waits for it to finish. Run long builds or servers as a coding task."
+            )
         if _is_git_push(text):
             output = (output + "\n" if output else "") + PUSH_EXPLANATION
         entry = TerminalLine(

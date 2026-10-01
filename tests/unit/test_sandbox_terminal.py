@@ -10,7 +10,7 @@ from pathlib import Path
 from slas_kernel.clock import FakeClock
 from slas_sandbox_manager.manager import PUSH_EXPLANATION, SandboxManager
 from slas_sandbox_manager.runtime import ExecResult, FakeSandboxRuntime
-from slas_sandbox_manager.terminal import TerminalMessage, TerminalSession
+from slas_sandbox_manager.terminal import TERMINAL_TIMEOUT_S, TerminalMessage, TerminalSession
 
 
 def echo(argv: Sequence[str], cwd: str) -> ExecResult | None:
@@ -53,7 +53,7 @@ def test_terminal_runs_lines_in_the_sandbox_and_explains_push(tmp_path: Path) ->
         and first.output == "ran: git log --oneline"
     )
     assert (
-        runtime.execs[-1][1] == ("bash", "-lc", "git log --oneline")
+        runtime.execs[-1][1] == ("bash", "-c", "git log --oneline")
         and runtime.execs[-1][2] == "/workspace"
     )
 
@@ -86,3 +86,26 @@ def test_terminal_runs_lines_in_the_sandbox_and_explains_push(tmp_path: Path) ->
     ]
     assert [r["n"] for r in recorded] == [1, 2, 3, 4] and "glpat-" not in json.dumps(recorded)
     assert terminal.run("x" * 5000) is not None and len(runtime.execs[-1][1][2]) == 4000
+
+
+def test_a_terminal_line_that_runs_too_long_stops_with_a_sentence(tmp_path: Path) -> None:
+    runtime = FakeSandboxRuntime()
+    runtime.handle_with(
+        lambda argv, cwd: ExecResult(exit_code=124, stdout="partial\n", timed_out=True)
+    )
+    clock = FakeClock(datetime(2026, 9, 14, 9, tzinfo=UTC), step=timedelta(0))
+    manager = SandboxManager(runtime=runtime, data_root=tmp_path, clock=clock, runsc_available=True)
+    session = manager.open(
+        "pat",
+        "bmc",
+        image="registry.internal/slas/sandbox-python:3.12.6",
+        language="python",
+        display_name="Pat",
+    )
+    line = TerminalSession(manager, session.id, clock=clock).run("python3 -m http.server")
+    assert line is not None and line.exit_code == 124
+    assert line.output == (
+        f"partial\nStopped after {TERMINAL_TIMEOUT_S} s: the terminal runs one command at a time "
+        "and waits for it to finish. Run long builds or servers as a coding task."
+    )
+    assert TERMINAL_TIMEOUT_S == 120

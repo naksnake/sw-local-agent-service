@@ -20,6 +20,9 @@ from slas_orchestrator.coding.executor import EditRequest, EditSet
 from slas_schemas.vote import ConsensusVerdict
 
 CODER_ROLE: Final = "coder"
+#: Room for the answer: whole files inside one JSON object. The gateway's 1024 default cut
+#: every real file off mid-JSON, so both tries were invalid and the breaker paused the coder.
+CODER_MAX_TOKENS: Final = 16_384
 #: Bound on the snapshot the model sees per request, in characters (about 30k tokens).
 MAX_PROMPT_CHARS: Final = 120_000
 MAX_CHECK_OUTPUT_CHARS: Final = 4_000
@@ -56,6 +59,7 @@ class GatewayLike(Protocol):
         messages: list[Message],
         model_type: type[T],
         *,
+        max_tokens: int = 1024,
         max_retries: int = 2,
     ) -> StructuredResult[T]: ...
 
@@ -125,6 +129,8 @@ class GatewayCoder:
         self.last_attempts = 0
 
     def propose_edits(self, request: EditRequest) -> EditSet:
-        result = self.gateway.generate(self.role, build_messages(request), EditSet)
+        result = self.gateway.generate(
+            self.role, build_messages(request), EditSet, max_tokens=CODER_MAX_TOKENS
+        )
         self.last_attempts = result.attempts
         return result.value

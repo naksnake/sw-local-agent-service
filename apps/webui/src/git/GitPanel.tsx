@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
-import type { BundleView, CommitView, GitApi, PushResultView, RemoteView, StatusEntry, TerminalLineView } from "./api";
+import type { ThreePart } from "../api/http";
+import { type BundleView, type CommitView, type GitApi, GitApiError, type PushResultView, type RemoteView, type StatusEntry, type TerminalLineView } from "./api";
 
 // The per-project Git panel (CLAUDE.md §5.7, §9): Status · Commit · History · Push/Pull ·
 // Bundle, plus the Terminal tab that runs inside the sandbox. Copy: docs/ui/git-panel.md.
@@ -37,6 +38,26 @@ export function GitPanel({ api, slug }: Props) {
   const [bundle, setBundle] = useState<BundleView | null>(null);
   const [lines, setLines] = useState<TerminalLineView[]>([]);
   const [input, setInput] = useState("");
+  const [running, setRunning] = useState<string | null>(null);
+  const [problem, setProblem] = useState<ThreePart | null>(null);
+
+  // Every call goes through here: a failure is shown in three parts instead of vanishing.
+  async function guard(work: () => Promise<void>) {
+    setProblem(null);
+    try {
+      await work();
+    } catch (error: unknown) {
+      setProblem(
+        error instanceof GitApiError
+          ? error.parts
+          : {
+              whatHappened: "The Git panel did not get an answer.",
+              likelyCause: error instanceof Error ? error.message : "The api did not answer.",
+              whatToDo: "Try again; if it repeats, run `slas logs api` on the host.",
+            },
+      );
+    }
+  }
 
   async function refresh() {
     const status = await api.status(slug);
@@ -49,7 +70,7 @@ export function GitPanel({ api, slug }: Props) {
   }
 
   useEffect(() => {
-    void refresh();
+    void guard(refresh);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, slug]);
 
@@ -108,12 +129,14 @@ export function GitPanel({ api, slug }: Props) {
               type="button"
               className={primary}
               disabled={subject.trim() === "" || entries.length === 0}
-              onClick={async () => {
-                const commit = await api.commit(slug, subject.trim());
-                setNotice(`Committed ${commit.sha.slice(0, 10)}: ${commit.subject}`);
-                setSubject("");
-                await refresh();
-              }}
+              onClick={() =>
+                void guard(async () => {
+                  const commit = await api.commit(slug, subject.trim());
+                  setNotice(`Committed ${commit.sha.slice(0, 10)}: ${commit.subject}`);
+                  setSubject("");
+                  await refresh();
+                })
+              }
             >
               Commit changes
             </button>
@@ -155,13 +178,11 @@ export function GitPanel({ api, slug }: Props) {
                   <button
                     type="button"
                     className={primary}
-                    onClick={async () => {
-                      setPushResult(await api.push(slug, remoteId, branch));
-                    }}
+                    onClick={() => void guard(async () => setPushResult(await api.push(slug, remoteId, branch)))}
                   >
                     Push to {remoteName}
                   </button>
-                  <button type="button" className={secondary} onClick={async () => setNotice(await api.pull(slug, remoteId))}>
+                  <button type="button" className={secondary} onClick={() => void guard(async () => setNotice(await api.pull(slug, remoteId)))}>
                     Pull
                   </button>
                 </div>
@@ -186,16 +207,18 @@ export function GitPanel({ api, slug }: Props) {
           <div className="space-y-2">
             <p>A bundle carries this repository's history as one file for another site. Nothing is merged on import.</p>
             <div className="flex gap-2">
-              <button type="button" className={primary} onClick={async () => setBundle(await api.exportBundle(slug))}>
+              <button type="button" className={primary} onClick={() => void guard(async () => setBundle(await api.exportBundle(slug)))}>
                 Export bundle
               </button>
               <button
                 type="button"
                 className={secondary}
-                onClick={async () => {
-                  const sentences = await api.importBundle(slug, "incoming.bundle");
-                  setNotice(sentences.join(" "));
-                }}
+                onClick={() =>
+                  void guard(async () => {
+                    const sentences = await api.importBundle(slug, "incoming.bundle");
+                    setNotice(sentences.join(" "));
+                  })
+                }
               >
                 Import bundle…
               </button>
@@ -217,24 +240,38 @@ export function GitPanel({ api, slug }: Props) {
             </p>
             <pre aria-label="Terminal transcript" className="max-h-64 overflow-auto rounded-md bg-slate-950 p-3 font-mono text-xs text-slate-100">
               {lines.map((l) => `$ ${l.command}\n${l.output}\n`).join("")}
+              {running !== null ? `$ ${running}\nRunning…\n` : ""}
             </pre>
             <form
               className="flex gap-2"
               onSubmit={async (event) => {
                 event.preventDefault();
-                if (input.trim() === "") {
+                const command = input.trim();
+                if (command === "" || running !== null) {
                   return;
                 }
-                const line = await api.terminal(slug, input);
-                setLines((current) => [...current, line]);
-                setInput("");
+                setRunning(command);
+                await guard(async () => {
+                  const line = await api.terminal(slug, command);
+                  setLines((current) => [...current, line]);
+                  setInput("");
+                });
+                setRunning(null);
               }}
             >
               <input aria-label="Terminal input" className={`${field} mt-0 font-mono`} value={input} onChange={(e) => setInput(e.target.value)} />
-              <button type="submit" className={primary}>
-                Run
+              <button type="submit" className={primary} disabled={running !== null}>
+                {running !== null ? "Running…" : "Run"}
               </button>
             </form>
+          </div>
+        )}
+
+        {problem !== null && (
+          <div role="alert" data-testid="git-problem" className="rounded-md border border-red-300 p-3 dark:border-red-800">
+            <p className="font-medium">{problem.whatHappened}</p>
+            <p className="text-slate-600 dark:text-slate-400">{problem.likelyCause}</p>
+            <p>{problem.whatToDo}</p>
           </div>
         )}
 

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { FakeGitApi, PUSH_EXPLANATION } from "./api";
+import { FakeGitApi, GitApiError, PUSH_EXPLANATION } from "./api";
 import { GitHostsAdmin } from "./GitHostsAdmin";
 import { GitPanel } from "./GitPanel";
 import { GitRemotesSettings } from "./GitRemotesSettings";
@@ -110,6 +110,25 @@ describe("Git panel", () => {
     fireEvent.change(screen.getByLabelText("Terminal input"), { target: { value: "git push origin main" } });
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
     await waitFor(() => expect(screen.getByLabelText("Terminal transcript").textContent).toContain(PUSH_EXPLANATION));
+  });
+
+  it("shows a failing terminal line in three parts and frees the Run button", async () => {
+    const api = new FakeGitApi();
+    api.terminal = async () => {
+      throw new GitApiError({
+        whatHappened: "No sandbox is open for bmc.",
+        likelyCause: "The coding task that opened it has finished, or the sandbox closed after its idle time.",
+        whatToDo: "Start a coding task or open the project first.",
+      });
+    };
+    render(<GitPanel api={api} slug="bmc" />);
+    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    fireEvent.change(screen.getByLabelText("Terminal input"), { target: { value: "ls" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    const problem = await screen.findByTestId("git-problem");
+    expect(problem.textContent).toContain("No sandbox is open for bmc.");
+    expect(problem.textContent).toContain("Start a coding task or open the project first.");
+    expect((screen.getByRole("button", { name: "Run" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("says where to add a remote when there is none", async () => {

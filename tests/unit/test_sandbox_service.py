@@ -428,7 +428,7 @@ def test_terminal_needs_git_terminal_and_explains_push(tmp_path: Path) -> None:
     assert first.json()["n"] == 1 and first.json()["output"] == "ran: git log --oneline"
     assert fake.execs[-1] == (
         session["handle"]["spec"]["name"],
-        ["bash", "-lc", "git log --oneline"],
+        ["bash", "-c", "git log --oneline"],
     )
     push = client.post(url, json={"line": "git push origin main"}, headers=allowed.headers())
     assert push.json()["exit_code"] == 128

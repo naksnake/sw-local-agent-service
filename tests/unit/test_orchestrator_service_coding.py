@@ -280,6 +280,7 @@ class FakeGateway:
         self.verdict = verdict
         self.fail = fail
         self.generate_calls: list[tuple[str, list[Message], str]] = []
+        self.max_tokens: list[int] = []
         self.cross_checks: list[tuple[str, list[Message]]] = []
 
     def complete(
@@ -300,9 +301,11 @@ class FakeGateway:
         messages: list[Message],
         model_type: type[T],
         *,
+        max_tokens: int = 1024,
         max_retries: int = 2,
     ) -> StructuredResult[T]:
         self.generate_calls.append((role, messages, model_type.__name__))
+        self.max_tokens.append(max_tokens)
         if self.fail is not None:
             raise self.fail
         edits = self.edits.pop(0) if self.edits else EditSet()
@@ -1187,3 +1190,4 @@ def test_gateway_coder_builds_a_bounded_prompt_without_secrets() -> None:
     edits = coder.propose_edits(request)
     assert edits.files == {"a.py": "x = 1\n"} and coder.last_attempts == 1
     assert gateway.generate_calls[0][0] == "coder"
+    assert gateway.max_tokens == [16_384], "whole files must fit; 1024 cut them off mid-JSON"
