@@ -40,7 +40,8 @@ DEFAULT_REDACTION_FILE: Final = Path("/etc/slas/redaction.yaml")
 #: Tokens the whole platform may spend per UTC day; cross-checks get `token_budget_pct` of it
 #: (CLAUDE.md §5.3). An assumption until the Models page gets a real allowance setting.
 DEFAULT_DAILY_TOKENS: Final = 20_000_000
-DEFAULT_VLLM_TIMEOUT_S: Final = 120.0
+#: One completion: a coder answer of 16k tokens takes minutes on a large model.
+DEFAULT_VLLM_TIMEOUT_S: Final = 600.0
 
 
 class SettingsError(ValueError):

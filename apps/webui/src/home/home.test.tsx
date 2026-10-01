@@ -5,7 +5,7 @@ import { FakeCodingApi } from "../coding/api";
 import { FakeFactoryApi } from "../factory/api";
 import { renderApp } from "../test-utils";
 import { FakeValidationApi } from "../validation/api";
-import { healthSentence, needsYou, recentResults, runningNow, snapshot } from "./HomePage";
+import { healthSentence, needsYou, recentResults, runningNow, snapshot, stoppedTaskAdvice } from "./HomePage";
 
 async function fakes() {
   const codingApi = new FakeCodingApi();
@@ -80,5 +80,18 @@ describe("Home page", () => {
     expect(await screen.findByText("Nothing is running. Start a task, run or job with the buttons above.")).toBeTruthy();
     expect(screen.getByText("No results yet. Finished tasks, runs and jobs appear here with their outcome.")).toBeTruthy();
     expect(screen.getByRole("navigation", { name: "Pages" }).textContent).toContain("Validation");
+  });
+});
+
+describe("stoppedTaskAdvice", () => {
+  it("does not blame the plan when a service or the model did not answer", () => {
+    const timeout = stoppedTaskAdvice(
+      "T-coding-0013 failed: The llm-gateway did not answer. It is starting, stopped, or the request took too long (timed out: timed out).",
+    );
+    expect(timeout.likelyCause).toContain("the plan is not the problem");
+    expect(stoppedTaskAdvice("vllm-coder cannot be asked right now.").whatToDo).toContain("Models page");
+    expect(stoppedTaskAdvice("plan: stopped after 4 iterations (test failed).").likelyCause).toContain(
+      "a test cannot pass as written",
+    );
   });
 });

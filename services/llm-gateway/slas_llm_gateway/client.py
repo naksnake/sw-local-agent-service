@@ -9,12 +9,12 @@ sentences (`.message` is the `ThreePartMessage`, as on the gateway's own errors)
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 import httpx
 from pydantic import BaseModel
 
-from slas_http.client import DEFAULT_TIMEOUT_S, ServiceClient
+from slas_http.client import ServiceClient
 from slas_llm_gateway.structured import StructuredResult
 from slas_llm_gateway.vllm import CompletionResponse, Message
 from slas_schemas.vote import ConsensusVerdict
@@ -58,12 +58,17 @@ class GatewayLike(Protocol):
     def cross_check(self, decision: str, evidence: list[Message]) -> ConsensusVerdict: ...
 
 
+#: How long a caller waits for the gateway: up to three tries (one answer and two retries)
+#: of a 600 s completion, plus a margin. 30 s cut off every real coder answer.
+GATEWAY_TIMEOUT_S: Final = 1900.0
+
+
 class HttpGateway:
     def __init__(
         self,
         base_url: str,
         *,
-        timeout_s: float = DEFAULT_TIMEOUT_S,
+        timeout_s: float = GATEWAY_TIMEOUT_S,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.client = ServiceClient(SERVICE, base_url, timeout_s=timeout_s, transport=transport)

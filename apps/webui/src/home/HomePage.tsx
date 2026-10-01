@@ -62,6 +62,20 @@ export async function snapshot(apis: {
   return { tasks, runs, jobs };
 }
 
+/** Why a coding task stopped: a platform service or model that did not answer is not the plan's fault. */
+export function stoppedTaskAdvice(sentence: string): { likelyCause: string; whatToDo: string } {
+  if (/did not answer|cannot be asked|is paused|timed out|not healthy/i.test(sentence)) {
+    return {
+      likelyCause: "A platform service or the coding model did not answer in time; the plan is not the problem.",
+      whatToDo: "Check the Models page and Home for a service that is down, then start the task again.",
+    };
+  }
+  return {
+    likelyCause: "The plan asks for something the repository does not contain, or a test cannot pass as written.",
+    whatToDo: "Open the task, read the last feed lines, then edit the plan or attach what is missing.",
+  };
+}
+
 export function needsYou(s: Snapshot): Attention[] {
   const items: Attention[] = [];
   for (const run of s.runs) {
@@ -85,9 +99,7 @@ export function needsYou(s: Snapshot): Attention[] {
         page: "coding",
         title: `Coding task ${task.title} stopped.`,
         whatHappened: task.sentence,
-        likelyCause:
-          "The plan asks for something the repository does not contain, or a test cannot pass as written.",
-        whatToDo: "Open the task, read the last feed lines, then edit the plan or attach what is missing.",
+        ...stoppedTaskAdvice(task.sentence),
         button: "Open task",
       });
     }

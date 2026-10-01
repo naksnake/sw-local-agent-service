@@ -944,3 +944,17 @@ def test_schema_check_covers_enum_const_bounds_alternatives_and_references() -> 
         assert str(raised.value) == sentence, (value, schema)
     # A `$ref` with an escaped pointer segment resolves.
     check(1, {"$defs": {"a/b": {"type": "integer"}}, "$ref": "#/$defs/a~1b"})
+
+
+def test_a_caller_waits_long_enough_for_a_coder_answer_and_its_retries() -> None:
+    """30 s (callers) and 120 s (vLLM) cut off every real coder answer of thousands of tokens."""
+    from slas_llm_gateway.client import GATEWAY_TIMEOUT_S, HttpGateway
+    from slas_llm_gateway.service.settings import DEFAULT_VLLM_TIMEOUT_S
+
+    assert DEFAULT_VLLM_TIMEOUT_S >= 600
+    assert GATEWAY_TIMEOUT_S > 3 * DEFAULT_VLLM_TIMEOUT_S, "one answer plus two retries"
+    gateway = HttpGateway("http://llm-gateway:8000")
+    try:
+        assert gateway.client.timeout_s == GATEWAY_TIMEOUT_S
+    finally:
+        gateway.close()
