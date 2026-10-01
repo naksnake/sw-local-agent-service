@@ -30,6 +30,11 @@ GPU; placement already prefers an empty GPU, so they only meet when GPUs run out
   started again on the GPUs its memory needs, once, like the other crash remedies of §7;
   its Models page row says it runs on fewer GPUs than the registry asks and why. A model
   manager restart forgets that and tries the registry's count once more.
+- `auto` instead of a number makes it dynamic (owner, 2026-10-01: "I hope it can dynamic"):
+  the role's instance is placed after every other one and gets the GPUs no other instance
+  uses, 8, 4, 2 or 1 of them, keeping one GPU for each instance still waiting to start. When
+  more GPUs become empty (a role stops being served), the next reconcile starts it again on
+  them; it never shrinks a running instance to make room.
 - The file is written with the key only when it is set, so existing registries are
   unchanged. The shipped registries do not set it: how many GPUs are free depends on the
   host. On an eight-GPU quickstart host, `tensor_parallel: {coder: 2}` uses the idle GPU.

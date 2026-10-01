@@ -31,6 +31,7 @@ from slas_git.workspace import (
     GitError,
     GitWorkspace,
     parse_trailers,
+    workspace_user,
 )
 from slas_git_broker.broker import (
     BrokerGitExec,
@@ -585,7 +586,8 @@ def bundle_import(
             ThreePartMessage(
                 f"There is no bundle called {name} in your Bundles folder.",
                 "It was not copied there yet, or it has another name.",
-                f"Copy the file to Coding/{owner}/Bundles/ on the host, then import it again.",
+                f"Copy the file to Coding/{workspace_user(owner)}/Bundles/ on the host, then "
+                "import it again.",
             ),
         )
     with broker_errors():

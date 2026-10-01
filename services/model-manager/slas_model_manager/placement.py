@@ -37,6 +37,9 @@ class Candidate(SlasModel):
     label: str = Field(min_length=1)
     #: At least this many GPUs (the registry's `tensor_parallel` for the role, ADR-0020).
     min_gpus: int = Field(default=1, ge=1)
+    #: `tensor_parallel: auto`: placed after everyone else, on as many empty GPUs as there
+    #: are (8, 4, 2 or 1); an empty GPU is one no other instance uses.
+    auto: bool = False
 
 
 class Placed(SlasModel):
@@ -84,7 +87,8 @@ def candidates(registry: Registry, only: Iterable[str] | None = None) -> list[Ca
                 role=role,
                 needed_gib=needed_gib(entry),
                 label=entry.label(),
-                min_gpus=registry.tensor_parallel.get(role, 1),
+                min_gpus=_fixed_gpus(registry.tensor_parallel.get(role, 1)),
+                auto=registry.tensor_parallel.get(role) == "auto",
             )
         )
     for model_id in registry.voters:
@@ -109,6 +113,7 @@ def place(
     gpu_ids: Sequence[int],
     capacity_gib: float = DEFAULT_GPU_VRAM_GIB,
     pinned: Mapping[str, tuple[Sequence[int], float]] | None = None,
+    reserve: int = 0,
 ) -> PlacementResult:
     """Place `wanted` on `gpu_ids`; `pinned` is instance → (its GPUs, its needed GiB)."""
     free: dict[int, float] = dict.fromkeys(sorted(set(gpu_ids)), capacity_gib)
@@ -120,8 +125,20 @@ def place(
             free[gpu] -= share
             occupants.setdefault(gpu, []).append(name)
     result = PlacementResult()
-    for candidate in wanted:
-        chosen = _choose(candidate.needed_gib, free, capacity_gib, candidate.min_gpus)
+    # `auto` instances last: they take what the others leave empty.
+    ordered = [c for c in wanted if not c.auto] + [c for c in wanted if c.auto]
+    for candidate in ordered:
+        chosen = (
+            _choose_auto(
+                candidate.needed_gib,
+                free,
+                occupants,
+                capacity_gib,
+                reserve=reserve,  # the others in this call are placed already
+            )
+            if candidate.auto
+            else None
+        ) or _choose(candidate.needed_gib, free, capacity_gib, candidate.min_gpus)
         if chosen is None:
             result.unplaced.append(
                 Unplaced(
@@ -141,6 +158,37 @@ def place(
     result.free_gib = {gpu: round(left, 1) for gpu, left in sorted(free.items())}
     result.occupants = {gpu: list(names) for gpu, names in sorted(occupants.items())}
     return result
+
+
+#: The GPU counts `auto` picks from, largest first (vLLM's tensor parallel sizes).
+AUTO_SIZES = (8, 4, 2)
+
+
+def _fixed_gpus(value: int | str) -> int:
+    return value if isinstance(value, int) else 1
+
+
+def auto_gpu_count(needed: float, empty: int, capacity_gib: float) -> int:
+    """How many GPUs `auto` gives an instance when `empty` GPUs hold no other instance."""
+    for size in AUTO_SIZES:
+        if size <= empty and needed / size <= capacity_gib:
+            return size
+    return 1
+
+
+def _choose_auto(
+    needed: float,
+    free: Mapping[int, float],
+    occupants: Mapping[int, list[str]],
+    capacity_gib: float,
+    *,
+    reserve: int = 0,
+) -> list[int] | None:
+    empty = sorted(gpu for gpu in free if not occupants.get(gpu))
+    count = auto_gpu_count(needed, max(len(empty) - reserve, 0), capacity_gib)
+    if count == 1 or needed / count > capacity_gib:
+        return None  # nothing to spread over: the usual placement decides
+    return empty[:count]
 
 
 def gpu_count_for(needed: float, capacity_gib: float, min_gpus: int = 1) -> int:

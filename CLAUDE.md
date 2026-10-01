@@ -586,9 +586,10 @@ One registry, `Models/models.yaml`; code asks for **roles** (`coder`, `planner`,
 `embed`, `rerank`, plus `voters[]` for the Consensus Router); swaps are blue/green from the
 Models page or `slas model swap`, with 24 h rollback (INV-9). vLLM has no native base-model
 hot-swap; the Model Manager provides one by starting the candidate alongside, smoke-testing,
-switching the gateway route, and draining the incumbent. `tensor_parallel: {<role>: 1|2|4|8}`
-in the registry gives that role's instance at least that many GPUs in tensor parallel; a
-running instance on another count is replaced on the next reconcile (ADR-0020).
+switching the gateway route, and draining the incumbent. `tensor_parallel: {<role>: 1|2|4|8|auto}`
+in the registry gives that role's instance at least that many GPUs in tensor parallel, or with
+`auto` every GPU the other instances leave empty; a running instance on another count is
+replaced on the next reconcile (ADR-0020).
 `slas model fit` states VRAM need vs. free in a sentence before any load. Quantisation: FP8
 on Hopper/Blackwell, AWQ 4-bit on Ada/Ampere, one BF16 reference kept for eval regression. `--enable-prefix-caching` and
 `--structured-outputs-config {"backend": "xgrammar"}` are mandatory on every generate instance

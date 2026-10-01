@@ -502,6 +502,77 @@ def test_tensor_parallel_spreads_the_coder_over_idle_gpus() -> None:
     assert "which no model serves" in unknown.value.message.likely_cause
 
 
+def _without_knowledge(data: dict[str, Any]) -> dict[str, Any]:
+    """The quickstart registry without the embed and rerank roles (unused by coding)."""
+    roles = {r: m for r, m in data["roles"].items() if r not in ("embed", "rerank")}
+    return {**data, "roles": roles}
+
+
+def test_tensor_parallel_auto_takes_the_empty_gpus_the_others_leave() -> None:
+    """HGX B300 NVL8: "I hope it can dynamic". `auto` places every other instance first
+    and gives the coder all the GPUs nobody else uses (8, 4, 2 or 1)."""
+    auto = {**PROFILE_REGISTRIES["quickstart"], "tensor_parallel": {"coder": "auto"}}
+    seven = placement.place(
+        placement.candidates(registry_from_mapping(auto)), gpu_ids=range(8), capacity_gib=270.0
+    )
+    by_instance = {p.instance: p.gpu_ids for p in seven.placed}
+    assert len(by_instance["vllm-coder"]) == 2, "six others on six GPUs, two left"
+    assert sorted(g for ids in by_instance.values() for g in ids) == list(range(8))
+
+    five = placement.place(
+        placement.candidates(registry_from_mapping(_without_knowledge(auto))),
+        gpu_ids=range(8),
+        capacity_gib=270.0,
+    )
+    assert len(five.gpu_ids_for("vllm-coder") or []) == 4, "embed and rerank off: four"
+    none_free = placement.place(
+        placement.candidates(registry_from_mapping(auto)), gpu_ids=range(4), capacity_gib=270.0
+    )
+    assert len(none_free.gpu_ids_for("vllm-coder") or []) == 1, "no empty GPU: shares one"
+    assert placement.auto_gpu_count(42.0, 3, 270.0) == 2
+    assert placement.auto_gpu_count(42.0, 8, 270.0) == 8
+    assert "  coder: auto" in render_registry_yaml(auto)
+    assert registry_from_mapping(yaml.safe_load(render_registry_yaml(auto))).tensor_parallel == {
+        "coder": "auto"
+    }
+
+
+def test_tensor_parallel_auto_grows_the_coder_when_gpus_free_up(tmp_path: Path) -> None:
+    auto = {**PROFILE_REGISTRIES["quickstart"], "tensor_parallel": {"coder": "auto"}}
+    h = Harness(tmp_path, gpu_ids=tuple(range(8)), gpu_vram_gib=270.0, registry=auto)
+    h.prober.everything = True
+    h.controller.reconcile()
+    assert len(h.api.specs["vllm-coder"].gpu_ids) == 2
+    assert all(a.kind == "keep" for a in h.controller.reconcile().actions), "settled at two"
+
+    h.models_file.write_text(render_registry_yaml(_without_knowledge(auto)), encoding="utf-8")
+    first = h.controller.reconcile()  # embed and rerank stop
+    assert {a.name for a in first.actions if a.kind == "stop"} >= {"vllm-embed", "vllm-rerank"}
+    grown = h.controller.reconcile()
+    stop = next(a for a in grown.actions if a.kind == "stop" and a.name == "vllm-coder")
+    assert stop.reason == (
+        "runs on 2 GPU(s) and 4 are free for it (tensor_parallel auto); started again on 4"
+    )
+    assert len(h.api.specs["vllm-coder"].gpu_ids) == 4
+    assert all(a.kind == "keep" for a in h.controller.reconcile().actions), "settled at four"
+
+
+def test_tensor_parallel_auto_keeps_a_gpu_for_each_instance_waiting_for_the_coder(
+    tmp_path: Path,
+) -> None:
+    auto = {**PROFILE_REGISTRIES["quickstart"], "tensor_parallel": {"coder": "auto"}}
+    h = Harness(
+        tmp_path, gpu_ids=tuple(range(8)), gpu_vram_gib=270.0, registry=auto, coder_first=True
+    )
+    h.controller.reconcile()
+    assert sorted(h.api.specs) == ["vllm-coder"], "the coder loads first"
+    assert len(h.api.specs["vllm-coder"].gpu_ids) == 2, "six GPUs kept for the six waiting"
+    h.prober.healthy = {"vllm-coder"}
+    h.controller.reconcile()
+    used = [g for spec in h.api.specs.values() for g in spec.gpu_ids]
+    assert sorted(used) == list(range(8)) and len(h.api.specs) == 7
+
+
 def test_a_running_coder_moves_to_tensor_parallel_without_a_restart(tmp_path: Path) -> None:
     h = Harness(tmp_path, gpu_ids=tuple(range(8)), gpu_vram_gib=270.0)
     h.prober.everything = True

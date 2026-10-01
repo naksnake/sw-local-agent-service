@@ -48,6 +48,7 @@ from slas_git.workspace import (
     GitWorkspace,
     Identity,
     transport_args,
+    workspace_user,
 )
 from slas_git_broker.askpass import token_pipe
 from slas_git_broker.runner import ProcessRunner
@@ -191,10 +192,12 @@ class GitBroker:
     # --- paths and helpers ---------------------------------------------------------------
 
     def project_dir(self, user: str, slug: str) -> Path:
-        return self.data_root / "Coding" / user / "Projects" / slug
+        # `user` is the email the api forwards; the folder is the workspace name the Coding
+        # Agent wrote the project under (`Coding/recovery/`, not `Coding/recovery@slas.local/`).
+        return self.data_root / "Coding" / workspace_user(user) / "Projects" / slug
 
     def bundles_dir(self, user: str) -> Path:
-        return self.data_root / "Coding" / user / "Bundles"
+        return self.data_root / "Coding" / workspace_user(user) / "Bundles"
 
     def _workspace(
         self, path: Path, principal: Principal, exec_: BrokerGitExec | None = None

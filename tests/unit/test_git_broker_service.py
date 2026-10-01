@@ -444,6 +444,18 @@ def test_hosts_file_load_save_and_errors(tmp_path: Path) -> None:
 # --- projects: status, commit, history ------------------------------------------------------
 
 
+def test_the_git_panel_finds_the_project_the_coding_agent_wrote(bench: ServiceBench) -> None:
+    """The HGX host: the agent writes Coding/recovery/Projects/<slug>, the api forwards
+    `recovery@slas.local`, and the panel said "There is no project called …"."""
+    folder = bench.settings.data_root / "Coding" / "pat" / "Projects" / "temperature-log-tool"
+    folder.mkdir(parents=True)
+    (folder / "templog.py").write_text("print(1)\n", encoding="utf-8")
+    status = bench.call("GET", "/v1/projects/temperature-log-tool/status", ENGINEER)
+    assert status.status_code == 200, status.text
+    assert ENGINEER.user == "pat@example.com"
+    assert bench.project(ENGINEER.user, "temperature-log-tool") == folder
+
+
 def test_status_commit_history_carry_the_persons_identity(bench: ServiceBench) -> None:
     user = ENGINEER.user
     project = bench.project(user, "demo")
@@ -668,7 +680,10 @@ def test_push_pull_and_bundles_over_the_fake_host(bench: ServiceBench) -> None:
     assert exported.status_code == 201, exported.text
     bundle = exported.json()
     assert set(bundle) == {"path", "sha256", "size_bytes", "refs", "file_name", "sentence"}
-    assert Path(bundle["path"]).parent == bench.settings.data_root / "Coding" / user / "Bundles"
+    # Under the workspace name the Coding Agent uses (`pat`), not the email: with the email
+    # the Git panel found no project at all ("There is no project called …").
+    assert Path(bundle["path"]).parent == bench.settings.data_root / "Coding" / "pat" / "Bundles"
+    assert user == "pat@example.com"
     assert bundle["file_name"].startswith("bmc-2026") and bundle["file_name"].endswith(".bundle")
     assert "refs/heads/main" in bundle["refs"] and bundle["sentence"].startswith("Bundle bmc-")
     imported = bench.call(

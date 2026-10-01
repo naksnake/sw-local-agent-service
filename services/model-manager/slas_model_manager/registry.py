@@ -56,8 +56,9 @@ class Registry(SlasModel):
     #: role → GPUs its instance runs on in tensor parallel (ADR-0020). Per role, not per
     #: model: one model often serves several roles and a voter, and only the role that does
     #: the long work (the coder) is worth spreading. Absent: as many as the memory needs.
-    tensor_parallel: dict[str, int] = Field(
-        default_factory=dict, description="role → GPUs in tensor parallel (1, 2, 4 or 8)"
+    tensor_parallel: dict[str, int | Literal["auto"]] = Field(
+        default_factory=dict,
+        description="role → GPUs in tensor parallel (1, 2, 4 or 8), or auto: every empty GPU",
     )
 
     @model_validator(mode="after")
@@ -81,10 +82,10 @@ class Registry(SlasModel):
         for role, gpus in self.tensor_parallel.items():
             if role not in self.roles:
                 raise ValueError(f"tensor_parallel names {role!r}, which no model serves")
-            if gpus not in TENSOR_PARALLEL_SIZES:
+            if gpus != "auto" and gpus not in TENSOR_PARALLEL_SIZES:
                 raise ValueError(
                     f"tensor_parallel for {role} is {gpus}; vLLM splits a model over "
-                    f"{', '.join(str(n) for n in TENSOR_PARALLEL_SIZES)} GPUs"
+                    f"{', '.join(str(n) for n in TENSOR_PARALLEL_SIZES)} GPUs, or say auto"
                 )
         return self
 

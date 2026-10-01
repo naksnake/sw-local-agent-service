@@ -11,6 +11,7 @@ history shows what the agent did versus the person.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from typing import Final, Protocol
@@ -63,6 +64,18 @@ class CommandResult(SlasModel):
     exit_code: int
     stdout: str = ""
     stderr: str = ""
+
+
+_UNSAFE_NAME: Final = re.compile(r"[^a-z0-9._-]+")
+
+
+def workspace_user(user: str) -> str:
+    """The person's directory name under `Coding/` (CLAUDE.md §4.4): the local part of the
+    email the api forwards, lowercased and reduced to `[a-z0-9._-]`. Every service that
+    opens `Coding/<user>/` goes through this, so the agent, the terminal and the Git panel
+    find the same projects (`recovery@slas.local` → `recovery`)."""
+    local = user.split("@", 1)[0].strip().lower()
+    return _UNSAFE_NAME.sub("-", local).strip("-.") or "user"
 
 
 class GitExec(Protocol):

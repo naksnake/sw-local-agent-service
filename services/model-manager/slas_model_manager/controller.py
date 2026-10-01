@@ -721,6 +721,7 @@ class Controller:
             reason = self._outdated_reason(registry, candidate, statuses[candidate.name])
             if reason is not None:
                 outdated[candidate.name] = reason
+        outdated.update(self._auto_growth(registry, visible, outdated))
         actions = self._respect_swaps(
             plan_reconcile(registry, visible, outdated=outdated), registry, refs
         )
@@ -772,14 +773,21 @@ class Controller:
         }
         for action in starting:
             self._learnt_state_for(action.name, action.model_id or desired[action.name])
+        starting_names = {a.name for a in starting}
+        # Instances still to start after this tick (waiting for the coder) keep a GPU each,
+        # or `auto` would hand the coder every GPU while they wait.
+        waiting = sum(1 for name in desired if name not in pinned and name not in starting_names)
         placed = placement.place(
             [
-                c.model_copy(update={"min_gpus": 1}) if c.instance in self._tp_fallback else c
+                c.model_copy(update={"min_gpus": 1, "auto": False})
+                if c.instance in self._tp_fallback
+                else c
                 for c in placement.candidates(registry, only=[a.name for a in starting])
             ],
             gpu_ids=self.gpu_ids,
             capacity_gib=self.gpu_vram_gib,
             pinned=pinned,
+            reserve=waiting,
         )
         fresh: dict[str, InstanceState] = {}
         for name in deferred:
@@ -954,10 +962,9 @@ class Controller:
             extra_args=extra_args,
             extra_env=extra_env,
         )
-        if role is not None and role in registry.tensor_parallel and name not in self._tp_fallback:
-            wanted = placement.gpu_count_for(
-                needed_gib(entry), self.gpu_vram_gib, registry.tensor_parallel[role]
-            )
+        fixed = registry.tensor_parallel.get(role) if role is not None else None
+        if isinstance(fixed, int) and name not in self._tp_fallback:
+            wanted = placement.gpu_count_for(needed_gib(entry), self.gpu_vram_gib, fixed)
             if len(ref.spec.gpu_ids) != wanted:
                 return (
                     f"runs on {len(ref.spec.gpu_ids)} GPU(s), but the registry asks for "
@@ -971,6 +978,35 @@ class Controller:
                 "container's command is fixed at creation"
             )
         return None
+
+    def _auto_growth(
+        self, registry: Registry, visible: Sequence[ContainerRef], outdated: Mapping[str, str]
+    ) -> dict[str, str]:
+        """`tensor_parallel: auto` is dynamic: a role's instance that more GPUs became free
+        for (a role stopped, an instance moved) is started again on them."""
+        grow: dict[str, str] = {}
+        for role, value in registry.tensor_parallel.items():
+            name = instance_name(role)
+            ref = next((r for r in visible if r.name == name), None)
+            if value != "auto" or ref is None or name in outdated or name in self._tp_fallback:
+                continue
+            try:
+                entry = registry.model(ref.spec.model_id)
+            except KeyError:
+                continue
+            others = {gpu for r in visible if r.name != name for gpu in r.spec.gpu_ids}
+            running = {r.name for r in visible}
+            waiting = sum(1 for d in desired_instances(registry) if d not in running)
+            empty = [gpu for gpu in self.gpu_ids if gpu not in others][
+                : max(len(self.gpu_ids) - len(others) - waiting, 0)
+            ]
+            target = placement.auto_gpu_count(needed_gib(entry), len(empty), self.gpu_vram_gib)
+            if target > len(ref.spec.gpu_ids):
+                grow[name] = (
+                    f"runs on {len(ref.spec.gpu_ids)} GPU(s) and {target} are free for it "
+                    f"(tensor_parallel auto); started again on {target}"
+                )
+        return grow
 
     def _learnt_state_for(self, name: str, model_id: str) -> None:
         """Forget what was learnt for `name` when it now serves another model."""

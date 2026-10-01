@@ -7,7 +7,6 @@ state.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +14,7 @@ from typing import Any, Final, Protocol
 
 from fastapi import Request
 
+from slas_git.workspace import workspace_user as shared_workspace_user
 from slas_http.client import ServiceClient
 from slas_http.errors import ServiceError
 from slas_http.identity import Identity
@@ -42,8 +42,6 @@ SEE_ALL_CAPABILITY: Final = "admin:people"
 Probe = Callable[[str, str], str]
 #: The gateway's `GET /v1/status` body (contract §2), or None when the gateway did not answer.
 GatewayStatus = Callable[[], dict[str, Any] | None]
-
-_UNSAFE = re.compile(r"[^a-z0-9._-]+")
 
 
 class KernelFactory(Protocol):
@@ -102,9 +100,7 @@ def workspace_user(identity: Identity) -> str:
     The api forwards the email; the local part is the workspace user (CLAUDE.md §4.4,
     §5.7), lowercased and reduced to `[a-z0-9._-]`.
     """
-    local = identity.user.split("@", 1)[0].strip().lower()
-    safe = _UNSAFE.sub("-", local).strip("-.")
-    return safe or "user"
+    return shared_workspace_user(identity.user)
 
 
 def owns(identity: Identity, ticket: Ticket) -> bool:
