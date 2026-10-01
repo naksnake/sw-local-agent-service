@@ -47,7 +47,19 @@ MAX_SNAPSHOT_FILES: Final = 60
 MAX_SNAPSHOT_BYTES: Final = 64 * 1024
 EMPTY_TREE: Final = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 MAX_DIFF_CHARS: Final = 40_000
-_SKIP_DIRS: Final = frozenset({".git", "__pycache__", "node_modules", "target", ".venv", "build"})
+_SKIP_DIRS: Final = frozenset(
+    {
+        ".git",
+        "__pycache__",
+        "node_modules",
+        "target",
+        ".venv",
+        "build",
+        ".ruff_cache",
+        ".mypy_cache",
+        ".pytest_cache",
+    }
+)
 
 
 class CheckResult(SlasModel):
@@ -132,6 +144,30 @@ def apply_edits(project_dir: Path, edits: EditSet) -> list[str]:
         if not target.exists() or target.read_text(encoding="utf-8", errors="replace") != content:
             target.write_text(content, encoding="utf-8")
             changed.append(rel)
+    return changed
+
+
+def fix_script_modes(project_dir: Path) -> list[str]:
+    """Make the executable bit follow the shebang; returns the paths whose mode changed.
+
+    The model writes contents, never modes, so it cannot fix a check like ruff's EXE001
+    ("shebang is present but file is not executable") or EXE002; the agent does it.
+    """
+    changed: list[str] = []
+    for path in sorted(project_dir.rglob("*")):
+        rel = path.relative_to(project_dir)
+        if not path.is_file() or path.is_symlink() or _SKIP_DIRS & set(rel.parts):
+            continue
+        with path.open("rb") as handle:
+            shebang = handle.read(2) == b"#!"
+        mode = path.stat().st_mode
+        executable = bool(mode & 0o111)
+        if shebang and not executable:
+            path.chmod(mode | ((mode & 0o444) >> 2))  # x wherever r is set
+            changed.append(str(rel))
+        elif not shebang and executable and path.suffix == ".py":
+            path.chmod(mode & ~0o111)
+            changed.append(str(rel))
     return changed
 
 
@@ -347,6 +383,7 @@ class CodingExecutor:
                 return Observation(
                     exit_code=2, summary=exc.message.what_happened, stdout="\n".join(log)
                 )
+            changed += [rel for rel in fix_script_modes(project) if rel not in changed]
             results = self._run_checks(session, checks)
             if not snapshot(project):
                 # Every check passes on an empty project; that is not the task done.

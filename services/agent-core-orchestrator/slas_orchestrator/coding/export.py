@@ -11,7 +11,18 @@ from slas_schemas.ticket import Export
 
 #: Fixed timestamps so the same tree always zips to the same bytes (reproducible, §1.2).
 _EPOCH: Final = (2026, 1, 1, 0, 0, 0)
-_SKIP_DIRS: Final = frozenset({".git", "__pycache__", "node_modules", "target", ".venv"})
+_SKIP_DIRS: Final = frozenset(
+    {
+        ".git",
+        "__pycache__",
+        "node_modules",
+        "target",
+        ".venv",
+        ".ruff_cache",
+        ".mypy_cache",
+        ".pytest_cache",
+    }
+)
 
 
 def zip_project(project_dir: Path, out_path: Path) -> Export:

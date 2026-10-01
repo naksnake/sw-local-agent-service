@@ -32,6 +32,7 @@ from slas_orchestrator.coding.executor import (
     EditSet,
     FakeCoder,
     apply_edits,
+    fix_script_modes,
     snapshot,
 )
 from slas_orchestrator.coding.export import zip_project
@@ -181,6 +182,31 @@ def test_apply_edits_stays_inside_the_project(tmp_path: Path) -> None:
     (tmp_path / ".git" / "HEAD").write_text("ref\n")
     (tmp_path / "big.bin").write_bytes(b"\x00" * 10)
     assert set(snapshot(tmp_path)) == {"src/a.py"}, ".git and binaries are left out"
+
+
+def test_the_executable_bit_follows_the_shebang(tmp_path: Path) -> None:
+    """ruff EXE001 failed three rounds: the model writes contents and can never set a mode."""
+    script = tmp_path / "templog.py"
+    script.write_text("#!/usr/bin/env python3\nprint(1)\n", encoding="utf-8")
+    script.chmod(0o644)
+    module = tmp_path / "lib.py"
+    module.write_text("x = 1\n", encoding="utf-8")
+    module.chmod(0o755)
+    shell = tmp_path / "run.sh"
+    shell.write_text("echo hi\n", encoding="utf-8")
+    shell.chmod(0o755)
+    cache = tmp_path / ".ruff_cache" / "x.py"
+    cache.parent.mkdir()
+    cache.write_text("#!/bin/sh\n", encoding="utf-8")
+    cache.chmod(0o644)
+
+    assert fix_script_modes(tmp_path) == ["lib.py", "templog.py"]
+    assert script.stat().st_mode & 0o777 == 0o755
+    assert module.stat().st_mode & 0o777 == 0o644
+    assert shell.stat().st_mode & 0o777 == 0o755, "only .py files lose an unexplained x bit"
+    assert cache.stat().st_mode & 0o777 == 0o644, "tool caches are not the project"
+    assert fix_script_modes(tmp_path) == [], "a second pass changes nothing"
+    assert ".ruff_cache/x.py" not in snapshot(tmp_path)
 
 
 def test_zip_export_is_reproducible_and_skips_git(tmp_path: Path) -> None:
