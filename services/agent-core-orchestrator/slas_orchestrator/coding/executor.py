@@ -147,6 +147,33 @@ def apply_edits(project_dir: Path, edits: EditSet) -> list[str]:
     return changed
 
 
+#: Build and tool output that never belongs in a commit, whatever the project's .gitignore says.
+TOOL_CACHE_PATTERNS: Final = (
+    "__pycache__/",
+    "*.py[cod]",
+    ".ruff_cache/",
+    ".mypy_cache/",
+    ".pytest_cache/",
+)
+
+
+def exclude_tool_caches(project_dir: Path) -> bool:
+    """Add TOOL_CACHE_PATTERNS to `.git/info/exclude` (the repository's private ignore list,
+    so the person's own files are untouched). Returns whether the file changed."""
+    exclude = project_dir / ".git" / "info" / "exclude"
+    if not (project_dir / ".git").is_dir():
+        return False
+    current = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
+    missing = [p for p in TOOL_CACHE_PATTERNS if p not in current.splitlines()]
+    if not missing:
+        return False
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    prefix = "" if not current or current.endswith("\n") else "\n"
+    header = "# tool caches, added by the Coding Agent\n"
+    exclude.write_text(current + prefix + header + "\n".join(missing) + "\n", encoding="utf-8")
+    return True
+
+
 def fix_script_modes(project_dir: Path) -> list[str]:
     """Make the executable bit follow the shebang; returns the paths whose mode changed.
 
@@ -444,7 +471,10 @@ class CodingExecutor:
         workspace = self._workspace(session, context.user)
         branch = workspace.checkout_branch(f"slas/{context.ticket_id}")
         self._branches[context.ticket_id] = branch
+        # A reviewer rightly objected to committed __pycache__ files (T-coding-0015).
+        exclude_tool_caches(self._project(session))
         workspace.add_all()
+        workspace.untrack_ignored()
         if not workspace.has_changes():
             return Observation(exit_code=0, summary=f"Nothing new to commit on {branch}.")
         sha = workspace.commit(

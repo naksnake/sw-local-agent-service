@@ -547,6 +547,9 @@ class Controller:
                 )
             data["roles"] = assigned
             data["models"] = models
+            spread = data.get("tensor_parallel")
+            if isinstance(spread, dict):  # a role no longer served keeps no GPU count
+                data["tensor_parallel"] = {r: n for r, n in spread.items() if r in assigned}
             try:
                 written = write_registry_file(self.registry_path, data, header=header)
             except RegistryError as exc:
@@ -922,6 +925,15 @@ class Controller:
             extra_args=extra_args,
             extra_env=extra_env,
         )
+        if role is not None and role in registry.tensor_parallel:
+            wanted = placement.gpu_count_for(
+                needed_gib(entry), self.gpu_vram_gib, registry.tensor_parallel[role]
+            )
+            if len(ref.spec.gpu_ids) != wanted:
+                return (
+                    f"runs on {len(ref.spec.gpu_ids)} GPU(s), but the registry asks for "
+                    f"{wanted} in tensor parallel for the {role} role"
+                )
         if ref.spec.image != self.image:
             return f"runs {ref.spec.image}, but the image lock names {self.image}"
         if list(ref.spec.argv) != list(expected.argv) or dict(ref.spec.env) != dict(expected.env):

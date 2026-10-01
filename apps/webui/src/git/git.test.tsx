@@ -131,6 +131,33 @@ describe("Git panel", () => {
     expect((screen.getByRole("button", { name: "Run" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("runs a line on Enter, shows its output and exit code, and recalls it with ↑", async () => {
+    const api = new FakeGitApi();
+    api.terminal = async (_slug: string, line: string) => ({
+      command: line,
+      output: line === "ls" ? "README.md\ntemplog.py" : "ls: cannot access 'nope'",
+      exitCode: line === "ls" ? 0 : 2,
+    });
+    render(<GitPanel api={api} slug="bmc" />);
+    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+    const prompt = screen.getByLabelText("Terminal input") as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(prompt));
+    fireEvent.change(prompt, { target: { value: "ls" } });
+    fireEvent.submit(prompt.closest("form") as HTMLFormElement);
+    await waitFor(() => expect(screen.getByLabelText("Terminal transcript").textContent).toContain("$ ls\nREADME.md\ntemplog.py\n"));
+    expect(prompt.value).toBe("");
+    fireEvent.change(prompt, { target: { value: "ls nope" } });
+    fireEvent.submit(prompt.closest("form") as HTMLFormElement);
+    await waitFor(() => expect(screen.getByLabelText("Terminal transcript").textContent).toContain("[exit 2]"));
+    fireEvent.keyDown(prompt, { key: "ArrowUp" });
+    expect(prompt.value).toBe("ls nope");
+    fireEvent.keyDown(prompt, { key: "ArrowUp" });
+    expect(prompt.value).toBe("ls");
+    fireEvent.keyDown(prompt, { key: "ArrowDown" });
+    fireEvent.keyDown(prompt, { key: "ArrowDown" });
+    expect(prompt.value).toBe("");
+  });
+
   it("says where to add a remote when there is none", async () => {
     render(<GitPanel api={new FakeGitApi()} slug="bmc" />);
     fireEvent.click(await screen.findByRole("button", { name: "Push/Pull" }));

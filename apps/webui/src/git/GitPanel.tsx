@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import type { ThreePart } from "../api/http";
 import { type BundleView, type CommitView, type GitApi, GitApiError, type PushResultView, type RemoteView, type StatusEntry, type TerminalLineView } from "./api";
@@ -39,6 +39,59 @@ export function GitPanel({ api, slug }: Props) {
   const [lines, setLines] = useState<TerminalLineView[]>([]);
   const [input, setInput] = useState("");
   const [running, setRunning] = useState<string | null>(null);
+  const [recall, setRecall] = useState<number | null>(null);
+  const promptRef = useRef<HTMLInputElement>(null);
+  const screenRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (tab === "terminal") {
+      promptRef.current?.focus();
+    }
+  }, [tab, running]);
+
+  useEffect(() => {
+    const screen = screenRef.current;
+    if (screen !== null) {
+      screen.scrollTop = screen.scrollHeight;
+    }
+  }, [lines, running]);
+
+  async function runLine(raw: string) {
+    const command = raw.trim();
+    if (command === "" || running !== null) {
+      return;
+    }
+    setRunning(command);
+    setRecall(null);
+    setInput("");
+    await guard(async () => {
+      const line = await api.terminal(slug, command);
+      setLines((current) => [...current, line]);
+    });
+    setRunning(null);
+  }
+
+  // ↑ and ↓ walk through the commands already run, newest first, like a shell's history.
+  function onPromptKey(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+      return;
+    }
+    event.preventDefault();
+    if (lines.length === 0) {
+      return;
+    }
+    const last = lines.length - 1;
+    const next =
+      event.key === "ArrowUp"
+        ? recall === null
+          ? last
+          : Math.max(recall - 1, 0)
+        : recall === null || recall >= last
+          ? null
+          : recall + 1;
+    setRecall(next);
+    setInput(next === null ? "" : (lines[next]?.command ?? ""));
+  }
   const [problem, setProblem] = useState<ThreePart | null>(null);
 
   // Every call goes through here: a failure is shown in three parts instead of vanishing.
@@ -238,32 +291,47 @@ export function GitPanel({ api, slug }: Props) {
               Runs inside your sandbox as the workspace user, with the same isolation as the agent. The session is recorded to the
               ticket with secrets redacted.
             </p>
-            <pre aria-label="Terminal transcript" className="max-h-64 overflow-auto rounded-md bg-slate-950 p-3 font-mono text-xs text-slate-100">
-              {lines.map((l) => `$ ${l.command}\n${l.output}\n`).join("")}
-              {running !== null ? `$ ${running}\nRunning…\n` : ""}
-            </pre>
-            <form
-              className="flex gap-2"
-              onSubmit={async (event) => {
-                event.preventDefault();
-                const command = input.trim();
-                if (command === "" || running !== null) {
-                  return;
-                }
-                setRunning(command);
-                await guard(async () => {
-                  const line = await api.terminal(slug, command);
-                  setLines((current) => [...current, line]);
-                  setInput("");
-                });
-                setRunning(null);
-              }}
+            <div
+              ref={screenRef}
+              className="max-h-80 overflow-auto rounded-md bg-slate-950 p-3 font-mono text-xs text-slate-100"
+              onClick={() => promptRef.current?.focus()}
             >
-              <input aria-label="Terminal input" className={`${field} mt-0 font-mono`} value={input} onChange={(e) => setInput(e.target.value)} />
-              <button type="submit" className={primary} disabled={running !== null}>
-                {running !== null ? "Running…" : "Run"}
-              </button>
-            </form>
+              <pre aria-label="Terminal transcript" className="whitespace-pre-wrap">
+                {lines
+                  .map((l) => `$ ${l.command}\n${l.output}${l.output ? "\n" : ""}${l.exitCode !== 0 ? `[exit ${l.exitCode}]\n` : ""}`)
+                  .join("")}
+                {running !== null ? `$ ${running}\nRunning…\n` : ""}
+              </pre>
+              <form
+                className="flex items-center gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void runLine(input);
+                }}
+              >
+                <span aria-hidden="true" className="text-emerald-400">
+                  $
+                </span>
+                <input
+                  ref={promptRef}
+                  aria-label="Terminal input"
+                  className="flex-1 bg-transparent text-slate-100 outline-none placeholder:text-slate-500"
+                  placeholder={running !== null ? "Running…" : "Type a command and press Enter"}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={running !== null}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={onPromptKey}
+                />
+                <button type="submit" className="sr-only" disabled={running !== null}>
+                  {running !== null ? "Running…" : "Run"}
+                </button>
+              </form>
+            </div>
+            <p className="text-xs text-slate-500">
+              One command at a time, up to 120 s each; ↑ and ↓ recall earlier commands. The sandbox closes after 60 idle minutes.
+            </p>
           </div>
         )}
 

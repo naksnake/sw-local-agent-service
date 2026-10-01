@@ -10,7 +10,7 @@ The only component that starts inference containers (CLAUDE.md §7, §11).
 | `swap.py` | blue/green swap: start the candidate alongside, smoke-test, switch the route, drain; rollback within 24 hours |
 | `reconcile.py` | desired (registry) versus running containers → start/stop/keep actions |
 | `driver.py` | `ContainerApiRuntime`: the `ContainerRuntime` over the runtime socket (`slas_container`), `ContainerSpec` → `CreateSpec` per docs/api-contract-round-2.md §3; `HttpProber` (`GET /health`); `PatientRuntime` waits for a model to load during a swap |
-| `placement.py` | greedy GPU placement by `vram_gib` against `SLAS_GPU_VRAM_GIB` per GPU: roles before voters, biggest first, several GPUs in tensor parallel when one is not enough; what does not fit gets a sentence and never starts |
+| `placement.py` | greedy GPU placement by `vram_gib` against `SLAS_GPU_VRAM_GIB` per GPU: roles before voters, biggest first, several GPUs in tensor parallel when one is not enough, or as many as the registry's `tensor_parallel: {<role>: 1|2|4|8}` asks for that role (ADR-0020; a running instance on another count is replaced, nothing restarts); what does not fit gets a sentence and never starts |
 | `controller.py` | the reconcile applier: registry → placement → containers → health → `PUT /v1/instances` on the gateway; per-instance state and sentence; swaps and rollbacks in a thread; a loop every `SLAS_RECONCILE_INTERVAL_S` |
 | `smoke.py` | `HttpSmokeTester`: one tiny chat completion against a swap candidate |
 | `service/` | `settings.py` (environment), `routes.py` (contract §3), `app.py` (`create_app`, every collaborator injectable) |

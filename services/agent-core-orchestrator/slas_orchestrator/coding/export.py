@@ -38,7 +38,10 @@ def zip_project(project_dir: Path, out_path: Path) -> Export:
         for path in files:
             info = zipfile.ZipInfo(str(path.relative_to(project_dir)), date_time=_EPOCH)
             info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o644 << 16
+            # 0755 for scripts the agent made executable (a #! line), 0644 for the rest; a
+            # flat 0644 left `./templog.py` with "Permission denied" after unzipping.
+            mode = 0o755 if path.stat().st_mode & 0o111 else 0o644
+            info.external_attr = mode << 16
             archive.writestr(info, path.read_bytes())
     digest = hashlib.sha256(out_path.read_bytes()).hexdigest()
     return Export(kind="zip", path=str(out_path), sha256=digest)

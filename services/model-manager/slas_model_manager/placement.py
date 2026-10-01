@@ -35,6 +35,8 @@ class Candidate(SlasModel):
     role: str | None = None
     needed_gib: float = Field(gt=0)
     label: str = Field(min_length=1)
+    #: At least this many GPUs (the registry's `tensor_parallel` for the role, ADR-0020).
+    min_gpus: int = Field(default=1, ge=1)
 
 
 class Placed(SlasModel):
@@ -82,6 +84,7 @@ def candidates(registry: Registry, only: Iterable[str] | None = None) -> list[Ca
                 role=role,
                 needed_gib=needed_gib(entry),
                 label=entry.label(),
+                min_gpus=registry.tensor_parallel.get(role, 1),
             )
         )
     for model_id in registry.voters:
@@ -118,7 +121,7 @@ def place(
             occupants.setdefault(gpu, []).append(name)
     result = PlacementResult()
     for candidate in wanted:
-        chosen = _choose(candidate.needed_gib, free, capacity_gib)
+        chosen = _choose(candidate.needed_gib, free, capacity_gib, candidate.min_gpus)
         if chosen is None:
             result.unplaced.append(
                 Unplaced(
@@ -140,14 +143,17 @@ def place(
     return result
 
 
-def gpu_count_for(needed: float, capacity_gib: float) -> int:
-    return max(1, math.ceil(needed / capacity_gib)) if capacity_gib > 0 else 1
+def gpu_count_for(needed: float, capacity_gib: float, min_gpus: int = 1) -> int:
+    by_memory = max(1, math.ceil(needed / capacity_gib)) if capacity_gib > 0 else 1
+    return max(by_memory, min_gpus)
 
 
-def _choose(needed: float, free: Mapping[int, float], capacity_gib: float) -> list[int] | None:
+def _choose(
+    needed: float, free: Mapping[int, float], capacity_gib: float, min_gpus: int = 1
+) -> list[int] | None:
     if not free:
         return None
-    count = gpu_count_for(needed, capacity_gib)
+    count = gpu_count_for(needed, capacity_gib, min_gpus)
     share = needed / count
     # The GPUs with the most memory left first, lowest id on a tie: the load spreads.
     ranked = sorted(free.items(), key=lambda item: (-item[1], item[0]))
@@ -168,7 +174,7 @@ def _no_room_sentence(candidate: Candidate, free: Mapping[int, float], capacity_
             f"{candidate.label} needs about {needed:g} GiB of GPU memory, but SLAS_GPU_IDS "
             f"names no GPU; {candidate.instance} was not started. Set SLAS_GPU_IDS in .env."
         )
-    count = gpu_count_for(needed, capacity_gib)
+    count = gpu_count_for(needed, capacity_gib, candidate.min_gpus)
     if count == 1:
         gpu, left = max(free.items(), key=lambda item: (item[1], -item[0]))
         return (

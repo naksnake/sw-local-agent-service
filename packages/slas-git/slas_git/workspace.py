@@ -286,6 +286,15 @@ class GitWorkspace:
     def add_all(self) -> None:
         self.git("add", "--all")
 
+    def untrack_ignored(self) -> list[str]:
+        """Drop from the index files that are tracked but now ignored (a cache committed
+        before the exclude list knew it); the files stay on disk. Returns their paths."""
+        listed = self.git("ls-files", "-z", "--cached", "--ignored", "--exclude-standard")
+        paths = [p for p in listed.stdout.split("\0") if p]
+        if paths:
+            self.git("rm", "--cached", "--quiet", "--", *paths)
+        return paths
+
     def commit(
         self, subject: str, *, body: str = "", trailers: Mapping[str, str] | None = None
     ) -> str:

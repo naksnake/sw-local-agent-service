@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -35,6 +36,7 @@ from slas_model_manager.registry import (
     PROFILE_REGISTRIES,
     RegistryError,
     profile_registry,
+    registry_from_mapping,
     render_registry_yaml,
 )
 from slas_model_manager.runtime import ContainerRef, task_for_role, vllm_spec
@@ -466,6 +468,56 @@ def test_placement_takes_several_gpus_for_a_big_model_and_honours_pinned() -> No
     none = placement.place(wanted, gpu_ids=[], capacity_gib=280.0)
     assert [u.instance for u in none.unplaced] == ["vllm-planner", "vllm-coder"]
     assert "SLAS_GPU_IDS names no GPU" in none.unplaced[0].sentence
+
+
+def test_tensor_parallel_spreads_the_coder_over_idle_gpus() -> None:
+    """HGX B300 NVL8: seven instances on eight GPUs and only the one answering is busy;
+    `tensor_parallel: {coder: 2}` puts the idle eighth GPU behind the coder (ADR-0020)."""
+    data = {**PROFILE_REGISTRIES["quickstart"], "tensor_parallel": {"coder": 2}}
+    registry = registry_from_mapping(data)
+    wanted = placement.candidates(registry)
+    coder = next(c for c in wanted if c.instance == "vllm-coder")
+    assert coder.min_gpus == 2
+    result = placement.place(wanted, gpu_ids=range(8), capacity_gib=270.0)
+    assert result.unplaced == []
+    by_instance = {p.instance: p.gpu_ids for p in result.placed}
+    assert len(by_instance["vllm-coder"]) == 2
+    used = [gpu for ids in by_instance.values() for gpu in ids]
+    assert sorted(used) == list(range(8)), "one instance per GPU, every GPU used"
+    spec = vllm_spec(
+        registry.model("qwen3.8-27b-fp8"), name="vllm-coder", gpu_ids=[1, 2], image=IMAGE
+    )
+    assert spec.argv[spec.argv.index("--tensor-parallel-size") + 1] == "2"
+
+    rendered = render_registry_yaml(data)
+    assert rendered.endswith("tensor_parallel:\n  coder: 2\n")
+    assert registry_from_mapping(yaml.safe_load(rendered)).tensor_parallel == {"coder": 2}
+    assert "tensor_parallel" not in render_registry_yaml(PROFILE_REGISTRIES["quickstart"])
+    with pytest.raises(RegistryError) as odd:
+        registry_from_mapping({**data, "tensor_parallel": {"coder": 3}})
+    assert "splits a model over 1, 2, 4, 8 GPUs" in odd.value.message.likely_cause
+    with pytest.raises(RegistryError) as unknown:
+        registry_from_mapping({**data, "tensor_parallel": {"nobody": 2}})
+    assert "which no model serves" in unknown.value.message.likely_cause
+
+
+def test_a_running_coder_moves_to_tensor_parallel_without_a_restart(tmp_path: Path) -> None:
+    h = Harness(tmp_path, gpu_ids=tuple(range(8)), gpu_vram_gib=270.0)
+    h.prober.everything = True
+    h.controller.reconcile()
+    data = {**PROFILE_REGISTRIES["quickstart"], "tensor_parallel": {"coder": 2}}
+    h.models_file.write_text(render_registry_yaml(data), encoding="utf-8")
+    report = h.controller.reconcile()
+    stop = next(a for a in report.actions if a.kind == "stop" and a.name == "vllm-coder")
+    assert stop.reason == (
+        "runs on 1 GPU(s), but the registry asks for 2 in tensor parallel for the coder role"
+    )
+    assert all(a.kind == "keep" for a in report.actions if a.name != "vllm-coder")
+    cmd = h.api.bodies["vllm-coder"]["Cmd"]
+    assert cmd[cmd.index("--tensor-parallel-size") + 1] == "2"
+    assert h.controller.reconcile().actions and all(
+        a.kind == "keep" for a in h.controller.reconcile().actions
+    ), "settled: nothing restarts again"
 
 
 # --- the controller through the routes ----------------------------------------------------------

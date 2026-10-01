@@ -4,7 +4,7 @@
 > this file first and treats it as authoritative. Where this file conflicts with a
 > request, surface the conflict; never resolve it silently.
 >
-> **Version 3.7 · 2026-10-01** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
+> **Version 3.8 · 2026-10-01** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
 > (phases, done criteria) and `docs/PROMPTS.md` (copy-paste session prompts).
 > 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14). 3.2 records open decisions
 > 12–14 (model weights and voters) raised by the shipped model registries. 3.3 accepts the
@@ -24,7 +24,8 @@
 > imports them into the registry; roles and voters change on that page (§4.1 zone F, §11).
 > 3.7 records ADR-0019: the repository has no hosted CI. The checks the removed workflow ran
 > run locally before every push (README, "Developing") and egress-DROP before a release;
-> INV-10, §5.7, §8.1 and §11 say so.
+> INV-10, §5.7, §8.1 and §11 say so. 3.8 records ADR-0020: `tensor_parallel: {<role>: n}` in
+> the registry spreads a role's instance over n GPUs (§7).
 
 ---
 
@@ -585,9 +586,11 @@ One registry, `Models/models.yaml`; code asks for **roles** (`coder`, `planner`,
 `embed`, `rerank`, plus `voters[]` for the Consensus Router); swaps are blue/green from the
 Models page or `slas model swap`, with 24 h rollback (INV-9). vLLM has no native base-model
 hot-swap; the Model Manager provides one by starting the candidate alongside, smoke-testing,
-switching the gateway route, and draining the incumbent. `slas model fit` states VRAM need
-vs. free in a sentence before any load. Quantisation: FP8 on Hopper/Blackwell, AWQ 4-bit on
-Ada/Ampere, one BF16 reference kept for eval regression. `--enable-prefix-caching` and
+switching the gateway route, and draining the incumbent. `tensor_parallel: {<role>: 1|2|4|8}`
+in the registry gives that role's instance at least that many GPUs in tensor parallel; a
+running instance on another count is replaced on the next reconcile (ADR-0020).
+`slas model fit` states VRAM need vs. free in a sentence before any load. Quantisation: FP8
+on Hopper/Blackwell, AWQ 4-bit on Ada/Ampere, one BF16 reference kept for eval regression. `--enable-prefix-caching` and
 `--structured-outputs-config {"backend": "xgrammar"}` are mandatory on every generate instance
 (the latter replaced vLLM's removed `--guided-decoding-backend xgrammar`; an instance given the
 old flag exits at start). `context` in the registry is a cap: when vLLM exits because that

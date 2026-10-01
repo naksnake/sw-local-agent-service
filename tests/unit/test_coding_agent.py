@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import zipfile
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -219,6 +220,15 @@ def test_zip_export_is_reproducible_and_skips_git(tmp_path: Path) -> None:
     assert first.sha256 == second.sha256 and first.kind == "zip"
     with zipfile.ZipFile(first.path) as archive:
         assert archive.namelist() == ["a.py"]
+        assert archive.getinfo("a.py").external_attr >> 16 == 0o644
+
+    script = project / "run.py"
+    script.write_text("#!/usr/bin/env python3\nprint(1)\n")
+    script.chmod(0o755)
+    third = zip_project(project, tmp_path / "out3" / "p.zip")
+    with zipfile.ZipFile(third.path) as archive:
+        assert archive.getinfo("run.py").external_attr >> 16 == 0o755, "unzips runnable"
+        assert archive.getinfo("a.py").external_attr >> 16 == 0o644
 
 
 # --- end to end through the kernel -------------------------------------------------------------
@@ -431,6 +441,34 @@ def test_an_empty_project_is_never_done_even_when_every_check_passes(tmp_path: P
     assert "files failed" in task.verdict.sentence
     assert "The project is still empty" in coder.requests[-1].failures[-1].output
     assert ticket.steps[3].status == "pending", "nothing was committed"
+
+
+@needs_git
+def test_tool_caches_are_never_committed(tmp_path: Path) -> None:
+    """The reviewer objected to committed __pycache__ files (T-coding-0015)."""
+    coder = FakeCoder(
+        EditSet(
+            files={
+                "fan_ctl.py": "def parse(t):\n    return t\n",
+                "__pycache__/fan_ctl.cpython-312.pyc": "cache",
+                ".pytest_cache/v/cache/lastfailed": "{}",
+            }
+        )
+    )
+    harness = Harness(
+        tmp_path, coder=coder, checker=FakeCrossChecker(votes("approve"), agreed=True)
+    )
+    ticket = harness.kernel.store.load(harness.start())
+    project = next(tmp_path.glob("Coding/*/Projects/*"))
+    tracked = subprocess.run(
+        ["git", "-C", str(project), "ls-files"], capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert "fan_ctl.py" in tracked
+    assert not any(p.startswith(("__pycache__/", ".pytest_cache/")) for p in tracked), tracked
+    assert (project / "__pycache__" / "fan_ctl.cpython-312.pyc").is_file(), "left on disk"
+    exclude = (project / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+    assert "__pycache__/" in exclude and ".mypy_cache/" in exclude
+    assert ticket.steps[3].status == "done"
 
 
 def test_a_disagreeing_panel_sends_the_ticket_to_review_with_the_concerns(tmp_path: Path) -> None:

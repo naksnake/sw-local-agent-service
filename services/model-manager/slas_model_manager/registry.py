@@ -43,11 +43,22 @@ class ModelEntry(SlasModel):
         return f"{self.display_name} ({QUANT_LABELS[self.quant]})"
 
 
+#: GPU counts vLLM's tensor parallel accepts for the shipped models (their attention heads
+#: divide by each). TODO(SLAS-MODELS): check a new model's head count before allowing 8.
+TENSOR_PARALLEL_SIZES: Final = (1, 2, 4, 8)
+
+
 class Registry(SlasModel):
     version: int = 1
     models: list[ModelEntry] = Field(min_length=1)
     roles: dict[str, str] = Field(default_factory=dict, description="role → model id")
     voters: list[str] = Field(default_factory=list, description="model ids, different families")
+    #: role → GPUs its instance runs on in tensor parallel (ADR-0020). Per role, not per
+    #: model: one model often serves several roles and a voter, and only the role that does
+    #: the long work (the coder) is worth spreading. Absent: as many as the memory needs.
+    tensor_parallel: dict[str, int] = Field(
+        default_factory=dict, description="role → GPUs in tensor parallel (1, 2, 4 or 8)"
+    )
 
     @model_validator(mode="after")
     def _consistent(self) -> Registry:
@@ -67,6 +78,14 @@ class Registry(SlasModel):
                 raise ValueError(f"voter {model_id!r} is not a model in this registry")
         if len(set(self.voters)) != len(self.voters):
             raise ValueError("voters must be distinct models")
+        for role, gpus in self.tensor_parallel.items():
+            if role not in self.roles:
+                raise ValueError(f"tensor_parallel names {role!r}, which no model serves")
+            if gpus not in TENSOR_PARALLEL_SIZES:
+                raise ValueError(
+                    f"tensor_parallel for {role} is {gpus}; vLLM splits a model over "
+                    f"{', '.join(str(n) for n in TENSOR_PARALLEL_SIZES)} GPUs"
+                )
         return self
 
     def model(self, model_id: str) -> ModelEntry:
@@ -449,4 +468,7 @@ def render_registry_yaml(data: Mapping[str, object], *, header: str = "") -> str
     lines.extend(f"  {role}: {model_id}" for role, model_id in registry.roles.items())
     lines.append("voters:" if registry.voters else "voters: []")
     lines.extend(f"  - {model_id}" for model_id in registry.voters)
+    if registry.tensor_parallel:  # written only when set, so existing files stay as they are
+        lines.append("tensor_parallel:")
+        lines.extend(f"  {role}: {gpus}" for role, gpus in registry.tensor_parallel.items())
     return "\n".join(lines) + "\n"
