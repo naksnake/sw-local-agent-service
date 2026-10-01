@@ -6,6 +6,7 @@ health prober and `FakeSmokeTester` (CLAUDE.md §11: no live model, no real runt
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import threading
@@ -1164,6 +1165,74 @@ COOPERATIVE_TOPK = (
     ".cu:48, cooperative_topk launch failed: no kernel image is available for execution on the "
     "device"
 )
+
+
+QWEN_REFUSES_MLA_KV = (
+    "ValueError: No valid attention backend found for cuda with AttentionSelectorConfig("
+    "head_size=256, dtype=torch.bfloat16, kv_cache_dtype=fp8_ds_mla, block_size=None, "
+    "use_mla=False). Reasons: {FLASHINFER: [kv_cache_dtype not supported]}."
+)
+
+
+def _coder_on(model_id: str) -> dict[str, Any]:
+    data: dict[str, Any] = copy.deepcopy(dict(PROFILE_REGISTRIES["quickstart"]))
+    models: list[dict[str, Any]] = data["models"]
+    for model in models:
+        if model["id"] == model_id and "coder" not in model["roles"]:
+            model["roles"] = [*model["roles"], "coder"]
+    data["roles"] = {**data["roles"], "coder": model_id}
+    return data
+
+
+def test_a_remedy_learnt_for_one_model_is_forgotten_when_the_role_changes_model(
+    tmp_path: Path,
+) -> None:
+    """HGX B300 after a reboot: the coder role had been served by DeepSeek-V4 Flash and
+    learnt its FP8 KV cache; back on Qwen the coder failed on every start with
+    "No valid attention backend found … kv_cache_dtype=fp8_ds_mla"."""
+    h = Harness(
+        tmp_path,
+        gpu_ids=tuple(range(8)),
+        gpu_vram_gib=270.0,
+        registry=_coder_on("deepseek-v4-flash"),
+    )
+    h.controller.reconcile()
+    h.api.logs_text["vllm-coder"] = _engine_exception(DS_KV_CACHE)
+    h.api.restarting("vllm-coder", times=5)
+    h.controller.reconcile()
+    assert "fp8_ds_mla" in h.api.bodies["vllm-coder"]["Cmd"], "DeepSeek gets its fix"
+
+    h.models_file.write_text(render_registry_yaml(_coder_on("qwen3.8-27b-fp8")), encoding="utf-8")
+    h.api.logs_text["vllm-coder"] = ""
+    h.controller.reconcile()
+    cmd = h.api.bodies["vllm-coder"]["Cmd"]
+    assert cmd[0].endswith("qwen3.8-27b-fp8")
+    assert "fp8_ds_mla" not in cmd and "--kv-cache-dtype" not in cmd, "not carried to Qwen"
+    assert "FP8 KV cache" not in h.rows()["vllm-coder"]["sentence"]
+
+
+def test_a_remedy_the_model_rejects_is_removed_and_the_others_kept(tmp_path: Path) -> None:
+    """The container the host had: Qwen with DeepSeek's KV cache flag and the Marlin fix."""
+    h = Harness(tmp_path, gpu_ids=tuple(range(8)), gpu_vram_gib=270.0)
+    h.controller.reconcile()
+    h.api.logs_text["vllm-coder"] = _engine_exception(CUTLASS_FP8)
+    h.api.restarting("vllm-coder", times=5)
+    h.controller.reconcile()  # learns Marlin, legitimately
+    spec = h.api.specs["vllm-coder"]
+    argv = [*json.loads(spec.labels["slas.argv"]), "--kv-cache-dtype", "fp8_ds_mla"]
+    spec.labels["slas.argv"] = json.dumps(argv)  # as a stale manager left it
+    again = Harness(tmp_path, api=h.api, gpu_ids=tuple(range(8)), gpu_vram_gib=270.0)
+    again.api.logs_text["vllm-coder"] = _engine_exception(QWEN_REFUSES_MLA_KV)
+    again.api.restarting("vllm-coder", times=5)
+    report = again.controller.reconcile()
+    stop = next(a for a in report.actions if a.kind == "stop" and a.name == "vllm-coder")
+    assert stop.reason == (
+        "crashed because --kv-cache-dtype fp8_ds_mla does not apply to this model; started "
+        "again without it"
+    )
+    cmd = again.api.bodies["vllm-coder"]["Cmd"]
+    assert "fp8_ds_mla" not in cmd and cmd[-2:] == ["--linear-backend", "marlin"]
+    assert [e["remedy"] for e in again.events("instance.remedy_removed")] == ["fp8-kv-cache"]
 
 
 def test_a_coder_that_cannot_run_in_tensor_parallel_goes_back_to_one_gpu(tmp_path: Path) -> None:

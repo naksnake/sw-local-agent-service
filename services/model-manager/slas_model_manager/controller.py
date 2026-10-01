@@ -169,6 +169,9 @@ class Remedy:
     #: A remedy for the same crash that this one replaces when the crash persists (its
     #: flags leave the argv; the two never travel together).
     supersedes: str | None = None
+    #: The substring of a crash that says the model refuses this remedy (it was learnt for
+    #: another model the instance served before); the remedy is then removed, not retried.
+    rejected_by: str | None = None
 
     def applied_in(self, argv: Sequence[str], env: Mapping[str, str]) -> bool:
         if self.args and all(arg in argv for arg in self.args):
@@ -190,6 +193,9 @@ REMEDIES: Final[tuple[Remedy, ...]] = (
             "crashed because its FP8 MLA attention layout needs an FP8 KV cache; started again "
             "with --kv-cache-dtype fp8_ds_mla"
         ),
+        # A model without MLA (Qwen) cannot use it: "No valid attention backend found …
+        # kv_cache_dtype=fp8_ds_mla".
+        rejected_by="kv_cache_dtype=fp8_ds_mla",
     ),
     # vLLM 0.29 chooses the linear-layer kernel with `--linear-backend` (KernelConfig); the
     # older VLLM_TEST_FORCE_FP8_MARLIN variable is gone and was a no-op on the first host.
@@ -416,6 +422,11 @@ class Controller:
         #: Instances whose tensor parallel this vLLM build cannot run (ADR-0020): they run on
         #: the GPUs their memory needs, and the row says why.
         self._tp_fallback: dict[str, str] = {}
+        #: The model the learnt state above belongs to, per instance. Remedies, a smaller
+        #: context and a GPU fallback are facts about a model on this host: when the
+        #: instance serves another model they are forgotten (DeepSeek's FP8 KV cache made
+        #: the Qwen coder fail on every start after the coder role changed back).
+        self._learnt_for: dict[str, str] = {}
         #: Remedies (REMEDIES ids) in force per instance, learnt from crash loops and read back
         #: from a running container's argv and `slas.env` label after a manager restart.
         self._applied: dict[str, set[str]] = {}
@@ -759,6 +770,8 @@ class Controller:
             for name, ref in refs.items()
             if name not in touched
         }
+        for action in starting:
+            self._learnt_state_for(action.name, action.model_id or desired[action.name])
         placed = placement.place(
             [
                 c.model_copy(update={"min_gpus": 1}) if c.instance in self._tp_fallback else c
@@ -817,6 +830,7 @@ class Controller:
                 )
                 self.log.warning("instance.no_room", instance=action.name, model=model_id)
                 continue
+            self._learnt_state_for(action.name, model_id)
             spec = vllm_spec(
                 entry,
                 name=action.name,
@@ -894,6 +908,7 @@ class Controller:
         except KeyError:
             return None  # the plan stops it for the model mismatch
         name = ref.name
+        self._learnt_state_for(name, ref.spec.model_id)
         _, role = self._kind_and_role(name)
         current = context_of(ref.spec.argv) or entry.context
         # A context below the registry's was learnt from an earlier crash loop (by this
@@ -916,6 +931,9 @@ class Controller:
         crash_looping = status == "failed" and self._restarts.get(name, 0) >= CRASH_LOOP_RESTARTS
         report = self._crash_report(name) if crash_looping else None
         if report is not None:
+            rejected = self._rejected_remedy(ref, report)
+            if rejected is not None:
+                return rejected
             shrunk = self._shrink_context_after_crash(entry, ref, report)
             if shrunk is not None:
                 return shrunk
@@ -952,6 +970,38 @@ class Controller:
                 "was created with other vLLM flags than the model manager now uses; a "
                 "container's command is fixed at creation"
             )
+        return None
+
+    def _learnt_state_for(self, name: str, model_id: str) -> None:
+        """Forget what was learnt for `name` when it now serves another model."""
+        previous = self._learnt_for.get(name)
+        if previous is not None and previous != model_id:
+            for store in (
+                self._applied,
+                self._tried,
+                self._context_cap,
+                self._context_note,
+                self._tp_fallback,
+            ):
+                store.pop(name, None)
+            self.log.info("instance.learnt_forgotten", instance=name, was=previous, now=model_id)
+        self._learnt_for[name] = model_id
+
+    def _rejected_remedy(self, ref: ContainerRef, report: CrashReport) -> str | None:
+        """A remedy in force that this model's crash refuses is removed, once; the reason."""
+        name = ref.name
+        applied = self._applied.get(name, set())
+        for remedy in REMEDIES:
+            if remedy.id not in applied or remedy.rejected_by is None:
+                continue
+            if any(remedy.rejected_by in line for line in report.attempt):
+                applied.discard(remedy.id)
+                self._tried.setdefault(name, set()).add(remedy.id)
+                self.log.warning("instance.remedy_removed", instance=name, remedy=remedy.id)
+                return (
+                    f"crashed because {' '.join(remedy.args)} does not apply to this model; "
+                    "started again without it"
+                )
         return None
 
     def _extras(self, name: str) -> tuple[list[str], dict[str, str]]:
