@@ -809,10 +809,11 @@ case "$bootstrap" in
     if [[ -f "$ADMIN_PASSWORD_FILE" ]]; then
       echo "Administrator: admin@slas.local — one-time password: $(cat "$ADMIN_PASSWORD_FILE") (you will choose a new one at first sign-in)."
     else
-      echo "The administrator's one-time password is still pending, but $ADMIN_PASSWORD_FILE is missing. Likely cause: the secrets directory was changed by hand. What to do: reset it with \`docker compose exec api slas-api user add\` or restore the file from a backup."
+      echo "The administrator's one-time password is still pending, but $ADMIN_PASSWORD_FILE is missing. Likely cause: the secrets directory was changed by hand. What to do: run \`docker compose exec api slas-api user reset-password --email admin@slas.local\` for a new one-time password, or restore the file from a backup."
     fi ;;
   done)
-    echo "Administrator: admin@slas.local — the administrator already chose a password; the one-time password is no longer valid." ;;
+    echo "Administrator: admin@slas.local — the administrator already chose a password, or it was reset; the one-time password is no longer valid."
+    echo "Forgotten it? \`docker compose exec api slas-api user reset-password --email admin@slas.local\` prints a new one-time password." ;;
   *)
     echo "Could not ask the api whether the administrator's one-time password is still pending (it answered: ${bootstrap:-nothing})."
     echo "Likely cause: the api is still starting, or its image does not carry the slas-api command yet."

@@ -61,7 +61,9 @@ Primary button: Change role.
 
 Title: Reset *Ana*'s password. Body: *Ana*'s current password stops working, she is signed
 out everywhere and gets a new one-time password. Primary button: Reset password. The same
-dialog then advances to the result panel from Add person.
+dialog then advances to the result panel from Add person. When nobody can sign in as an
+administrator, `slas-api user reset-password --email …` in the api container does the same
+reset (docs/api-contract.md).
 
 ## Switch off / Switch on (dialog)
 

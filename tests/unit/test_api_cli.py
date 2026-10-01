@@ -1,4 +1,5 @@
-"""`slas-api migrate | bootstrap status | user add | user list | serve` against SQLite."""
+"""`slas-api migrate | bootstrap status | user add | user list | user reset-password | serve`
+against SQLite."""
 
 from __future__ import annotations
 
@@ -16,7 +17,9 @@ from slas_api import cli
 from slas_api.db import make_engine
 from slas_api.models import AuditRow, Person
 from slas_api.settings import ADMIN_INITIAL_PASSWORD_SECRET, Settings
-from tests.unit.api_harness import INITIAL_PASSWORD, make_settings
+from tests.unit.api_harness import ADMIN_EMAIL, INITIAL_PASSWORD, make_harness, make_settings
+from tests.unit.test_api_people_settings import OTP
+from tests.unit.test_api_session import assert_problem
 
 
 def run(settings: Settings, *argv: str, stdin: str = "") -> tuple[int, str, str]:
@@ -205,6 +208,108 @@ def test_user_list_on_an_empty_table(settings: Settings) -> None:
     (settings.slas_secrets_dir / ADMIN_INITIAL_PASSWORD_SECRET).unlink()
     run(settings, "migrate")
     assert run(settings, "user", "list")[1].startswith("Nobody is registered yet;")
+
+
+def test_user_reset_password_signs_them_out_and_prints_a_one_time_password(
+    tmp_path: Path,
+) -> None:
+    harness = make_harness(tmp_path)
+    admin = harness.sign_in_admin()
+    _, one_time = harness.add_person("ana@lab.local", "Ana Lin", "engineer", client=admin)
+    ana = harness.client_for("ana@lab.local", one_time, "anas-own-long-password")
+    code, out, err = run(harness.settings, "user", "reset-password", "--email", "Ana@Lab.local")
+    assert code == 0 and err == ""
+    first, second = out.splitlines()
+    assert first.startswith(
+        "Ana Lin (ana@lab.local) can sign in as Engineer with the one-time password: "
+    )
+    new = first.rsplit(" ", 1)[1]
+    assert OTP.match(new) and new != one_time
+    assert second == (
+        "Their old password no longer works and they are signed out everywhere. "
+        "This one works once; they choose their own at sign-in. You won't see it again."
+    )
+    assert_problem(ana.get("/api/v1/me"), 401, reason="none")
+    assert harness.sign_in("ana@lab.local", "anas-own-long-password", client=ana).status_code == 401
+    again = harness.sign_in("ana@lab.local", new, client=ana)
+    assert again.status_code == 200 and again.json()["must_change_password"] is True
+    row = harness.audit_rows()[-1]
+    assert row.action == "person.password_reset" and row.subject == "ana@lab.local"
+    assert row.via == "cli" and row.actor == "system" and row.trace_id
+    assert json.loads(row.detail) == {"sessions_revoked": 1} and new not in row.detail
+
+
+def test_user_reset_password_of_the_bootstrap_administrator_ends_the_bootstrap(
+    tmp_path: Path,
+) -> None:
+    harness = make_harness(tmp_path)
+    assert run(harness.settings, "bootstrap", "status")[1] == "pending\n"
+    code, out, _ = run(harness.settings, "user", "reset-password", "--email", ADMIN_EMAIL)
+    assert code == 0
+    assert out.startswith(
+        "Administrator (admin@slas.local) can sign in as Administrator with the one-time password: "
+    )
+    one_time = out.splitlines()[0].rsplit(" ", 1)[1]
+    assert run(harness.settings, "bootstrap", "status")[1] == "done\n", (
+        "the installer's password no longer works, so install.sh must stop printing it"
+    )
+    assert harness.sign_in(ADMIN_EMAIL, INITIAL_PASSWORD).status_code == 401
+    harness.admin_password = one_time
+    harness.sign_in_admin()
+    rows = harness.audit_rows()
+    assert [r.action for r in rows] == [
+        "person.bootstrapped",
+        "person.password_reset",
+        "bootstrap.consumed",
+        "person.password_changed",
+    ]
+    assert rows[2].via == "cli" and rows[2].actor == "system"
+
+
+def test_user_reset_password_of_a_switched_off_account_says_so(settings: Settings) -> None:
+    run(settings, "migrate")
+    run(
+        settings,
+        "user",
+        "add",
+        "--email",
+        "pat@lab.local",
+        "--display-name",
+        "Pat",
+        "--role",
+        "viewer",
+    )
+    with Session(make_engine(settings.database_url())) as db:
+        pat = db.scalar(select(Person).where(Person.email == "pat@lab.local"))
+        assert pat is not None
+        pat.is_active = False
+        db.commit()
+    code, out, _ = run(settings, "user", "reset-password", "--email", "pat@lab.local")
+    assert code == 0
+    first, second = out.splitlines()
+    assert first.startswith("Pat (pat@lab.local) has a new one-time password: ")
+    assert OTP.match(first.rsplit(" ", 1)[1])
+    assert second == (
+        "Their account is switched off: once an administrator switches it on under "
+        "Admin → People, this password works once and they choose their own. "
+        "You won't see it again."
+    )
+    pat_now = next(p for p in people(settings) if p.email == "pat@lab.local")
+    assert not pat_now.is_active and pat_now.must_change_password, "still off, nothing else"
+
+
+def test_user_reset_password_of_an_unknown_address_is_three_lines_and_exit_1(
+    settings: Settings,
+) -> None:
+    run(settings, "migrate")
+    code, out, err = run(settings, "user", "reset-password", "--email", "Nobody@Lab.local")
+    assert code == 1 and out == ""
+    assert err.splitlines() == [
+        "Nobody signs in as nobody@lab.local.",
+        "Likely cause: A typo in the address, or the person was never added.",
+        "What to do: Check the address with `slas-api user list`.",
+    ]
+    assert [r.action for r in audit(settings)] == ["person.bootstrapped"]
 
 
 def test_serve_migrates_then_runs_uvicorn_on_the_bind_address(

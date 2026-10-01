@@ -28,7 +28,8 @@ never place a password in argv or a log (§11). Credentials never enter a model 
   `must_change_password`, in one transaction guarded by a unique index. The secret file is
   never deleted or rewritten: a compose file secret is a read-only mount whose source every
   later `compose up` needs. Consumption is recorded in the database
-  (`bootstrap_consumed_at` on the first successful password change, plus an audit row).
+  (`bootstrap_consumed_at` on the first successful password change or on a reset of that
+  password, plus an audit row).
   `install.sh` asks `slas-api bootstrap status` and prints the sign-in sentence with the
   one-time password only while the status is "pending". One onboarding mechanism for
   everyone: a one-time password and a forced change at first sign-in.

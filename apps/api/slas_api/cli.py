@@ -1,8 +1,9 @@
 """`slas-api`: the in-container commands (docs/api-contract.md, ADR-0007).
 
-`migrate` · `bootstrap status` · `user add` · `user list` · `serve`. Argv only; a password
-travels on stdin (`--password-stdin`) or is generated here and printed once. Every command
-acts as the `SYSTEM` principal with `via=cli` and writes the same audit rows as the routes.
+`migrate` · `bootstrap status` · `user add` · `user list` · `user reset-password` · `serve`.
+Argv only; a password travels on stdin (`--password-stdin`) or is generated here and printed
+once. Every command acts as the `SYSTEM` principal with `via=cli` and writes the same audit
+rows as the routes.
 """
 
 from __future__ import annotations
@@ -44,6 +45,11 @@ def _parser() -> argparse.ArgumentParser:
         help="read the password from stdin instead of generating a one-time password",
     )
     user_commands.add_parser("list", help="one line per person")
+    reset = user_commands.add_parser(
+        "reset-password",
+        help="give a person a new one-time password and sign them out everywhere",
+    )
+    reset.add_argument("--email", required=True)
 
     commands.add_parser("serve", help="migrate, bootstrap, then serve on the bind address")
     return parser
@@ -108,6 +114,32 @@ def _user_list(svc: Services, out: TextIO) -> int:
     return 0
 
 
+def _user_reset_password(svc: Services, args: argparse.Namespace, out: TextIO) -> int:
+    with tracing.trace(), session_scope(svc.engine) as db:
+        found = service.get_person_by_email(db, args.email)
+        person, one_time = service.reset_password(
+            svc, db, actor=SYSTEM, via="cli", person_id=found.id
+        )
+        if person.is_active:
+            label = svc.roles.current().describe(person.role).split(":", 1)[0]
+            out.write(
+                f"{person.display_name} ({person.email}) can sign in as {label} with the "
+                f"one-time password: {one_time}\n"
+                "Their old password no longer works and they are signed out everywhere. "
+                "This one works once; they choose their own at sign-in. "
+                "You won't see it again.\n"
+            )
+        else:
+            out.write(
+                f"{person.display_name} ({person.email}) has a new one-time password: "
+                f"{one_time}\n"
+                "Their account is switched off: once an administrator switches it on under "
+                "Admin → People, this password works once and they choose their own. "
+                "You won't see it again.\n"
+            )
+    return 0
+
+
 def _serve(svc: Services, settings: Settings) -> None:
     import uvicorn
 
@@ -137,6 +169,8 @@ def main(
             return _bootstrap_status(svc, out)
         if args.command == "user" and args.user_command == "add":
             return _user_add(svc, args, inp, out)
+        if args.command == "user" and args.user_command == "reset-password":
+            return _user_reset_password(svc, args, out)
         if args.command == "user":
             return _user_list(svc, out)
         _migrate(svc, out)

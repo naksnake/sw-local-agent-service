@@ -31,7 +31,7 @@ Package `slas_api`, distribution `slas-api`, console script `slas-api`.
 | `proxy.py` | Round 2: `Identity` from the principal, `forward()` through `slas_http.ServiceClient` (a downstream three-part error keeps its status and sentences; an unreachable service is the 503 naming `slas logs <service>`), the JSON-body dependency. |
 | `routes_round2.py` | The explicit table of docs/api-contract-round-2.md §8 (`ROUTES`: method, browser path, service, downstream path, capability required before forwarding) and the two-step terminal route through the sandbox manager. |
 | `app.py` | `create_app(settings, engine=…, throttle=…, clock=…, log=…, services=…)`, the trace-id and `X-Requested-With` ASGI middlewares, `route_table()`; `build_services(…, downstream=…)` takes the `Downstream` clients (tests inject `httpx.MockTransport`-backed ones). |
-| `cli.py` | `slas-api migrate | bootstrap status | user add | user list | serve`. |
+| `cli.py` | `slas-api migrate | bootstrap status | user add | user list | user reset-password | serve`. |
 
 ## Running it locally
 
@@ -45,6 +45,7 @@ printf 'choose-a-one-time-password' > "$SLAS_SECRETS_DIR/admin-initial-password"
 uv run slas-api migrate            # migrations, then admin@slas.local with must_change_password
 uv run slas-api bootstrap status   # pending | done
 uv run slas-api user list
+uv run slas-api user reset-password --email admin@slas.local   # new one-time password, printed once
 uv run slas-api serve              # migrate again (idempotent), then uvicorn on 0.0.0.0:8000
 ```
 

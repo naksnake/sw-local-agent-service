@@ -10,10 +10,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from slas_api import service
+from slas_api.db import session_scope
 from slas_api.runtime_settings import MARKER
+from slas_authz import SYSTEM
 from tests.unit.api_harness import (
     ADMIN_EMAIL,
     ADMIN_PASSWORD,
+    INITIAL_PASSWORD,
     WEBUI,
     Harness,
     make_harness,
@@ -212,6 +216,33 @@ def test_password_reset_revokes_sessions_and_forces_a_change(
     assert next(p for p in listed if p["id"] == person["id"])["must_change_password"] is True
     missing = admin.post("/api/v1/admin/people/no-such-id/password-reset", headers=WEBUI)
     assert_problem(missing, 404)
+
+
+def test_resetting_the_bootstrap_administrator_ends_the_bootstrap(harness: Harness) -> None:
+    with session_scope(harness.services.engine) as db:
+        service.add_person(
+            harness.services,
+            db,
+            actor=SYSTEM,
+            via="cli",
+            email="bo@lab.local",
+            display_name="Bo",
+            role="administrator",
+            password="bos-own-long-password",
+        )
+    bo = harness.new_client()
+    assert harness.sign_in("bo@lab.local", "bos-own-long-password", client=bo).status_code == 200
+    listed = bo.get("/api/v1/admin/people").json()
+    admin_id = next(p["id"] for p in listed if p["email"] == ADMIN_EMAIL)
+    assert service.bootstrap_status(harness.services) == "pending"
+    reset = bo.post(f"/api/v1/admin/people/{admin_id}/password-reset", headers=WEBUI)
+    assert reset.status_code == 200
+    assert service.bootstrap_status(harness.services) == "done", (
+        "the installer's password no longer works, so install.sh must stop printing it"
+    )
+    assert harness.sign_in(ADMIN_EMAIL, INITIAL_PASSWORD).status_code == 401
+    consumed = next(r for r in harness.audit_rows() if r.action == "bootstrap.consumed")
+    assert consumed.via == "webui" and consumed.actor == "bo@lab.local"
 
 
 def test_every_change_writes_an_audit_row_without_a_password(

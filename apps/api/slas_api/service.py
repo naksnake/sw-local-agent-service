@@ -127,6 +127,14 @@ def session_expired(hours: int) -> ThreePartMessage:
     )
 
 
+def unknown_email(email: str) -> ThreePartMessage:
+    return ThreePartMessage(
+        f"Nobody signs in as {email}.",
+        "A typo in the address, or the person was never added.",
+        "Check the address with `slas-api user list`.",
+    )
+
+
 def duplicate_email(email: str) -> ThreePartMessage:
     return ThreePartMessage(
         f"Someone already signs in as {email}.",
@@ -289,6 +297,13 @@ def find_by_email(db: Session, email: str) -> Person | None:
     return db.scalar(select(Person).where(Person.email == normalise_email(email)))
 
 
+def get_person_by_email(db: Session, email: str) -> Person:
+    person = find_by_email(db, email)
+    if person is None:
+        raise ApiError(404, unknown_email(normalise_email(email)))
+    return person
+
+
 def _holds_admin(person: Person, roles: RoleSet) -> bool:
     role = roles.get(person.role)
     return role is not None and role.can(Capability.ADMIN_PEOPLE)
@@ -434,6 +449,24 @@ def update_person(
     return person
 
 
+def _end_bootstrap(
+    db: Session, person: Person, *, actor: Principal, via: Via, now: datetime
+) -> None:
+    """Record that the installer's one-time password no longer works (ADR-0007)."""
+    if person.email != BOOTSTRAP_ADMIN_EMAIL or person.bootstrap_consumed_at is not None:
+        return
+    person.bootstrap_consumed_at = now
+    audit(
+        db,
+        actor=actor,
+        action="bootstrap.consumed",
+        subject=person.email,
+        detail={},
+        via=via,
+        now=now,
+    )
+
+
 def reset_password(
     svc: Services, db: Session, *, actor: Principal, via: Via, person_id: str
 ) -> tuple[Person, str]:
@@ -452,6 +485,9 @@ def reset_password(
         via=via,
         now=now,
     )
+    # The installer's password stops working here too; without this `bootstrap status` would
+    # stay pending and install.sh would keep printing that password as the one to use.
+    _end_bootstrap(db, person, actor=actor, via=via, now=now)
     db.flush()
     return person, one_time
 
@@ -486,17 +522,7 @@ def change_own_password(
         via=via,
         now=now,
     )
-    if person.email == BOOTSTRAP_ADMIN_EMAIL and person.bootstrap_consumed_at is None:
-        person.bootstrap_consumed_at = now
-        audit(
-            db,
-            actor=principal,
-            action="bootstrap.consumed",
-            subject=person.email,
-            detail={},
-            via=via,
-            now=now,
-        )
+    _end_bootstrap(db, person, actor=principal, via=via, now=now)
     db.flush()
     return person
 

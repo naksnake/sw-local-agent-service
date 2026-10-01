@@ -64,7 +64,7 @@ While `must_change_password` is true, every route except `GET /api/v1/me`,
 | `GET /api/v1/admin/people` | — | `200 [Person]`, ordered by display name. |
 | `POST /api/v1/admin/people` | `{"email": str, "display_name": str, "role": str}` | `201 {"person": Person, "one_time_password": str}`; the person must change it at first sign-in. `409` when the email exists. `400` for an unknown role (names the roles). |
 | `PATCH /api/v1/admin/people/{id}` | `{"role"?: str, "is_active"?: bool}` | `200 Person`. Switching a person off revokes their sessions. An administrator cannot switch off or demote the last active administrator (`400`). |
-| `POST /api/v1/admin/people/{id}/password-reset` | — | `200 {"one_time_password": str}`; sessions revoked; `must_change_password` set. |
+| `POST /api/v1/admin/people/{id}/password-reset` | — | `200 {"one_time_password": str}`; sessions revoked; `must_change_password` set. A reset of `admin@slas.local` also ends the bootstrap (below). |
 
 Every change writes an `audit_log` row (`at, actor, action, subject, detail, via, trace_id`);
 `detail` never holds a password.
@@ -103,9 +103,10 @@ three routes proxy to the orchestrator and return the real lists (see "Round 2" 
 | Command | Does |
 |---|---|
 | `slas-api migrate` | Runs the Alembic migrations under a Postgres advisory lock, then the bootstrap (below). The container entrypoint runs it before serving. |
-| `slas-api bootstrap status` | Prints `pending` while `admin@slas.local` still has its one-time password, `done` after the first successful change; exit 0 either way. `install.sh` prints the one-time password only while pending. |
+| `slas-api bootstrap status` | Prints `pending` while `admin@slas.local` still has its one-time password, `done` after the first successful change or a reset; exit 0 either way. `install.sh` prints the one-time password only while pending. |
 | `slas-api user add --email E --display-name N --role R [--password-stdin]` | Adds a person; without `--password-stdin` a one-time password is generated and printed once. |
 | `slas-api user list` | One line per person: email, role, active, last sign-in. |
+| `slas-api user reset-password --email E` | The reset of Admin → People: a new one-time password printed once, every session of that person revoked, `must_change_password` set. A switched-off account stays off and the sentence says so. The way back in when nobody can sign in as an administrator. |
 
 CLI actions run as `SYSTEM` with `via=cli` and write audit rows like the routes do.
 
@@ -115,7 +116,8 @@ At first start with an empty `people` table the api creates `admin@slas.local`
 ("Administrator", role `administrator`) with the password from
 `/run/secrets/admin-initial-password` and `must_change_password = true`, in one transaction
 guarded by the unique email index. The secret file is never rewritten; the first successful
-change records `bootstrap_consumed_at`.
+change records `bootstrap_consumed_at`, and so does a reset of that password (route or CLI),
+because the file's password stops working then too.
 
 ## Round 2 — the browser routes that proxy to the other services
 
