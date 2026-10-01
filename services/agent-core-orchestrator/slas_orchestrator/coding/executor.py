@@ -174,6 +174,24 @@ def exclude_tool_caches(project_dir: Path) -> bool:
     return True
 
 
+def missing_files(project_dir: Path, names: Sequence[str]) -> list[str]:
+    """The task's named files that do not exist yet. A name with a directory must exist at
+    that path; a bare name (`__main__.py`) may sit in any directory of the project."""
+    missing: list[str] = []
+    for name in names:
+        if "/" in name:
+            if not (project_dir / name).is_file():
+                missing.append(name)
+            continue
+        found = any(
+            not (_SKIP_DIRS & set(path.relative_to(project_dir).parts)) and path.is_file()
+            for path in project_dir.rglob(name)
+        )
+        if not found:
+            missing.append(name)
+    return missing
+
+
 def fix_script_modes(project_dir: Path) -> list[str]:
     """Make the executable bit follow the shebang; returns the paths whose mode changed.
 
@@ -412,7 +430,20 @@ class CodingExecutor:
                 )
             changed += [rel for rel in fix_script_modes(project) if rel not in changed]
             results = self._run_checks(session, checks)
-            if not snapshot(project):
+            absent = missing_files(project, task.files)
+            if absent:
+                # T-coding-0018 passed every check without __main__.py and examples/.
+                results.append(
+                    CheckResult(
+                        kind="files",
+                        description="the files the task names exist",
+                        exit_code=1,
+                        output="The task names files that do not exist yet: "
+                        + ", ".join(absent)
+                        + ". Write them.",
+                    )
+                )
+            elif not snapshot(project):
                 # Every check passes on an empty project; that is not the task done.
                 results.append(
                     CheckResult(

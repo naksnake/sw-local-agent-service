@@ -7,6 +7,7 @@ wizard's third step; the kernel only plans from an approved breakdown.
 
 from __future__ import annotations
 
+import re
 from typing import Literal, Protocol
 
 from pydantic import Field, model_validator
@@ -98,10 +99,30 @@ class FakeBreakdowner:
         return list(self.tasks) if self.tasks is not None else tasks_from_plan(plan)
 
 
+#: A file a task line names: `examples/after.json`, `__main__.py`, `README.md`.
+_FILE_NAME = re.compile(
+    r"(?<![\w./-])([\w.-]+(?:/[\w.-]+)*\.(?:py|pyi|json|md|toml|yaml|yml|txt|cfg|ini|csv|sh|"
+    r"rs|go|c|h|cc|cpp|hpp|ts|tsx|js|mjs))(?![\w/-])"
+)
+
+
+def files_named(title: str) -> list[str]:
+    """The files a task line names, in order, once each; the task is not done without them."""
+    found: list[str] = []
+    for match in _FILE_NAME.finditer(title.replace("`", " ")):
+        name = match.group(1).rstrip(".")
+        if name not in found:
+            found.append(name)
+    return found
+
+
 def tasks_from_plan(plan: PlanDocument) -> list[TaskItem]:
     """Deterministic fallback: one task per bullet; a plan with no bullets is one task."""
     titles = plan.tasks[:MAX_TASKS] or [plan.title]
-    return [TaskItem(n=n, title=title[:200]) for n, title in enumerate(titles, start=1)]
+    return [
+        TaskItem(n=n, title=title[:200], files=files_named(title))
+        for n, title in enumerate(titles, start=1)
+    ]
 
 
 def propose(plan: PlanDocument, *, breakdowner: Breakdowner | None = None) -> Breakdown:

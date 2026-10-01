@@ -24,6 +24,7 @@ from slas_orchestrator.coding.breakdown import (
     FakeBreakdowner,
     LanguageChoice,
     TaskItem,
+    files_named,
     propose,
 )
 from slas_orchestrator.coding.coder import build_messages
@@ -34,6 +35,7 @@ from slas_orchestrator.coding.executor import (
     FakeCoder,
     apply_edits,
     fix_script_modes,
+    missing_files,
     snapshot,
 )
 from slas_orchestrator.coding.export import zip_project
@@ -185,6 +187,49 @@ def test_apply_edits_stays_inside_the_project(tmp_path: Path) -> None:
     assert set(snapshot(tmp_path)) == {"src/a.py"}, ".git and binaries are left out"
 
 
+def test_a_task_line_names_the_files_it_must_leave_behind(tmp_path: Path) -> None:
+    """T-coding-0018 passed every check without __main__.py and examples/."""
+    assert files_named(
+        "Write report.py with the text and JSON reports, plus cli.py and __main__.py for the "
+        "options and the exit codes"
+    ) == ["report.py", "cli.py", "__main__.py"]
+    assert files_named("Add examples/baseline.json and examples/after.json, and a README.md.") == [
+        "examples/baseline.json",
+        "examples/after.json",
+        "README.md",
+    ]
+    assert files_named("Use Python 3.12 and keep `fan_ctl.py` small") == ["fan_ctl.py"]
+    assert files_named("Add pytest tests under tests/ for every case") == []
+
+    (tmp_path / "invdiff").mkdir()
+    (tmp_path / "invdiff" / "cli.py").write_text("x = 1\n")
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "__pycache__" / "__main__.py").write_text("")
+    names = ["cli.py", "__main__.py", "examples/after.json"]
+    assert missing_files(tmp_path, names) == ["__main__.py", "examples/after.json"]
+    (tmp_path / "invdiff" / "__main__.py").write_text("")
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "examples" / "after.json").write_text("{}")
+    assert missing_files(tmp_path, names) == []
+
+
+@needs_git
+def test_a_task_is_not_done_while_a_file_it_names_is_missing(tmp_path: Path) -> None:
+    coder = FakeCoder(EditSet(files={"fan_ctl.py": "def parse(t):\n    return t\n"}))
+    harness = Harness(
+        tmp_path, coder=coder, checker=FakeCrossChecker(votes("approve"), agreed=True)
+    )
+    named = TaskItem(
+        n=1, title="Write fan_ctl.py and __main__.py", files=["fan_ctl.py", "__main__.py"]
+    )
+    ticket = harness.kernel.store.load(harness.start(tasks=[named]))
+    task = ticket.steps[2]
+    assert task.status == "failed" and task.verdict is not None
+    assert "files failed" in task.verdict.sentence
+    told = coder.requests[-1].failures[-1].output
+    assert told == "The task names files that do not exist yet: __main__.py. Write them."
+
+
 def test_the_executable_bit_follows_the_shebang(tmp_path: Path) -> None:
     """ruff EXE001 failed three rounds: the model writes contents and can never set a mode."""
     script = tmp_path / "templog.py"
@@ -274,13 +319,18 @@ class Harness:
         return ExecResult(exit_code=0, stdout=f"{argv[1]} ok")
 
     def start(
-        self, *, languages: list[LanguageChoice] | None = None, cross_check: bool = True
+        self,
+        *,
+        languages: list[LanguageChoice] | None = None,
+        cross_check: bool = True,
+        tasks: list[TaskItem] | None = None,
     ) -> str:
         job = self.agent.ingest(Upload(filename="plan.md", uploaded_by="pat", content=PLAN))
         breakdown = self.agent.propose(job)
         approved = Breakdown(
             title=breakdown.title,
-            tasks=[
+            tasks=tasks
+            or [
                 TaskItem(
                     n=1,
                     title="Parse config.yaml into a dataclass in fan_ctl.py",
@@ -439,7 +489,8 @@ def test_an_empty_project_is_never_done_even_when_every_check_passes(tmp_path: P
     task = ticket.steps[2]
     assert task.status == "failed" and task.verdict is not None
     assert "files failed" in task.verdict.sentence
-    assert "The project is still empty" in coder.requests[-1].failures[-1].output
+    # The task names fan_ctl.py, so the agent says which file is missing.
+    assert "do not exist yet: fan_ctl.py" in coder.requests[-1].failures[-1].output
     assert ticket.steps[3].status == "pending", "nothing was committed"
 
 
