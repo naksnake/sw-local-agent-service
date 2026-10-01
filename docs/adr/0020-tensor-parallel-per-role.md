@@ -24,6 +24,12 @@ GPU; placement already prefers an empty GPU, so they only meet when GPUs run out
 - An instance already running on another count is stopped and started again on the new one
   by the next reconcile (INV-9: an edit of the file or the Models page, no restart). A
   role that is no longer served drops its entry.
+- A role's instance that crash-loops on the tensor-parallel path with CUDA's "no kernel
+  image is available for execution on the device" (on the HGX B300 with the pinned vLLM
+  build: `cooperative_topk` during CUDA graph capture on two GPUs, while one GPU worked) is
+  started again on the GPUs its memory needs, once, like the other crash remedies of §7;
+  its Models page row says it runs on fewer GPUs than the registry asks and why. A model
+  manager restart forgets that and tries the registry's count once more.
 - The file is written with the key only when it is set, so existing registries are
   unchanged. The shipped registries do not set it: how many GPUs are free depends on the
   host. On an eight-GPU quickstart host, `tensor_parallel: {coder: 2}` uses the idle GPU.

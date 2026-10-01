@@ -1159,6 +1159,38 @@ CUTLASS_FP8 = (
 )
 
 
+COOPERATIVE_TOPK = (
+    "RuntimeError: launch_cooperative_cluster, /workspace/csrc/libtorch_stable/cooperative_topk"
+    ".cu:48, cooperative_topk launch failed: no kernel image is available for execution on the "
+    "device"
+)
+
+
+def test_a_coder_that_cannot_run_in_tensor_parallel_goes_back_to_one_gpu(tmp_path: Path) -> None:
+    """HGX B300: with `tensor_parallel: {coder: 2}` the coder died capturing CUDA graphs
+    (cooperative_topk: no kernel image for this GPU), while on one GPU it ran all day."""
+    h = Harness(tmp_path, gpu_ids=tuple(range(8)), gpu_vram_gib=270.0)
+    data = {**PROFILE_REGISTRIES["quickstart"], "tensor_parallel": {"coder": 2}}
+    h.models_file.write_text(render_registry_yaml(data), encoding="utf-8")
+    h.controller.reconcile()
+    assert len(h.api.specs["vllm-coder"].gpu_ids) == 2
+    h.api.logs_text["vllm-coder"] = _engine_exception(COOPERATIVE_TOPK)
+    h.api.restarting("vllm-coder", times=5)
+    report = h.controller.reconcile()
+    stop = next(a for a in report.actions if a.kind == "stop" and a.name == "vllm-coder")
+    assert stop.reason == (
+        "crashed on 2 GPUs in tensor parallel (no kernel image for this GPU); started again on 1"
+    )
+    cmd = h.api.bodies["vllm-coder"]["Cmd"]
+    assert cmd[cmd.index("--tensor-parallel-size") + 1] == "1"
+    assert "--linear-backend" not in cmd and "--enforce-eager" not in cmd, "only the GPUs change"
+    sentence = h.rows()["vllm-coder"]["sentence"]
+    assert "It runs on 1 GPU, not the 2 the registry asks for" in sentence
+    again = h.controller.reconcile()
+    assert all(a.kind == "keep" for a in again.actions if a.name == "vllm-coder"), "kept on 1"
+    assert [e["instance"] for e in h.events("instance.tensor_parallel_dropped")] == ["vllm-coder"]
+
+
 def test_a_known_crash_with_a_remedy_is_started_again_with_the_fix_and_keeps_it(
     tmp_path: Path,
 ) -> None:

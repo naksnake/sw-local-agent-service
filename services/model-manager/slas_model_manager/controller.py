@@ -65,6 +65,8 @@ DEFAULT_RECONCILE_INTERVAL_S: Final = 30.0
 MODEL_MANAGE: Final = "model:manage"
 #: The role whose instance the Coding Agent needs first (CLAUDE.md §1.4, ADR-0017).
 CODER_ROLE: Final = "coder"
+#: What CUDA says when the vLLM build has no kernel for the GPU on the path it took.
+NO_KERNEL_IMAGE: Final = "no kernel image is available for execution on the device"
 #: A running container the restart policy has started this many times after failed exits
 #: is a crash loop, reported `failed` with its log tail, not "loading".
 CRASH_LOOP_RESTARTS: Final = 3
@@ -256,7 +258,7 @@ KNOWN_CRASHES: Final[tuple[tuple[str, str, str], ...]] = (
         "next reconcile; `slas doctor` checks this as GPU fabric.",
     ),
     (
-        "no kernel image is available for execution on the device",
+        NO_KERNEL_IMAGE,
         "The pinned vLLM image was built without this GPU's architecture.",
         "Change the vLLM image in compose/images.lock to a build for this GPU (an ADR pins "
         "it), run ./install.sh --build again.",
@@ -411,6 +413,9 @@ class Controller:
         #: learnt from a crash loop and kept across manager restarts from the container's argv.
         self._context_cap: dict[str, int] = {}
         self._context_note: dict[str, str] = {}
+        #: Instances whose tensor parallel this vLLM build cannot run (ADR-0020): they run on
+        #: the GPUs their memory needs, and the row says why.
+        self._tp_fallback: dict[str, str] = {}
         #: Remedies (REMEDIES ids) in force per instance, learnt from crash loops and read back
         #: from a running container's argv and `slas.env` label after a manager restart.
         self._applied: dict[str, set[str]] = {}
@@ -755,7 +760,10 @@ class Controller:
             if name not in touched
         }
         placed = placement.place(
-            placement.candidates(registry, only=[a.name for a in starting]),
+            [
+                c.model_copy(update={"min_gpus": 1}) if c.instance in self._tp_fallback else c
+                for c in placement.candidates(registry, only=[a.name for a in starting])
+            ],
             gpu_ids=self.gpu_ids,
             capacity_gib=self.gpu_vram_gib,
             pinned=pinned,
@@ -911,6 +919,9 @@ class Controller:
             shrunk = self._shrink_context_after_crash(entry, ref, report)
             if shrunk is not None:
                 return shrunk
+            single = self._drop_tensor_parallel_after_crash(registry, entry, ref, role, report)
+            if single is not None:
+                return single
             remedied = self._remedy_after_crash(ref, role, report)
             if remedied is not None:
                 return remedied
@@ -925,7 +936,7 @@ class Controller:
             extra_args=extra_args,
             extra_env=extra_env,
         )
-        if role is not None and role in registry.tensor_parallel:
+        if role is not None and role in registry.tensor_parallel and name not in self._tp_fallback:
             wanted = placement.gpu_count_for(
                 needed_gib(entry), self.gpu_vram_gib, registry.tensor_parallel[role]
             )
@@ -1014,6 +1025,42 @@ class Controller:
         return (
             f"crashed because a context of {current} tokens does not fit in the GPU's KV "
             f"cache next to the weights; started again with {smaller}"
+        )
+
+    def _drop_tensor_parallel_after_crash(
+        self,
+        registry: Registry,
+        entry: ModelEntry,
+        ref: ContainerRef,
+        role: str | None,
+        report: CrashReport,
+    ) -> str | None:
+        """A role spread by `tensor_parallel` that crash-loops because this vLLM build has no
+        kernel for the GPU on that path (T-coding on HGX B300: `cooperative_topk … no kernel
+        image is available` during CUDA graph capture on two GPUs, while one GPU ran all
+        day) goes back to the GPUs its memory needs, once, and the row says so."""
+        name = ref.name
+        if role is None or role not in registry.tensor_parallel or name in self._tp_fallback:
+            return None
+        if not any(NO_KERNEL_IMAGE in line for line in report.attempt):
+            return None
+        by_memory = placement.gpu_count_for(needed_gib(entry), self.gpu_vram_gib)
+        if len(ref.spec.gpu_ids) <= by_memory:
+            return None
+        self._tp_fallback[name] = (
+            f"It runs on {by_memory} GPU{'s' if by_memory != 1 else ''}, not the "
+            f"{len(ref.spec.gpu_ids)} the registry asks for: this vLLM build has no kernel for "
+            "this GPU on the tensor-parallel path."
+        )
+        self.log.warning(
+            "instance.tensor_parallel_dropped",
+            instance=name,
+            was=len(ref.spec.gpu_ids),
+            now=by_memory,
+        )
+        return (
+            f"crashed on {len(ref.spec.gpu_ids)} GPUs in tensor parallel (no kernel image for "
+            f"this GPU); started again on {by_memory}"
         )
 
     @staticmethod
@@ -1110,6 +1157,8 @@ class Controller:
             sentence = f"{display} is serving {served} at {instance_url(name)}."
             if name in self._context_note:
                 sentence += " " + self._context_note[name]
+            if name in self._tp_fallback:
+                sentence += " " + self._tp_fallback[name]
             for note in self._notes(name):
                 sentence += " " + note
             if role is not None and entry is not None:
@@ -1183,6 +1232,8 @@ class Controller:
         text += "; not answering yet."
         if name in self._context_note:
             text += " " + self._context_note[name]
+        if name in self._tp_fallback:
+            text += " " + self._tp_fallback[name]
         for note in self._notes(name):
             text += " " + note
         restarts = self._restarts.get(name, 0)
