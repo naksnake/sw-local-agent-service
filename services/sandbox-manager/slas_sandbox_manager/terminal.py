@@ -67,6 +67,8 @@ class TerminalSession:
         self.clock = clock
         self.record_path = record_path
         self.lines: list[TerminalLine] = []
+        #: Why the last line could not be added to the ticket's transcript, if it could not.
+        self.record_error: str | None = None
 
     def run(self, line: str) -> TerminalLine | None:
         text = line.strip()
@@ -95,9 +97,15 @@ class TerminalSession:
         )
         self.lines.append(entry)
         if self.record_path is not None:
-            self.record_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.record_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(entry.model_dump(mode="json"), ensure_ascii=False) + "\n")
+            try:
+                self.record_path.parent.mkdir(parents=True, exist_ok=True)
+                with self.record_path.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(entry.model_dump(mode="json"), ensure_ascii=False) + "\n"
+                    )
+            except OSError as exc:
+                # The person still gets the output; the missing record is said in the log.
+                self.record_error = f"{self.record_path}: {exc.strerror or exc}"
         return entry
 
     def handle(self, frame: TerminalMessage) -> list[TerminalMessage]:

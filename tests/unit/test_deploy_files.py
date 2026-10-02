@@ -317,6 +317,7 @@ def test_round_2_wiring_of_the_compose_services() -> None:
         f"{compose.RUNTIME_SOCKET}:{compose.RUNTIME_SOCKET_IN_CONTAINER}",
         "${SLAS_DATA_ROOT}/Coding:/data/Coding",
         "${SLAS_DATA_ROOT}/Toolchains:/data/Toolchains:ro",
+        "${SLAS_DATA_ROOT}/Tickets:/data/Tickets",  # terminal transcripts go to the ticket
     ]
     assert "sandbox-manager" in services["agent-core-orchestrator"]["depends_on"]
 

@@ -487,6 +487,7 @@ services:
       - "${SLAS_RUNTIME_SOCKET:-/run/podman/podman.sock}:/run/podman/podman.sock"
       - "${SLAS_DATA_ROOT}/Coding:/data/Coding"
       - "${SLAS_DATA_ROOT}/Toolchains:/data/Toolchains:ro"
+      - "${SLAS_DATA_ROOT}/Tickets:/data/Tickets"
   git-broker:
     image: "${SLAS_REGISTRY}/slas/git-broker:${SLAS_VERSION}"
     restart: unless-stopped

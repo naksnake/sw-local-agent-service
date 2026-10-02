@@ -109,3 +109,27 @@ def test_a_terminal_line_that_runs_too_long_stops_with_a_sentence(tmp_path: Path
         "and waits for it to finish. Run long builds or servers as a coding task."
     )
     assert TERMINAL_TIMEOUT_S == 120
+
+
+def test_a_transcript_that_cannot_be_written_never_loses_the_output(tmp_path: Path) -> None:
+    """On the HGX host every Terminal line answered "the sandbox-manager hit a problem it did
+    not expect": the transcript folder was not writable in the container."""
+    runtime = FakeSandboxRuntime()
+    runtime.handle_with(echo)
+    clock = FakeClock(datetime(2026, 9, 14, 9, tzinfo=UTC), step=timedelta(0))
+    manager = SandboxManager(runtime=runtime, data_root=tmp_path, clock=clock, runsc_available=True)
+    session = manager.open(
+        "pat",
+        "bmc",
+        image="registry.internal/slas/sandbox-python:3.12.6",
+        language="python",
+        display_name="Pat",
+    )
+    blocker = tmp_path / "Tickets"
+    blocker.write_text("not a folder", encoding="utf-8")
+    terminal = TerminalSession(
+        manager, session.id, clock=clock, record_path=blocker / "T-coding-1" / "terminal.jsonl"
+    )
+    line = terminal.run("ls")
+    assert line is not None and line.output == "ran: ls"
+    assert terminal.record_error is not None and "terminal.jsonl" in terminal.record_error

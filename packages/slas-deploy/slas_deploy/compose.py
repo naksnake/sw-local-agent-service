@@ -434,6 +434,9 @@ def base_compose() -> dict[str, Any]:
             f"{RUNTIME_SOCKET}:{RUNTIME_SOCKET_IN_CONTAINER}",
             f"{DATA}/Coding:/data/Coding",
             f"{DATA}/Toolchains:/data/Toolchains:ro",
+            # Terminal transcripts go to the ticket (CLAUDE.md §5.7); unmounted, every
+            # Terminal line failed with "hit a problem it did not expect".
+            f"{DATA}/Tickets:/data/Tickets",
         ],
     )
     # The credential store and audit log live under ${SLAS_DATA_ROOT}/.git-broker (contract

@@ -259,6 +259,11 @@ def terminal_line(session_id: str, body: TerminalBody, request: Request) -> dict
             services.terminals[session_id] = terminal
     try:
         entry = terminal.run(body.line)  # outside the lock, like exec
+        if terminal.record_error is not None:
+            services.log.warning(
+                "terminal.record_failed", session=session_id, error=terminal.record_error
+            )
+            terminal.record_error = None
     except SandboxError as exc:
         raise _from_sandbox_error(exc) from exc
     except ContainerError as exc:
