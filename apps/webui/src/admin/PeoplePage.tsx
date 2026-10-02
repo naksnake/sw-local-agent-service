@@ -25,6 +25,7 @@ type DialogState =
   | { kind: "role"; person: Person }
   | { kind: "reset"; person: Person }
   | { kind: "active"; person: Person; on: boolean }
+  | { kind: "delete"; person: Person }
   | { kind: "result"; name: string; password: string };
 
 export function statusWord(person: Person): string {
@@ -37,11 +38,26 @@ export function statusWord(person: Person): string {
   return copy.status.canSignIn;
 }
 
+/** The pill colour for a status word: green signs in, amber waits on a password, grey is off. */
+function statusTone(person: Person): string {
+  if (!person.is_active) {
+    return "pill";
+  }
+  return person.must_change_password ? "pill warn" : "pill pass";
+}
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter((part) => part !== "");
+  const letters = parts.length > 1 ? `${parts[0]?.[0] ?? ""}${parts[parts.length - 1]?.[0] ?? ""}` : (parts[0]?.[0] ?? "?");
+  return letters.toUpperCase();
+}
+
 export function PeoplePage({ api, me }: Props) {
   const [people, setPeople] = useState<Person[] | null>(null);
   const [loadProblem, setLoadProblem] = useState<ThreePart | null>(null);
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoadProblem(null);
@@ -88,6 +104,11 @@ export function PeoplePage({ api, me }: Props) {
           />
         )}
         {onlyYou && <p className="sentence">{copy.onlyYou}</p>}
+        {notice !== null && (
+          <p className="sentence" role="status">
+            {notice}
+          </p>
+        )}
         {people !== null && (
           <section className="panel tight">
             <table className="list">
@@ -105,13 +126,22 @@ export function PeoplePage({ api, me }: Props) {
                 {people.map((person) => (
                   <tr key={person.id} aria-label={person.display_name}>
                     <td>
-                      <div className="title">{person.display_name}</div>
-                      <div className="muted">{person.email}</div>
+                      <div className="person">
+                        <span className="avatar" aria-hidden="true">
+                          {initials(person.display_name)}
+                        </span>
+                        <span>
+                          <span className="title">{person.display_name}</span>
+                          <span className="muted mono">{person.username}</span>
+                        </span>
+                      </div>
                     </td>
                     <td>{person.role_label}</td>
                     <td className="muted">{roleInfo(person.role).sentence}</td>
                     <td>{humanTime(person.last_sign_in_at)}</td>
-                    <td>{statusWord(person)}</td>
+                    <td>
+                      <span className={statusTone(person)}>{statusWord(person)}</span>
+                    </td>
                     <td className="menu-cell">
                       <button
                         type="button"
@@ -154,6 +184,17 @@ export function PeoplePage({ api, me }: Props) {
                             }}
                           >
                             {person.is_active ? copy.menu.switchOff : copy.menu.switchOn}
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="danger"
+                            onClick={() => {
+                              setMenuFor(null);
+                              setDialog({ kind: "delete", person });
+                            }}
+                          >
+                            {copy.menu.delete}
                           </button>
                         </div>
                       )}
@@ -211,6 +252,19 @@ export function PeoplePage({ api, me }: Props) {
           }}
         />
       )}
+      {dialog?.kind === "delete" && (
+        <DeleteDialog
+          api={api}
+          person={dialog.person}
+          isMe={me !== null && me.id === dialog.person.id}
+          onClose={close}
+          onDeleted={(gone) => {
+            setPeople((current) => (current ?? []).filter((p) => p.id !== gone.id));
+            setNotice(copy.delete.deleted(gone.display_name));
+            close();
+          }}
+        />
+      )}
       {dialog?.kind === "result" && <OneTimePasswordPanel name={dialog.name} password={dialog.password} onDone={close} />}
     </div>
   );
@@ -245,7 +299,7 @@ function AddPersonDialog({
   onAdded: (person: Person, password: string) => void;
 }) {
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [role, setRole] = useState(DEFAULT_ROLE);
   const [waiting, setWaiting] = useState(false);
   const [problem, setProblem] = useState<ThreePart | null>(null);
@@ -256,7 +310,7 @@ function AddPersonDialog({
     setProblem(null);
     setWaiting(true);
     try {
-      const added = await api.add({ email: email.trim(), display_name: shown, role });
+      const added = await api.add({ username: username.trim().toLowerCase(), display_name: shown, role });
       onAdded(added.person, added.one_time_password);
     } catch (error: unknown) {
       setProblem(asApiError(error).describe(copy.add.notAdded(shown)));
@@ -267,20 +321,30 @@ function AddPersonDialog({
 
   return (
     <Dialog title={copy.add.title} onClose={onClose}>
-      {/* noValidate: the api's own sentence for a bad address, not a browser bubble (§9). */}
+      {/* noValidate: the api's own sentence for a bad name, not a browser bubble (§9). */}
       <form className="stack" noValidate onSubmit={(event) => void submit(event)}>
         <Field label={copy.add.name} help={copy.add.nameHelp}>
           {(control) => <input {...control} className="input" required value={name} onChange={(event) => setName(event.target.value)} />}
         </Field>
-        <Field label={copy.add.email} help={copy.add.emailHelp}>
+        <Field label={copy.add.username} help={copy.add.usernameHelp}>
           {(control) => (
-            <input {...control} className="input" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
+            <input
+              {...control}
+              className="input"
+              type="text"
+              required
+              autoCapitalize="none"
+              autoComplete="off"
+              spellCheck={false}
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+            />
           )}
         </Field>
         <RoleChoices name="add-role" value={role} onChange={setRole} />
         {shown !== "" && <p className="sentence">{copy.add.closing(shown)}</p>}
         <div className="row">
-          <button type="submit" className="btn primary" disabled={waiting || shown === "" || email.trim() === ""}>
+          <button type="submit" className="btn primary" disabled={waiting || shown === "" || username.trim() === ""}>
             {waiting ? copy.add.buttonWaiting : copy.add.button(shown)}
           </button>
           <button type="button" className="btn ghost" onClick={onClose}>
@@ -429,6 +493,58 @@ function SwitchDialog({
         <div className="row">
           <button type="button" className={on ? "btn primary" : "btn danger"} disabled={waiting} onClick={() => void apply()}>
             {waiting ? words.buttonWaiting : words.button}
+          </button>
+          <button type="button" className="btn ghost" onClick={onClose}>
+            {copy.cancel}
+          </button>
+        </div>
+        {problem !== null && <ThreePartError parts={problem} />}
+      </div>
+    </Dialog>
+  );
+}
+
+function DeleteDialog({
+  api,
+  person,
+  isMe,
+  onClose,
+  onDeleted,
+}: {
+  api: PeopleApi;
+  person: Person;
+  isMe: boolean;
+  onClose: () => void;
+  onDeleted: (person: Person) => void;
+}) {
+  const [waiting, setWaiting] = useState(false);
+  const [problem, setProblem] = useState<ThreePart | null>(null);
+  const name = person.display_name;
+
+  async function remove() {
+    setProblem(null);
+    if (isMe) {
+      setProblem(copy.delete.yourself);
+      return;
+    }
+    setWaiting(true);
+    try {
+      await api.remove(person.id);
+      onDeleted(person);
+    } catch (error: unknown) {
+      setProblem(asApiError(error).describe(copy.delete.notDeleted(name)));
+    } finally {
+      setWaiting(false);
+    }
+  }
+
+  return (
+    <Dialog title={copy.delete.title(name)} onClose={onClose}>
+      <div className="stack">
+        <p className="sentence">{copy.delete.body(name, person.username)}</p>
+        <div className="row">
+          <button type="button" className="btn danger" disabled={waiting} onClick={() => void remove()}>
+            {waiting ? copy.delete.buttonWaiting : copy.delete.button(name)}
           </button>
           <button type="button" className="btn ghost" onClick={onClose}>
             {copy.cancel}

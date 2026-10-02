@@ -27,13 +27,17 @@ from slas_orchestrator.coding.breakdown import (
     files_named,
     propose,
 )
-from slas_orchestrator.coding.coder import build_messages
+from slas_orchestrator.coding.coder import MAX_CHECK_OUTPUT_CHARS, build_messages
 from slas_orchestrator.coding.executor import (
+    CheckResult,
     CodingExecutor,
     EditError,
+    EditRequest,
     EditSet,
     FakeCoder,
+    Replacement,
     apply_edits,
+    apply_replacements,
     fix_script_modes,
     missing_files,
     snapshot,
@@ -185,6 +189,60 @@ def test_apply_edits_stays_inside_the_project(tmp_path: Path) -> None:
     (tmp_path / ".git" / "HEAD").write_text("ref\n")
     (tmp_path / "big.bin").write_bytes(b"\x00" * 10)
     assert set(snapshot(tmp_path)) == {"src/a.py"}, ".git and binaries are left out"
+
+
+def test_targeted_replacements_change_one_place_and_name_what_did_not_apply(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "app.py").write_text("def a():\n    return 1\n\ndef b():\n    return 1\n")
+    edits = EditSet(
+        replacements=[
+            Replacement(path="app.py", find="return 1", replace="return 9"),  # twice: refused
+            Replacement(
+                path="app.py", find="def a():\n    return 1", replace="def a():\n    return 2"
+            ),
+            Replacement(path="app.py", find="def c():", replace=""),
+            Replacement(path="gone.py", find="x", replace="y"),
+        ]
+    )
+    changed, problems = apply_replacements(tmp_path, edits)
+    assert changed == ["app.py"]
+    assert (tmp_path / "app.py").read_text() == "def a():\n    return 2\n\ndef b():\n    return 1\n"
+    assert problems[0].startswith("In app.py the text to replace occurs 2 times")
+    assert problems[1].startswith("In app.py the text to replace does not occur")
+    assert problems[2] == "gone.py does not exist; write it as a whole file instead."
+    with pytest.raises(EditError):
+        apply_replacements(
+            tmp_path, EditSet(replacements=[Replacement(path="../x.py", find="a", replace="b")])
+        )
+
+
+def test_the_snapshot_reads_the_files_that_matter_first(tmp_path: Path) -> None:
+    for i in range(70):
+        (tmp_path / f"a{i:02}.py").write_text("x\n")
+    (tmp_path / "zz_named.py").write_text("named\n")
+    files = snapshot(tmp_path, first=["zz_named.py"])
+    assert next(iter(files)) == "zz_named.py" and len(files) == 60
+    assert "zz_named.py" not in snapshot(tmp_path), "without priority the bound cuts it"
+
+
+def test_the_prompt_lists_the_tree_and_keeps_the_head_of_long_check_output() -> None:
+    long = "error: first problem\n" + "x" * 10_000 + "\n1 failed"
+    request = EditRequest(
+        task=TaskItem(n=1, title="Fix it"),
+        iteration=2,
+        languages=["python"],
+        files={"app.py": "x = 1\n"},
+        failures=[CheckResult(kind="test", description="tests", exit_code=1, output=long)],
+        paths=["app.py", "tests/test_app.py"],
+    )
+    system, user = build_messages(request)
+    assert "`replacements`" in system.content and "`approach`" in system.content
+    assert "Project tree:\napp.py\ntests/test_app.py\n" in user.content
+    assert "error: first problem" in user.content and "1 failed" in user.content
+    assert "[… output shortened …]" in user.content
+    shown = user.content.split("[test] tests (exit 1)\n", 1)[1].split("\n\nProject tree", 1)[0]
+    assert len(shown) <= MAX_CHECK_OUTPUT_CHARS + 30
 
 
 def test_a_task_line_names_the_files_it_must_leave_behind(tmp_path: Path) -> None:
@@ -561,3 +619,40 @@ def test_executor_refuses_unknown_primitives_and_steps_out_of_order(tmp_path: Pa
         harness.executor.execute(Step(id="c", n=1, primitive="commit", title="c"), context)
     assert harness.executor.session_for("T-coding-0001") is None
     assert isinstance(Session, type)
+
+
+@needs_git
+def test_the_feed_says_what_each_iteration_does_while_it_runs(tmp_path: Path) -> None:
+    coder = FakeCoder(
+        EditSet(
+            approach=["Write the parser", "Return the text unchanged for now"],
+            files={"fan_ctl.py": "class Config: ...\n"},
+            note="first draft",
+        ),
+        EditSet(
+            replacements=[
+                Replacement(
+                    path="fan_ctl.py",
+                    find="class Config: ...",
+                    replace="def parse(t):\n    return t",
+                )
+            ],
+            note="added parse",
+        ),
+    )
+    harness = Harness(
+        tmp_path, coder=coder, checker=FakeCrossChecker(votes("approve"), agreed=True)
+    )
+    lines: list[tuple[str, str]] = []
+    harness.executor.progress = lambda ticket_id, line: lines.append((ticket_id, line))
+    ticket = harness.kernel.store.load(harness.start())
+    said = [line for _, line in lines]
+    assert said[0] == "Iteration 1 of 6: reading the project and writing the code…"
+    assert said[1] == "Approach: Write the parser · Return the text unchanged for now"
+    assert said[2] == "Changed fan_ctl.py: first draft Running the checks…"
+    assert said[3].startswith("Iteration 1: test failed — test: FAILED test_parse")
+    assert said[4] == "Iteration 2 of 6: fixing test…"
+    assert said[5] == "Changed fan_ctl.py: added parse Running the checks…"
+    assert {ticket_id for ticket_id, _ in lines} == {ticket.id}
+    assert ticket.steps[2].status == "done"
+    assert coder.requests[1].paths == ["fan_ctl.py"]

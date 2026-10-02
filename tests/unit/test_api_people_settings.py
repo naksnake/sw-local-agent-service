@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from slas_api import service
 from slas_api.db import session_scope
+from slas_api.errors import ApiError
 from slas_api.runtime_settings import MARKER
 from slas_authz import SYSTEM
 from tests.unit.api_harness import (
@@ -70,17 +71,23 @@ def test_add_person_rejects_duplicates_bad_emails_and_unknown_roles(
         headers=WEBUI,
     )
     body = assert_problem(duplicate, 409)
-    assert body["what_happened"] == "Someone already signs in as ana@lab.local."
+    assert body["what_happened"] == "Someone already signs in as ana."
     assert body["likely_cause"] == "The address belongs to an existing person, maybe switched off."
 
     bad_email = admin.post(
         "/api/v1/admin/people",
-        json={"email": "not-an-email", "display_name": "X", "role": "viewer"},
+        json={"email": "not an email@", "display_name": "X", "role": "viewer"},
         headers=WEBUI,
     )
     assert assert_problem(bad_email, 400)["what_happened"] == (
         "That doesn't look like an email address."
     )
+    bad_name = admin.post(
+        "/api/v1/admin/people",
+        json={"username": "not a name", "display_name": "X", "role": "viewer"},
+        headers=WEBUI,
+    )
+    assert assert_problem(bad_name, 400)["what_happened"] == "That name can't be used to sign in."
 
     unknown_role = admin.post(
         "/api/v1/admin/people",
@@ -216,6 +223,74 @@ def test_password_reset_revokes_sessions_and_forces_a_change(
     assert next(p for p in listed if p["id"] == person["id"])["must_change_password"] is True
     missing = admin.post("/api/v1/admin/people/no-such-id/password-reset", headers=WEBUI)
     assert_problem(missing, 404)
+
+
+def test_people_sign_in_with_a_name_not_an_email(harness: Harness, admin: TestClient) -> None:
+    added = admin.post(
+        "/api/v1/admin/people",
+        json={"username": "Ana.Lin", "display_name": "Ana Lin", "role": "engineer"},
+        headers=WEBUI,
+    )
+    assert added.status_code == 201, added.text
+    body = added.json()
+    assert body["person"]["username"] == "ana.lin"
+    assert body["person"]["email"] == "ana.lin@slas.local"
+    ana = harness.new_client()
+    signed = ana.post(
+        "/api/v1/session",
+        json={"username": "ana.lin", "password": body["one_time_password"]},
+        headers=WEBUI,
+    )
+    assert signed.status_code == 200 and signed.json()["username"] == "ana.lin"
+    # The administrator signs in as `admin` too; the email form still works.
+    other = harness.new_client()
+    by_name = other.post(
+        "/api/v1/session", json={"username": "admin", "password": ADMIN_PASSWORD}, headers=WEBUI
+    )
+    assert by_name.status_code == 200
+
+    bad = admin.post(
+        "/api/v1/admin/people",
+        json={"username": "Ana Lin!", "display_name": "X", "role": "engineer"},
+        headers=WEBUI,
+    )
+    assert assert_problem(bad, 400)["what_happened"] == "That name can't be used to sign in."
+    # One name, one Coding/<name>/ folder: an address with the same name on another domain
+    # is refused too.
+    clash = admin.post(
+        "/api/v1/admin/people",
+        json={"email": "ana.lin@lab.local", "display_name": "Other Ana", "role": "viewer"},
+        headers=WEBUI,
+    )
+    assert assert_problem(clash, 409)["what_happened"] == "Someone already signs in as ana.lin."
+
+
+def test_an_administrator_deletes_a_person_but_never_themselves_or_the_last_admin(
+    harness: Harness, admin: TestClient
+) -> None:
+    person, one_time = harness.add_person("bo@lab.local", "Bo", "engineer", client=admin)
+    bo = harness.client_for("bo@lab.local", one_time, "bos-own-long-password")
+    deleted = admin.delete(f"/api/v1/admin/people/{person['id']}", headers=WEBUI)
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["sentence"] == (
+        "Bo (bo) was deleted and can no longer sign in. Their projects stay in Coding/bo/."
+    )
+    assert_problem(bo.get("/api/v1/me"), 401, reason="none")
+    assert all(p["email"] != "bo@lab.local" for p in admin.get("/api/v1/admin/people").json())
+    assert harness.sign_in("bo", "bos-own-long-password").status_code == 401
+    rows = [r for r in harness.audit_rows() if r.action == "person.deleted"]
+    assert len(rows) == 1 and rows[0].subject == "bo@lab.local" and rows[0].via == "webui"
+
+    me = next(p for p in admin.get("/api/v1/admin/people").json() if p["email"] == ADMIN_EMAIL)
+    refused = admin.delete(f"/api/v1/admin/people/{me['id']}", headers=WEBUI)
+    assert assert_problem(refused, 400)["what_happened"] == "You can't delete your own account."
+    assert_problem(admin.delete("/api/v1/admin/people/nope", headers=WEBUI), 404)
+    with session_scope(harness.services.engine) as db:
+        only = service.find_by_email(db, ADMIN_EMAIL)
+        assert only is not None
+        with pytest.raises(ApiError) as last:
+            service.delete_person(harness.services, db, actor=SYSTEM, via="cli", person_id=only.id)
+    assert last.value.message.what_happened == "You can't delete the last administrator."
 
 
 def test_resetting_the_bootstrap_administrator_ends_the_bootstrap(harness: Harness) -> None:

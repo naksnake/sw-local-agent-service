@@ -13,10 +13,12 @@ export interface AddedPerson {
 
 export interface PeopleApi {
   list(): Promise<Person[]>;
-  add(input: { email: string; display_name: string; role: string }): Promise<AddedPerson>;
+  add(input: { username: string; display_name: string; role: string }): Promise<AddedPerson>;
   changeRole(id: string, role: string): Promise<Person>;
   resetPassword(id: string): Promise<{ one_time_password: string }>;
   setActive(id: string, active: boolean): Promise<Person>;
+  /** Delete the account; the person can't sign in again. Their projects stay on disk. */
+  remove(id: string): Promise<void>;
 }
 
 export class HttpPeopleApi implements PeopleApi {
@@ -26,7 +28,7 @@ export class HttpPeopleApi implements PeopleApi {
     return this.http.get<Person[]>("/admin/people");
   }
 
-  add(input: { email: string; display_name: string; role: string }): Promise<AddedPerson> {
+  add(input: { username: string; display_name: string; role: string }): Promise<AddedPerson> {
     return this.http.post<AddedPerson>("/admin/people", input);
   }
 
@@ -40,6 +42,10 @@ export class HttpPeopleApi implements PeopleApi {
 
   setActive(id: string, active: boolean): Promise<Person> {
     return this.http.patch<Person>(`/admin/people/${encodeURIComponent(id)}`, { is_active: active });
+  }
+
+  remove(id: string): Promise<void> {
+    return this.http.del(`/admin/people/${encodeURIComponent(id)}`);
   }
 }
 

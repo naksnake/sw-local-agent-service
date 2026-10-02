@@ -33,16 +33,10 @@ type Step = 1 | 2 | 3;
 
 const STEP_TITLES: Record<Step, string> = { 1: "Plan", 2: "Setup", 3: "Review" };
 
-const field =
-  "mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 " +
-  "shadow-sm focus:border-slate-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 " +
-  "dark:text-slate-100";
-const primary =
-  "rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 " +
-  "dark:bg-slate-100 dark:text-slate-900";
-const secondary =
-  "rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 dark:border-slate-700 " +
-  "dark:text-slate-300";
+// The design system's controls (index.css), so the wizard reads like the rest of the app.
+const field = "input mt-1";
+const primary = "btn primary";
+const secondary = "btn";
 
 export function NewCodingTaskWizard({ api, onStarted, onCancel }: Props) {
   const [step, setStep] = useState<Step>(1);
@@ -186,15 +180,20 @@ export function NewCodingTaskWizard({ api, onStarted, onCancel }: Props) {
     (breakdown.exportTarget !== "remote" || breakdown.remoteRef !== null);
 
   return (
-    <section aria-labelledby="wizard-heading" className="space-y-6">
-      <header>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
+    <section aria-labelledby="wizard-heading" className="panel wizard space-y-6">
+      <header className="wizard-head">
+        <h2 id="wizard-heading">New coding task</h2>
+        <p className="pill info">
           Step {step} of 3 — {STEP_TITLES[step]}
         </p>
-        <h2 id="wizard-heading" className="text-xl font-semibold tracking-tight">
-          New coding task
-        </h2>
       </header>
+      <ol className="plain wizard-steps" aria-hidden="true">
+        {([1, 2, 3] as const).map((n) => (
+          <li key={n} className={n < step ? "done" : n === step ? "current" : ""}>
+            <span>{n < step ? "✓" : n}</span> {STEP_TITLES[n]}
+          </li>
+        ))}
+      </ol>
 
       {step === 1 && (
         <div className="space-y-4">

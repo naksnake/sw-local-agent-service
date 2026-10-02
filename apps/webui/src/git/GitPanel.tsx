@@ -21,9 +21,10 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "terminal", label: "Terminal" },
 ];
 
-const field = "mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900";
-const primary = "rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-slate-100 dark:text-slate-900";
-const secondary = "rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700";
+// The design system's controls (index.css).
+const field = "input mt-1";
+const primary = "btn primary";
+const secondary = "btn";
 
 export function GitPanel({ api, slug }: Props) {
   const [tab, setTab] = useState<Tab>("status");
@@ -130,21 +131,18 @@ export function GitPanel({ api, slug }: Props) {
   const remoteName = remotes.find((r) => r.id === remoteId)?.name;
 
   return (
-    <section aria-label={`Git panel for ${slug}`} className="rounded-lg border border-slate-200 p-4 dark:border-slate-800">
+    <section aria-label={`Git panel for ${slug}`} className="panel git-panel">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-medium">
           Git · {slug} <span className="text-slate-500">on {branch || "…"}</span>
         </h3>
-        <nav aria-label="Git panel tabs" className="flex flex-wrap gap-1">
+        <nav aria-label="Git panel tabs" className="tabs git-tabs">
           {TABS.map((t) => (
             <button
               key={t.id}
               type="button"
               aria-current={tab === t.id ? "page" : undefined}
-              className={
-                "rounded-md px-3 py-1 text-sm " +
-                (tab === t.id ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900" : "text-slate-700 dark:text-slate-300")
-              }
+              className="tab"
               onClick={() => setTab(t.id)}
             >
               {t.label}

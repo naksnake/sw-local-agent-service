@@ -370,6 +370,14 @@ def create_app(
         gateway_status=gateway_status
         or http_gateway_status(settings.gateway_url, settings.probe_timeout_s),
     )
+
+    # Live lines while a step runs (an iteration takes minutes): a `note` on the ticket's
+    # journal, read back into the activity feed. The kernel is between its intent and its
+    # observation then, so nothing else writes the journal.
+    def progress(ticket_id: str, line: str) -> None:
+        deps.journal_for(ticket_id).append("note", ticket_id, {"progress": line})
+
+    executor.progress = progress
     # The Validation and Factory kernels write through the registry's tracking store, wrapped
     # so a route can answer with the ticket id the moment the kernel saves it.
     watched = WatchedTicketStore(registry.store)

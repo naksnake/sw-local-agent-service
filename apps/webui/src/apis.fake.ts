@@ -15,7 +15,7 @@ import { FakeSessionApi, FakeWorld } from "./session/fake";
 import { FakeValidationApi } from "./validation/api";
 
 export const FAKE_SIGN_IN_HINT =
-  "Development build with in-memory fakes. Sign in as admin@slas.local with the one-time password admin-one-time-pw, or as pat@slas.local with pat-password-12345.";
+  "Development build with in-memory fakes. Sign in as admin with the one-time password admin-one-time-pw, or as pat with pat-password-12345.";
 
 const STORAGE_KEY = "slas-fake-world";
 

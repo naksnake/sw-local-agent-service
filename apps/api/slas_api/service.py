@@ -53,11 +53,15 @@ Via = Literal["webui", "cli", "installer"]
 Clock = Callable[[], datetime]
 
 _EMAIL: Final = re.compile(r"^[^@\s]+@[^@\s]+$")
+_USERNAME: Final = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+#: People sign in with a name (`ana`); the account's address is `<name>@slas.local`, the
+#: same name the Coding Agent's folders use (`Coding/ana/`).
+LOGIN_DOMAIN: Final = "slas.local"
 
 # --- sentences (docs/ui/sign-in.md, docs/ui/admin-people.md) ---------------------------------
 
 WRONG_CREDENTIALS: Final = ThreePartMessage(
-    "That email and password don't match.",
+    "That name and password don't match.",
     "A typo, or the password was changed.",
     "Try again, or ask an administrator to reset your password.",
 )
@@ -111,6 +115,22 @@ LAST_ADMIN_SWITCH_OFF: Final = ThreePartMessage(
     "Without an administrator nobody could manage people or settings.",
     "Make someone else an administrator first.",
 )
+INVALID_USERNAME: Final = ThreePartMessage(
+    "That name can't be used to sign in.",
+    "A name is lowercase letters, digits, dots, dashes or underscores, starting with a letter "
+    "or digit.",
+    "Try something like ana or ana.lin.",
+)
+DELETE_SELF: Final = ThreePartMessage(
+    "You can't delete your own account.",
+    "You're signed in with it.",
+    "Ask another administrator.",
+)
+LAST_ADMIN_DELETE: Final = ThreePartMessage(
+    "You can't delete the last administrator.",
+    "Without an administrator nobody could manage people or settings.",
+    "Make someone else an administrator first.",
+)
 LAST_ADMIN_ROLE: Final = ThreePartMessage(
     "You can't change the last administrator's role.",
     "Without an administrator nobody could manage people or settings.",
@@ -137,7 +157,7 @@ def unknown_email(email: str) -> ThreePartMessage:
 
 def duplicate_email(email: str) -> ThreePartMessage:
     return ThreePartMessage(
-        f"Someone already signs in as {email}.",
+        f"Someone already signs in as {username_of(email)}.",
         "The address belongs to an existing person, maybe switched off.",
         "Use another address, or switch the existing account back on.",
     )
@@ -219,6 +239,8 @@ class PersonOut(BaseModel):
 
     id: str
     email: str
+    #: What the person types to sign in.
+    username: str
     display_name: str
     role: str
     role_label: str
@@ -238,6 +260,7 @@ def person_out(person: Person, roles: RoleSet) -> PersonOut:
     return PersonOut(
         id=person.id,
         email=person.email,
+        username=username_of(person.email),
         display_name=person.display_name,
         role=person.role,
         role_label=principal.role_label,
@@ -279,6 +302,28 @@ def normalise_email(email: str) -> str:
     return email.strip().lower()
 
 
+def username_of(email: str) -> str:
+    """What a person types to sign in, and the name of their `Coding/<name>/` folder."""
+    return normalise_email(email).split("@", 1)[0]
+
+
+def login_address(value: str) -> str:
+    """The account address for what someone typed: a name gets the platform domain."""
+    text = normalise_email(value)
+    return text if "@" in text else f"{text}@{LOGIN_DOMAIN}"
+
+
+def find_for_sign_in(db: Session, value: str) -> Person | None:
+    """The person a name or an address means. A bare name also finds an older account on
+    another domain (`ana@lab.local`) when it is the only one with that name."""
+    person = find_by_email(db, login_address(value))
+    text = normalise_email(value)
+    if person is not None or "@" in text or not text:
+        return person
+    matches = [p for p in list_people(db) if username_of(p.email) == text]
+    return matches[0] if len(matches) == 1 else None
+
+
 # --- people --------------------------------------------------------------------------------
 
 
@@ -298,7 +343,7 @@ def find_by_email(db: Session, email: str) -> Person | None:
 
 
 def get_person_by_email(db: Session, email: str) -> Person:
-    person = find_by_email(db, email)
+    person = find_for_sign_in(db, email)
     if person is None:
         raise ApiError(404, unknown_email(normalise_email(email)))
     return person
@@ -338,7 +383,10 @@ def add_person(
 ) -> tuple[Person, str | None]:
     """Add a person. Returns the row and the one-time password when one was generated."""
     roles = svc.roles.current()
-    address = normalise_email(email)
+    typed = normalise_email(email)
+    if "@" not in typed and not _USERNAME.match(typed):
+        raise ApiError(400, INVALID_USERNAME)
+    address = login_address(typed)
     if not _EMAIL.match(address):
         raise ApiError(400, INVALID_EMAIL)
     name = display_name.strip()
@@ -346,7 +394,10 @@ def add_person(
         raise ApiError(400, EMPTY_NAME)
     if roles.get(role) is None:
         raise ApiError(400, unknown_role(role, roles))
-    if find_by_email(db, address) is not None:
+    if find_by_email(db, address) is not None or any(
+        username_of(p.email) == username_of(address) for p in list_people(db)
+    ):
+        # One name, one Coding/<name>/ folder: two accounts may not share it.
         raise ApiError(409, duplicate_email(address))
     one_time: str | None = None
     if password is None:
@@ -492,6 +543,37 @@ def reset_password(
     return person, one_time
 
 
+def delete_person(
+    svc: Services, db: Session, *, actor: Principal, via: Via, person_id: str
+) -> Person:
+    """Remove a person: they cannot sign in again and their sessions end. Their projects
+    stay on disk under Coding/<name>/; the audit trail keeps what they did."""
+    roles = svc.roles.current()
+    person = get_person(db, person_id)
+    if person.email == actor.subject and not actor.is_system:
+        raise ApiError(400, DELETE_SELF)
+    if person.is_active and _holds_admin(person, roles) and active_administrators(db, roles) <= 1:
+        raise ApiError(400, LAST_ADMIN_DELETE)
+    now = svc.clock()
+    revoked = revoke_sessions(db, person.id)
+    audit(
+        db,
+        actor=actor,
+        action="person.deleted",
+        subject=person.email,
+        detail={
+            "display_name": person.display_name,
+            "role": person.role,
+            "sessions_revoked": revoked,
+        },
+        via=via,
+        now=now,
+    )
+    db.delete(person)
+    db.flush()
+    return person
+
+
 def change_own_password(
     svc: Services,
     db: Session,
@@ -547,7 +629,7 @@ def sign_in(
     except ThrottleUnavailableError as exc:
         svc.log.warning("signin.throttle_unavailable", error=str(exc))
         raise ApiError(503, RATE_LIMITER_DOWN) from exc
-    person = find_by_email(db, address_key)
+    person = find_for_sign_in(db, address_key)
     verified = svc.passwords.verify(person.password_hash if person else None, password)
     if person is None or not verified or not person.is_active:
         try:

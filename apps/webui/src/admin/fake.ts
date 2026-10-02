@@ -5,10 +5,11 @@
 import { VERSION } from "../branding";
 import { people as copy, roleInfo, ROLES } from "../copy/en";
 import type { Person } from "../session/api";
-import { capabilitiesOf, fail, type FakeWorld, personOf, unreachable } from "../session/fake";
+import { capabilitiesOf, fail, type FakeWorld, loginAddress, personOf, unreachable, usernameOf } from "../session/fake";
 import type { AddedPerson, InstallFacts, PeopleApi, RuntimeSettings, SaveResult, SettingsApi, SettingsView } from "./api";
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL = /^[^\s@]+@[^\s@]+$/;
+const USERNAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 export class FakePeopleApi implements PeopleApi {
   /** Set to make every call fail as if the api were down. */
@@ -32,14 +33,18 @@ export class FakePeopleApi implements PeopleApi {
     return [...this.world.accounts].sort((a, b) => a.display_name.localeCompare(b.display_name)).map(personOf);
   }
 
-  async add(input: { email: string; display_name: string; role: string }): Promise<AddedPerson> {
+  async add(input: { username: string; display_name: string; role: string }): Promise<AddedPerson> {
     this.guard();
-    const email = input.email.trim();
+    const typed = input.username.trim().toLowerCase();
+    if (!typed.includes("@") && !USERNAME.test(typed)) {
+      fail(400, copy.invalidUsername);
+    }
+    const email = loginAddress(typed);
     if (!EMAIL.test(email)) {
       fail(400, copy.invalidEmail);
     }
-    if (this.world.byEmail(email) !== undefined) {
-      fail(409, copy.duplicateEmail(email.toLowerCase()));
+    if (this.world.byEmail(email) !== undefined || this.world.byUsername(email) !== undefined) {
+      fail(409, copy.duplicateEmail(usernameOf(email)));
     }
     if (ROLES.every((role) => role.id !== input.role)) {
       fail(400, {
@@ -49,7 +54,7 @@ export class FakePeopleApi implements PeopleApi {
       });
     }
     const oneTime = this.world.nextOneTimePassword();
-    const account = this.world.addAccount(email.toLowerCase(), input.display_name.trim(), input.role, oneTime, {
+    const account = this.world.addAccount(email, input.display_name.trim(), input.role, oneTime, {
       mustChange: true,
     });
     return { person: personOf(account), one_time_password: oneTime };
@@ -93,6 +98,18 @@ export class FakePeopleApi implements PeopleApi {
     }
     account.is_active = active;
     return personOf(account);
+  }
+
+  async remove(id: string): Promise<void> {
+    this.guard();
+    const account = this.world.byId(id);
+    if (account === undefined) {
+      fail(404, { whatHappened: "That person no longer exists.", likelyCause: "", whatToDo: "Reload the list." });
+    }
+    if (account.is_active && this.lastActiveAdministrator(id)) {
+      fail(400, copy.lastAdministratorDelete);
+    }
+    this.world.remove(id);
   }
 }
 

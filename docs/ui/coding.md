@@ -1,7 +1,12 @@
 # Coding — page copy (CLAUDE.md §9, §10.1)
 
 One primary action (New coding task). Each task shows its plan checklist and its activity
-feed as sentences. Component: `apps/webui/src/coding/CodingPage.tsx`.
+feed as sentences. Component: `apps/webui/src/coding/CodingPage.tsx`. Each task is a panel:
+title and ticket id, a state pill (blue Running or Starting, green Done, amber Needs your
+review, red Failed) and a progress bar of steps done; the checklist marks each step (✓ done,
+◐ running, ○ waiting, ! needs you, – skipped); the feed shows its newest 12 lines with
+*Show all N lines*, and lines that report a failure read in red. While an iteration runs,
+the agent writes live lines (below) so the feed moves within a step, not only between steps.
 
 | Element | Text |
 |---|---|
@@ -20,6 +25,10 @@ feed as sentences. Component: `apps/webui/src/coding/CodingPage.tsx`.
 | Plan checklist | *n.* step title — waiting · running · done · needs you · skipped |
 | Activity, first line | Toolchain: *Python 3.12.6 and Rust 1.80.1*. *(+ fallback sentence if a pin was not available)* |
 | Activity, sandbox | The sandbox runs under gVisor. · gVisor is not installed on this host, so the sandbox runs under hardened runc: its own user namespace, a seccomp profile, no network and no capabilities. |
+| Activity, iteration (live) | Iteration *2* of *6*: fixing *test*… |
+| Activity, approach (live) | Approach: *Parse the CSV with the csv module* · *Report min, max and average* |
+| Activity, edits (live) | Changed *templog.py, tests/test_templog.py*: *added the --csv option* Running the checks… |
+| Activity, check failed (live) | Iteration *1*: *test failed* — test: *FAILED tests/test_templog.py::test_avg - AssertionError* (*lint ok*). |
 | Activity, task | *Task 1*: done after *2* iterations; lint ok, type ok, test ok. |
 | Activity, stalled | *Task 1*: stopped after *4* iterations because the last 3 made no progress (*test failed*). A person needs to look at it. |
 | Activity, commit | Committed *1a2b3c4d5e* on branch *slas/T-coding-0001* with Slas-Agent and Slas-Ticket trailers. |

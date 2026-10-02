@@ -13,7 +13,7 @@ test("sign in with a one-time password, choose a new one, reach Home, Admin and 
   // Sign in: the installation name is the heading; nothing else is on the page.
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Lab 3");
   await expect(page.getByText("Use the account an administrator created for you. Nothing you type leaves this network.")).toBeVisible();
-  await page.getByLabel("Email", { exact: true }).fill("admin@slas.local");
+  await page.getByLabel("Name", { exact: true }).fill("admin");
   await page.getByLabel("Password", { exact: true }).fill("admin-one-time-pw");
   await page.getByRole("button", { name: "Sign in" }).click();
 
@@ -53,12 +53,12 @@ test("sign in with a one-time password, choose a new one, reach Home, Admin and 
   // Sign out returns to the front door with one sentence.
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByText("You're signed out.")).toBeVisible();
-  await expect(page.getByLabel("Email", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Name", { exact: true })).toBeVisible();
 });
 
 test("an engineer sees no Admin, and /admin/people answers with the not-allowed sentence", async ({ page }) => {
   await page.goto("/sign-in");
-  await page.getByLabel("Email", { exact: true }).fill("pat@slas.local");
+  await page.getByLabel("Name", { exact: true }).fill("pat");
   await page.getByLabel("Password", { exact: true }).fill("pat-password-12345");
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Home");
@@ -79,7 +79,7 @@ test("an engineer sees no Admin, and /admin/people answers with the not-allowed 
 
 async function signInAsPat(page: Page): Promise<Locator> {
   await page.goto("/sign-in");
-  await page.getByLabel("Email", { exact: true }).fill("pat@slas.local");
+  await page.getByLabel("Name", { exact: true }).fill("pat");
   await page.getByLabel("Password", { exact: true }).fill("pat-password-12345");
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Home");
@@ -180,11 +180,11 @@ test("New factory job: Trigger → Test loop → Rules ends in the sentence and 
 
 test("a wrong password is explained in three parts, inline", async ({ page }) => {
   await page.goto("/sign-in");
-  await page.getByLabel("Email", { exact: true }).fill("pat@slas.local");
+  await page.getByLabel("Name", { exact: true }).fill("pat");
   await page.getByLabel("Password", { exact: true }).fill("not-the-password");
   await page.getByRole("button", { name: "Sign in" }).click();
   const alert = page.getByRole("alert");
-  await expect(alert).toContainText("That email and password don't match.");
+  await expect(alert).toContainText("That name and password don't match.");
   await expect(alert).toContainText("A typo, or the password was changed.");
   await expect(alert).toContainText("Try again, or ask an administrator to reset your password.");
 });

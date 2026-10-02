@@ -24,6 +24,38 @@ function slugOf(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48);
 }
 
+const STATUS_MARK: Record<StepStatus, string> = {
+  pending: "○",
+  running: "◐",
+  done: "✓",
+  failed: "!",
+  skipped: "–",
+};
+
+/** The pill for a ticket state: a word a person reads, coloured by what it asks of them. */
+function stateTone(state: string): string {
+  if (state === "Done") return "pill pass";
+  if (state === "Failed") return "pill fail";
+  if (state === "Needs review") return "pill warn";
+  return "pill info";
+}
+
+function stateWord(state: string): string {
+  if (state === "Needs review") return "Needs your review";
+  if (state === "Open" || state === "Planned" || state === "Approved") return "Starting";
+  return state;
+}
+
+function progressOf(task: CodingTask): number {
+  const finishedSteps = task.steps.filter((step) => step.status === "done" || step.status === "skipped").length;
+  return task.steps.length === 0 ? 0 : Math.round((finishedSteps / task.steps.length) * 100);
+}
+
+/** Feed lines that report a failure read in the failure colour; the rest stay calm. */
+function feedTone(line: string): string {
+  return /\b(failed|stopped|not finished|needs you|A person needs)\b/.test(line) ? "bad" : "";
+}
+
 const STATUS_WORD: Record<StepStatus, string> = {
   pending: "waiting",
   running: "running",
@@ -108,25 +140,21 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
   };
 
   return (
-    <div className="space-y-8">
-      <header className="flex flex-wrap items-end justify-between gap-4">
+    <div className="stack">
+      <div className="page-head">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Coding</h1>
-          <p className="mt-1 text-base text-slate-700 dark:text-slate-300">
+          <h1>Coding</h1>
+          <p className="lede">
             The Coding Agent works in an isolated sandbox on this host, commits on its own branch,
             and never holds a Git credential.
           </p>
         </div>
         {!wizardOpen && (
-          <button
-            type="button"
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white dark:bg-slate-100 dark:text-slate-900"
-            onClick={() => setWizardOpen(true)}
-          >
+          <button type="button" className="btn primary" onClick={() => setWizardOpen(true)}>
             New coding task
           </button>
         )}
-      </header>
+      </div>
 
       {wizardOpen && (
         <NewCodingTaskWizard
@@ -139,15 +167,13 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
         />
       )}
 
-      <section aria-labelledby="tasks-heading">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 id="tasks-heading" className="text-lg font-medium">
-            Tasks
-          </h2>
+      <section aria-labelledby="tasks-heading" className="stack">
+        <div className="row between wrap">
+          <h2 id="tasks-heading">Tasks</h2>
           {finished.length > 0 && (
             <button
               type="button"
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700"
+              className="btn small"
               disabled={removing}
               title="Removes every task that is done, failed or waiting for review; the projects' repositories stay."
               onClick={() => void remove(finished)}
@@ -157,70 +183,83 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
           )}
         </div>
         {notice !== null && (
-          <p className="mt-2 text-sm text-slate-700 dark:text-slate-300" role="status">
+          <p className="sentence" role="status">
             {notice}
           </p>
         )}
         {tasks === null ? (
-          <p className="text-sm text-slate-600 dark:text-slate-400">Loading tasks…</p>
+          <p className="muted">Loading tasks…</p>
         ) : tasks.length === 0 ? (
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            No coding task yet. Start one with a plan; the agent shows every step here as it works.
-          </p>
+          <section className="panel empty">
+            <p className="sentence">No coding task yet. Start one with a plan; the agent shows every step here as it works.</p>
+          </section>
         ) : (
-          <ul className="mt-3 space-y-6">
+          <ul className="plain stack">
             {tasks.map((task) => (
-              <li
-                key={task.ticketId}
-                className="rounded-lg border border-slate-200 p-4 dark:border-slate-800"
-                aria-label={task.ticketId}
-              >
-                <h3 className="font-medium">
-                  {task.title} <span className="text-slate-500">· {task.ticketId}</span>
-                </h3>
-                <p className="text-sm text-slate-700 dark:text-slate-300">{task.sentence}</p>
-                <div className="mt-3 grid gap-4 md:grid-cols-2">
+              <li key={task.ticketId} className="panel task" aria-label={task.ticketId}>
+                <div className="task-head">
                   <div>
-                    <h4 className="text-sm font-medium">Plan</h4>
-                    <ol className="mt-1 space-y-1">
+                    <h3>
+                      {task.title} <span className="faint mono">· {task.ticketId}</span>
+                    </h3>
+                    <p className="muted">{task.sentence}</p>
+                  </div>
+                  <div className="task-state">
+                    <span className={stateTone(task.state)}>
+                      {isLive(task.state) && <span className="spinner" aria-hidden="true" />}
+                      {stateWord(task.state)}
+                    </span>
+                    {task.steps.length > 0 && (
+                      <span className="row">
+                        <span className="bar" aria-hidden="true">
+                          <i style={{ width: `${progressOf(task)}%` }} />
+                        </span>
+                        <span className="faint">
+                          {task.steps.filter((step) => step.status === "done").length} of {task.steps.length}
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="cols cols-2 task-body">
+                  <div>
+                    <h4>Plan</h4>
+                    <ol className="plain checklist">
                       {task.steps.map((step) => (
-                        <li key={step.n} className="text-sm">
-                          <span className="text-slate-500">{step.n}.</span> {step.title}{" "}
-                          <span className="text-slate-500">— {STATUS_WORD[step.status]}</span>
+                        <li key={step.n} className={`check ${step.status}`}>
+                          <span className="mark" aria-hidden="true">
+                            {STATUS_MARK[step.status]}
+                          </span>
+                          <span>
+                            <span className="faint">{step.n}.</span> {step.title}{" "}
+                            <span className="faint">— {STATUS_WORD[step.status]}</span>
+                          </span>
                         </li>
                       ))}
                     </ol>
                   </div>
                   <div>
-                    <h4 className="text-sm font-medium">Activity</h4>
-                    <ul className="mt-1 space-y-1" aria-label={`${task.ticketId} activity`}>
-                      {task.feed.map((line, index) => (
-                        <li key={index} className="text-sm text-slate-700 dark:text-slate-300">
-                          {line}
-                        </li>
-                      ))}
-                    </ul>
+                    <h4>Activity</h4>
+                    <Feed ticketId={task.ticketId} lines={task.feed} />
                   </div>
                 </div>
-                <p className="mt-3 text-sm text-slate-500">
+                <p className="faint task-hint">
                   Open the Terminal tab to inspect the branch; push happens from the Git panel,
                   which uses your saved remote.
                 </p>
                 {isFinished(task) && (
                   <form
-                    className="mt-3 space-y-2"
+                    className="prompt-box"
                     aria-label={`Ask for a change to ${task.title}`}
                     onSubmit={(event) => {
                       event.preventDefault();
                       void followUp(task);
                     }}
                   >
-                    <label className="block text-sm font-medium" htmlFor={`prompt-${task.ticketId}`}>
-                      Ask the agent for a change to this project
-                    </label>
+                    <label htmlFor={`prompt-${task.ticketId}`}>Ask the agent for a change to this project</label>
                     <textarea
                       id={`prompt-${task.ticketId}`}
-                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-sm dark:border-slate-700 dark:bg-slate-900"
+                      className="input mono"
                       rows={3}
                       placeholder="For example: add a --csv option that writes the summary as CSV, with a test"
                       value={prompts[task.ticketId] ?? ""}
@@ -232,25 +271,25 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
                         }
                       }}
                     />
-                    <div className="flex items-center gap-2">
+                    <div className="row wrap">
                       <button
                         type="submit"
-                        className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-slate-100 dark:text-slate-900"
+                        className="btn primary"
                         disabled={sending !== null || (prompts[task.ticketId] ?? "").trim() === ""}
                       >
                         {sending === task.ticketId ? "Starting…" : "Send to the agent"}
                       </button>
-                      <span className="text-xs text-slate-500">
+                      <span className="faint">
                         Ctrl+Enter sends. The agent changes {task.title} with its current files in view, runs the checks and commits on a new branch.
                       </span>
                     </div>
                   </form>
                 )}
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div className="row wrap task-actions">
                   {gitApi !== undefined && (
                     <button
                       type="button"
-                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700"
+                      className="btn small"
                       onClick={() => setGitOpenFor((current) => (current === task.ticketId ? null : task.ticketId))}
                     >
                       {gitOpenFor === task.ticketId ? "Hide Git panel" : "Git panel"}
@@ -258,7 +297,7 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
                   )}
                   {zipUrl(task) !== null && (
                     <a
-                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700"
+                      className="btn small"
                       href={zipUrl(task) ?? undefined}
                       download
                       title="Downloads the project as the agent left it, to build and test on your own machine."
@@ -269,7 +308,7 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
                   {isFinished(task) && (
                     <button
                       type="button"
-                      className="rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700"
+                      className="btn small ghost"
                       disabled={removing}
                       aria-label={`Remove ${task.ticketId}`}
                       title="Removes this task's ticket, SOP and artifacts; the project's repository stays."
@@ -280,7 +319,7 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
                   )}
                 </div>
                 {gitApi !== undefined && gitOpenFor === task.ticketId && (
-                  <div className="mt-3">
+                  <div className="task-git">
                     <GitPanel api={gitApi} slug={slugOf(task.title)} />
                   </div>
                 )}
@@ -289,6 +328,30 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
           </ul>
         )}
       </section>
+    </div>
+  );
+}
+
+/** How many feed lines show before "Show all"; the newest are the ones a person wants. */
+const FEED_TAIL = 12;
+
+function Feed({ ticketId, lines }: { ticketId: string; lines: string[] }) {
+  const [all, setAll] = useState(false);
+  const hidden = all ? 0 : Math.max(0, lines.length - FEED_TAIL);
+  return (
+    <div className="feed">
+      {hidden > 0 && (
+        <button type="button" className="btn small ghost" onClick={() => setAll(true)}>
+          Show all {lines.length} lines
+        </button>
+      )}
+      <ul className="plain" aria-label={`${ticketId} activity`}>
+        {lines.slice(hidden).map((line, index) => (
+          <li key={hidden + index} className={feedTone(line)}>
+            {line}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

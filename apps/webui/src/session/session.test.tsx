@@ -10,8 +10,8 @@ function fill(label: string, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 }
 
-async function attempt(email: string, password: string) {
-  fill(copy.email, email);
+async function attempt(username: string, password: string) {
+  fill(copy.username, username);
   fill(copy.password, password);
   fireEvent.click(screen.getByRole("button", { name: copy.button }));
 }
@@ -30,7 +30,7 @@ describe("Sign in (docs/ui/sign-in.md)", () => {
     renderApp({ sessionApi: new FakeSessionApi() }, "/");
     expect(await screen.findByRole("heading", { level: 1, name: "Lab 3" })).toBeTruthy();
     expect(screen.getByText(copy.lede)).toBeTruthy();
-    expect(screen.getByLabelText(copy.email)).toBeTruthy();
+    expect(screen.getByLabelText(copy.username)).toBeTruthy();
     expect(screen.getByLabelText(copy.password)).toBeTruthy();
     expect(screen.getByRole("button", { name: copy.button })).toBeTruthy();
     expect(screen.queryByRole("navigation", { name: "Pages" })).toBeNull();
@@ -53,12 +53,12 @@ describe("Sign in (docs/ui/sign-in.md)", () => {
 
   it("shows the wrong-password case in three parts, inline, until the next attempt", async () => {
     renderApp({ sessionApi: new FakeSessionApi() }, "/sign-in");
-    await screen.findByLabelText(copy.email);
-    await attempt("pat@slas.local", "nope");
+    await screen.findByLabelText(copy.username);
+    await attempt("pat", "nope");
     await screen.findByRole("alert");
     expect(alertParts()).toEqual([copy.wrongPassword.whatHappened, copy.wrongPassword.likelyCause, copy.wrongPassword.whatToDo]);
     expect(screen.getByRole("alert")).toBeTruthy();
-    await attempt("pat@slas.local", "pat-password-12345");
+    await attempt("pat", "pat-password-12345");
     await screen.findByRole("heading", { level: 1, name: "Home" });
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -70,19 +70,19 @@ describe("Sign in (docs/ui/sign-in.md)", () => {
     pat.is_active = false;
     const sessionApi = new FakeSessionApi(world);
     renderApp({ sessionApi }, "/sign-in");
-    await screen.findByLabelText(copy.email);
+    await screen.findByLabelText(copy.username);
 
-    await attempt("pat@slas.local", "pat-password-12345");
+    await attempt("pat", "pat-password-12345");
     await screen.findByRole("alert");
     expect(alertParts()).toEqual([copy.switchedOff.whatHappened, copy.switchedOff.likelyCause, copy.switchedOff.whatToDo]);
 
     sessionApi.exhaustAttempts();
-    await attempt("pat@slas.local", "wrong");
+    await attempt("pat", "wrong");
     await waitFor(() => expect(alertParts()[0]).toBe(copy.tooManyAttempts.whatHappened));
     expect(alertParts()).toEqual([copy.tooManyAttempts.whatHappened, copy.tooManyAttempts.likelyCause, copy.tooManyAttempts.whatToDo]);
 
     sessionApi.mode = "rate-limiter-down";
-    await attempt("pat@slas.local", "wrong");
+    await attempt("pat", "wrong");
     await waitFor(() => expect(alertParts()[0]).toBe(copy.rateLimiterDown.whatHappened));
     expect(alertParts()).toEqual([copy.rateLimiterDown.whatHappened, copy.rateLimiterDown.likelyCause, copy.rateLimiterDown.whatToDo]);
     expect(alertParts()[2]).toContain("slas logs redis");
@@ -92,9 +92,9 @@ describe("Sign in (docs/ui/sign-in.md)", () => {
     const sessionApi = new FakeSessionApi();
     sessionApi.mode = "hang";
     renderApp({ sessionApi }, "/sign-in");
-    await screen.findByLabelText(copy.email);
+    await screen.findByLabelText(copy.username);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    await attempt("pat@slas.local", "pat-password-12345");
+    await attempt("pat", "pat-password-12345");
     expect(screen.getByRole("button", { name: copy.buttonWaiting })).toBeTruthy();
     expect(screen.queryByText(copy.stillChecking)).toBeNull();
     act(() => {
@@ -105,8 +105,8 @@ describe("Sign in (docs/ui/sign-in.md)", () => {
 
   it("signs in, shows who is signed in with their role, and signs out to 'You're signed out.'", async () => {
     renderApp({ sessionApi: new FakeSessionApi() }, "/");
-    await screen.findByLabelText(copy.email);
-    await attempt("pat@slas.local", "pat-password-12345");
+    await screen.findByLabelText(copy.username);
+    await attempt("pat", "pat-password-12345");
     expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeTruthy();
     expect(screen.getByTestId("signed-in-as").textContent).toBe(shell.signedInAs("Pat Lin", "Engineer"));
     expect(screen.getByTestId("welcome").textContent).toBe(
@@ -118,7 +118,7 @@ describe("Sign in (docs/ui/sign-in.md)", () => {
     fireEvent.click(screen.getByRole("button", { name: shell.signOut }));
     const notice = await screen.findByText(copy.signedOut);
     expect(notice.getAttribute("role")).toBe("status");
-    expect(screen.getByLabelText(copy.email)).toBeTruthy();
+    expect(screen.getByLabelText(copy.username)).toBeTruthy();
   });
 
   it("shows the session-ended sentence with the configured lifetime after a 401 with reason expired", async () => {
@@ -130,7 +130,7 @@ describe("Sign in (docs/ui/sign-in.md)", () => {
       sessionApi.expireSession();
     });
     expect(await screen.findByText(copy.sessionEnded("1 day"))).toBeTruthy();
-    expect(screen.getByLabelText(copy.email)).toBeTruthy();
+    expect(screen.getByLabelText(copy.username)).toBeTruthy();
   });
 
   it("says Checking your sign-in… while the session is being checked", () => {
@@ -144,8 +144,8 @@ describe("Sign in (docs/ui/sign-in.md)", () => {
 describe("Choose a new password (docs/ui/sign-in.md)", () => {
   async function signInAsBootstrapAdmin() {
     renderApp({ sessionApi: new FakeSessionApi() }, "/");
-    await screen.findByLabelText(copy.email);
-    await attempt("admin@slas.local", "admin-one-time-pw");
+    await screen.findByLabelText(copy.username);
+    await attempt("admin", "admin-one-time-pw");
     expect(await screen.findByRole("heading", { level: 1, name: choosePassword.heading })).toBeTruthy();
   }
 
@@ -203,8 +203,8 @@ describe("Choose a new password (docs/ui/sign-in.md)", () => {
   it("renders the server-not-answering case with the page's own words", async () => {
     const sessionApi = new FakeSessionApi();
     renderApp({ sessionApi }, "/");
-    await screen.findByLabelText(copy.email);
-    await attempt("admin@slas.local", "admin-one-time-pw");
+    await screen.findByLabelText(copy.username);
+    await attempt("admin", "admin-one-time-pw");
     await screen.findByRole("heading", { level: 1, name: choosePassword.heading });
     sessionApi.mode = "unreachable";
     save("correct-horse-battery", "correct-horse-battery");

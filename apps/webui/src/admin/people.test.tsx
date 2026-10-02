@@ -37,7 +37,7 @@ describe("Admin → People (docs/ui/admin-people.md)", () => {
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual([...copy.columns, "Actions"]);
     const adminRow = screen.getByRole("row", { name: "Administrator" });
     expect(within(adminRow).getAllByRole("cell").map((c) => c.textContent)).toEqual([
-      "Administratoradmin@slas.local",
+      "AAdministratoradmin",
       "Administrator",
       "Manages people, settings, Git hosts, test stations and models, and can do everything an engineer can.",
       "Never",
@@ -69,13 +69,13 @@ describe("Admin → People (docs/ui/admin-people.md)", () => {
     fireEvent.click(screen.getByRole("button", { name: copy.addButton }));
     const dialog = screen.getByRole("dialog", { name: copy.add.title });
     expect(within(dialog).getByText(copy.add.nameHelp)).toBeTruthy();
-    expect(within(dialog).getByText(copy.add.emailHelp)).toBeTruthy();
+    expect(within(dialog).getByText(copy.add.usernameHelp)).toBeTruthy();
     expect(within(dialog).getByRole("radio", { name: /Line lead/ })).toBeTruthy();
     expect(within(dialog).getByText("An engineer who also decides a factory PASS or FAIL when the voters disagree.")).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "Add person" })).toHaveProperty("disabled", true);
 
     fireEvent.change(within(dialog).getByLabelText(copy.add.name), { target: { value: "Ana" } });
-    fireEvent.change(within(dialog).getByLabelText(copy.add.email), { target: { value: "ana@company.local" } });
+    fireEvent.change(within(dialog).getByLabelText(copy.add.username), { target: { value: "Ana" } });
     expect(within(dialog).getByText(copy.add.closing("Ana"))).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Add Ana" }));
 
@@ -93,26 +93,26 @@ describe("Admin → People (docs/ui/admin-people.md)", () => {
     const anaRow = screen.getByRole("row", { name: "Ana" });
     expect(within(anaRow).getAllByRole("cell").map((c) => c.textContent)).toContain(copy.status.mustChoose);
     expect(within(anaRow).getAllByRole("cell")[1]?.textContent).toBe("Engineer");
-    expect(api.world.byEmail("ana@company.local")?.password).toBe(password);
+    expect(api.world.byEmail("ana@slas.local")?.password).toBe(password);
   });
 
-  it("shows the duplicate-email and invalid-email cases inside the dialog", async () => {
+  it("shows the duplicate-name and invalid-name cases inside the dialog", async () => {
     const { api, admin } = world();
     render(<PeoplePage api={api} me={personOf(admin)} />);
     await screen.findByRole("table");
     fireEvent.click(screen.getByRole("button", { name: copy.addButton }));
     const dialog = screen.getByRole("dialog");
     fireEvent.change(within(dialog).getByLabelText(copy.add.name), { target: { value: "Pat Again" } });
-    fireEvent.change(within(dialog).getByLabelText(copy.add.email), { target: { value: "pat@slas.local" } });
+    fireEvent.change(within(dialog).getByLabelText(copy.add.username), { target: { value: "pat" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add Pat Again" }));
     await within(dialog).findByRole("alert");
-    const dup = copy.duplicateEmail("pat@slas.local");
+    const dup = copy.duplicateEmail("pat");
     expect(alertParts()).toEqual([dup.whatHappened, dup.likelyCause, dup.whatToDo]);
 
-    fireEvent.change(within(dialog).getByLabelText(copy.add.email), { target: { value: "not-an-email" } });
+    fireEvent.change(within(dialog).getByLabelText(copy.add.username), { target: { value: "pat lin!" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add Pat Again" }));
-    await waitFor(() => expect(alertParts()[0]).toBe(copy.invalidEmail.whatHappened));
-    expect(alertParts()).toEqual([copy.invalidEmail.whatHappened, copy.invalidEmail.likelyCause, copy.invalidEmail.whatToDo]);
+    await waitFor(() => expect(alertParts()[0]).toBe(copy.invalidUsername.whatHappened));
+    expect(alertParts()).toEqual([copy.invalidUsername.whatHappened, copy.invalidUsername.likelyCause, copy.invalidUsername.whatToDo]);
     expect(screen.getAllByRole("dialog").length).toBe(1);
   });
 
@@ -229,11 +229,38 @@ describe("Admin → People (docs/ui/admin-people.md)", () => {
     fireEvent.click(screen.getByRole("button", { name: copy.addButton }));
     const dialog = screen.getByRole("dialog");
     fireEvent.change(within(dialog).getByLabelText(copy.add.name), { target: { value: "Ana" } });
-    fireEvent.change(within(dialog).getByLabelText(copy.add.email), { target: { value: "ana@company.local" } });
+    fireEvent.change(within(dialog).getByLabelText(copy.add.username), { target: { value: "Ana" } });
     api.down = true;
     fireEvent.click(within(dialog).getByRole("button", { name: "Add Ana" }));
     await within(dialog).findByRole("alert");
     const words = copy.add.notAdded("Ana");
     expect(alertParts()).toEqual([words.whatHappened, words.likelyCause, words.whatToDo]);
+  });
+
+  it("deletes a person after a confirmation that names what stays, and never deletes yourself", async () => {
+    const { api, admin } = world();
+    render(<PeoplePage api={api} me={personOf(admin)} />);
+    await screen.findByRole("table");
+
+    fireEvent.click(within(openMenu("Administrator")).getByRole("menuitem", { name: copy.menu.delete }));
+    let dialog = screen.getByRole("dialog", { name: copy.delete.title("Administrator") });
+    fireEvent.click(within(dialog).getByRole("button", { name: copy.delete.button("Administrator") }));
+    await within(dialog).findByRole("alert");
+    expect(alertParts()).toEqual([copy.delete.yourself.whatHappened, copy.delete.yourself.likelyCause, copy.delete.yourself.whatToDo]);
+    fireEvent.click(within(dialog).getByRole("button", { name: copy.cancel }));
+
+    fireEvent.click(within(openMenu("Pat Lin")).getByRole("menuitem", { name: copy.menu.delete }));
+    dialog = screen.getByRole("dialog", { name: copy.delete.title("Pat Lin") });
+    expect(within(dialog).getByText(copy.delete.body("Pat Lin", "pat"))).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: copy.delete.button("Pat Lin") }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("row", { name: "Pat Lin" })).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(copy.delete.deleted("Pat Lin"));
+    expect(api.world.byEmail("pat@slas.local")).toBeUndefined();
+  });
+
+  it("the fake refuses to delete the last administrator, as the api does", async () => {
+    const { api, admin } = world();
+    await expect(api.remove(admin.id)).rejects.toMatchObject({ status: 400 });
   });
 });

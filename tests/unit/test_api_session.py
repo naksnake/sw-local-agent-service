@@ -74,6 +74,7 @@ def test_sign_in_returns_person_and_a_hardened_cookie(harness: Harness) -> None:
     assert set(person) == {
         "id",
         "email",
+        "username",
         "display_name",
         "role",
         "role_label",
@@ -99,7 +100,7 @@ def test_wrong_password_unknown_email_and_switched_off_all_look_the_same(
 ) -> None:
     wrong = assert_problem(harness.sign_in(ADMIN_EMAIL, "not-the-password"), 401, reason="none")
     unknown = assert_problem(harness.sign_in("nobody@slas.local", INITIAL_PASSWORD), 401)
-    assert wrong["what_happened"] == "That email and password don't match."
+    assert wrong["what_happened"] == "That name and password don't match."
     assert wrong["likely_cause"] == "A typo, or the password was changed."
     assert wrong["what_to_do"] == "Try again, or ask an administrator to reset your password."
     assert {k: v for k, v in unknown.items() if k != "trace_id"} == {

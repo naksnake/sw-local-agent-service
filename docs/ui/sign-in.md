@@ -11,7 +11,7 @@ persistent, never a toast; no dead ends.
 |---|---|
 | Heading | *installation name*, e.g. **Lab 3** — falls back to **SW Local Agent Service** |
 | Lede | Use the account an administrator created for you. Nothing you type leaves this network. |
-| Field | Email |
+| Field | Name — placeholder: for example admin. A name like `ana` signs in as the account `ana@slas.local`; a full address still works. |
 | Field | Password |
 | Primary button | Sign in |
 | Button while waiting | Signing in… |
@@ -24,7 +24,7 @@ name; nothing is disabled.
 
 | Case | What happened | Likely cause | What to do |
 |---|---|---|---|
-| Wrong email or password | That email and password don't match. | A typo, or the password was changed. | Try again, or ask an administrator to reset your password. |
+| Wrong name or password | That name and password don't match. | A typo, or the password was changed. | Try again, or ask an administrator to reset your password. |
 | Account switched off | This account is switched off. | An administrator switched it off. | Ask an administrator to switch it back on. |
 | Too many attempts | Too many sign-in attempts in the last 15 minutes. | Several wrong passwords were tried for this account. | Wait and try again. |
 | Server not answering | The sign-in server didn't answer. | The api service is starting or stopped. | Wait a moment and press Try again; if it repeats, run `slas logs api` on the host. |

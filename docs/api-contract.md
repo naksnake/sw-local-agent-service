@@ -39,7 +39,7 @@ setting `session_lifetime_hours` (default 8) at sign-in time.
 
 | Route | Body | Answer |
 |---|---|---|
-| `POST /api/v1/session` | `{"email": str, "password": str}` | `200 Person` + Set-Cookie. `401 reason=none` "The email or password is not right." (never says which). `429` after 10 failures in 15 minutes per email or per address (Redis), sentence from docs/ui/sign-in.md. `503` when Redis is unreachable (fails closed, names `slas logs redis`). A switched-off person gets the same 401 as a wrong password. |
+| `POST /api/v1/session` | `{"username": str, "password": str}` (`email` still accepted; a bare name means `<name>@slas.local`, or the one older account with that name) | `200 Person` + Set-Cookie. `401 reason=none` "That name and password don't match." (never says which). `429` after 10 failures in 15 minutes per name or per address (Redis), sentence from docs/ui/sign-in.md. `503` when Redis is unreachable (fails closed, names `slas logs redis`). A switched-off person gets the same 401 as a wrong password. |
 | `DELETE /api/v1/session` | — | `204`; the cookie is cleared. |
 | `GET /api/v1/me` | — | `200 Person`; `401 reason=expired` when the session existed but ran out, `401 reason=none` otherwise. |
 | `POST /api/v1/me/password` | `{"current_password": str, "new_password": str}` | `200 Person` with `must_change_password: false`; other sessions of the person are revoked, this one stays. `400` when the new password is shorter than 12 characters or equals the email; `401` when the current password is wrong. |
@@ -62,8 +62,9 @@ While `must_change_password` is true, every route except `GET /api/v1/me`,
 | Route | Body | Answer |
 |---|---|---|
 | `GET /api/v1/admin/people` | — | `200 [Person]`, ordered by display name. |
-| `POST /api/v1/admin/people` | `{"email": str, "display_name": str, "role": str}` | `201 {"person": Person, "one_time_password": str}`; the person must change it at first sign-in. `409` when the email exists. `400` for an unknown role (names the roles). |
+| `POST /api/v1/admin/people` | `{"username": str, "display_name": str, "role": str}` (`email` still accepted; a username becomes `<username>@slas.local`; one account per username, as it names the `Coding/<username>/` folder) | `201 {"person": Person, "one_time_password": str}`; the person must change it at first sign-in. `409` when the email exists. `400` for an unknown role (names the roles). |
 | `PATCH /api/v1/admin/people/{id}` | `{"role"?: str, "is_active"?: bool}` | `200 Person`. Switching a person off revokes their sessions. An administrator cannot switch off or demote the last active administrator (`400`). |
+| `DELETE /api/v1/admin/people/{id}` | — | `200 {"sentence": str}`; the person's sessions end and the row goes; their projects stay under `Coding/<username>/` and the audit trail keeps their history. `400` for yourself or the last active administrator. |
 | `POST /api/v1/admin/people/{id}/password-reset` | — | `200 {"one_time_password": str}`; sessions revoked; `must_change_password` set. A reset of `admin@slas.local` also ends the bootstrap (below). |
 
 Every change writes an `audit_log` row (`at, actor, action, subject, detail, via, trace_id`);

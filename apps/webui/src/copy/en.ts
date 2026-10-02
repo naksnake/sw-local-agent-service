@@ -27,7 +27,8 @@ const LOGS_API = "if it repeats, run `slas logs api` on the host.";
 export const signIn = {
   fallbackHeading: PRODUCT_NAME,
   lede: "Use the account an administrator created for you. Nothing you type leaves this network.",
-  email: "Email",
+  username: "Name",
+  usernamePlaceholder: "for example admin",
   password: "Password",
   button: "Sign in",
   buttonWaiting: "Signing in…",
@@ -42,7 +43,7 @@ export const signIn = {
   } satisfies ThreePart,
   // The api sends these; the in-memory fake sends the same words so the page is tested with them.
   wrongPassword: {
-    whatHappened: "That email and password don't match.",
+    whatHappened: "That name and password don't match.",
     likelyCause: "A typo, or the password was changed.",
     whatToDo: "Try again, or ask an administrator to reset your password.",
   } satisfies ThreePart,
@@ -252,6 +253,7 @@ export const people = {
     resetPassword: "Reset password",
     switchOff: "Switch off",
     switchOn: "Switch on",
+    delete: "Delete",
   },
   loading: "Loading people…",
   onlyYou: "Only you so far. Add the engineers who will use the platform; each gets a one-time password.",
@@ -265,8 +267,8 @@ export const people = {
     title: "Add a person",
     name: "Name",
     nameHelp: "Shown on their commits and tickets.",
-    email: "Email",
-    emailHelp: "They sign in with it. It doesn't have to reach the internet.",
+    username: "Sign-in name",
+    usernameHelp: "What they type to sign in, like ana or ana.lin. Lowercase letters, digits, dots and dashes.",
     role: "Role",
     closing: (name: string) => `${name} will get a one-time password and choose their own at first sign-in.`,
     button: (name: string) => (name === "" ? "Add person" : `Add ${name}`),
@@ -338,10 +340,28 @@ export const people = {
       whatToDo: `Press Switch on again; ${LOGS_API}`,
     }),
   },
+  delete: {
+    title: (name: string) => `Delete ${name}?`,
+    body: (name: string, username: string) =>
+      `${name} can't sign in again and is signed out everywhere now. Their projects stay in Coding/${username}/ and the audit log keeps what they did. This can't be undone; to stop them for a while, switch the account off instead.`,
+    button: (name: string) => `Delete ${name}`,
+    buttonWaiting: "Deleting…",
+    deleted: (name: string) => `${name} was deleted.`,
+    yourself: {
+      whatHappened: "You can't delete your own account.",
+      likelyCause: "You're signed in with it.",
+      whatToDo: "Ask another administrator.",
+    } satisfies ThreePart,
+    notDeleted: (name: string): ThreePart => ({
+      whatHappened: `${name} wasn't deleted.`,
+      likelyCause: "The api service didn't answer.",
+      whatToDo: `Press Delete again; ${LOGS_API}`,
+    }),
+  },
   cancel: "Cancel",
   // The api sends these; the in-memory fake sends the same words.
-  duplicateEmail: (email: string): ThreePart => ({
-    whatHappened: `Someone already signs in as ${email}.`,
+  duplicateEmail: (username: string): ThreePart => ({
+    whatHappened: `Someone already signs in as ${username}.`,
     likelyCause: "The address belongs to an existing person, maybe switched off.",
     whatToDo: "Use another address, or switch the existing account back on.",
   }),
@@ -352,6 +372,16 @@ export const people = {
   } satisfies ThreePart,
   lastAdministratorRole: {
     whatHappened: "You can't change the last administrator's role.",
+    likelyCause: "Without an administrator nobody could manage people or settings.",
+    whatToDo: "Make someone else an administrator first.",
+  } satisfies ThreePart,
+  invalidUsername: {
+    whatHappened: "That name can't be used to sign in.",
+    likelyCause: "A name is lowercase letters, digits, dots, dashes or underscores, starting with a letter or digit.",
+    whatToDo: "Try something like ana or ana.lin.",
+  } satisfies ThreePart,
+  lastAdministratorDelete: {
+    whatHappened: "You can't delete the last administrator.",
     likelyCause: "Without an administrator nobody could manage people or settings.",
     whatToDo: "Make someone else an administrator first.",
   } satisfies ThreePart,

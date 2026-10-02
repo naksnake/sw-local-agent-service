@@ -1123,6 +1123,7 @@ def test_views_for_a_ticket_without_plan_and_for_every_state() -> None:
         entry(5, "observation", step_id="sandbox", payload={"summary": ""}),
         entry(6, "note", payload={"skill_gate": gate, "plan_cross_check": "3 of 3 agree."}),
         entry(7, "state", payload={"reason": "Starting the steps."}),
+        entry(8, "note", payload={"progress": "Iteration 1 of 6: reading the project…"}),
     ]
     running = ticket.model_copy(update={"state": TicketState.RUNNING})
     view = coding_task_view(running, plan, entries, None)
@@ -1132,6 +1133,7 @@ def test_views_for_a_ticket_without_plan_and_for_every_state() -> None:
         "The skill x is not in the library.",
         "3 of 3 agree.",
         "Starting the steps.",
+        "Iteration 1 of 6: reading the project…",
     ]
     assert view["steps"] == [
         {"n": 1, "title": toolchain, "status": "pending"},

@@ -190,8 +190,13 @@ def public_installation(svc: ServicesDep, db: DbDep) -> dict[str, Any]:
 class SignInBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    email: str
+    #: The name people type (`ana`); `email` is still accepted from older pages and scripts.
+    username: str | None = None
+    email: str | None = None
     password: str
+
+    def login(self) -> str:
+        return (self.username if self.username is not None else self.email) or ""
 
 
 class PasswordChangeBody(BaseModel):
@@ -214,7 +219,7 @@ def create_session(
         svc,
         db,
         throttle,
-        email=body.email,
+        email=body.login(),
         password=body.password,
         address=client_address(request),
     )
@@ -257,7 +262,9 @@ def change_password(
 class NewPersonBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    email: str
+    #: The name they will sign in with; `email` is still accepted.
+    username: str | None = None
+    email: str | None = None
     display_name: str
     role: str
 
@@ -283,7 +290,7 @@ def add_person(body: NewPersonBody, auth: Ready, svc: ServicesDep, db: DbDep) ->
         db,
         actor=auth.principal,
         via="webui",
-        email=body.email,
+        email=(body.username if body.username is not None else body.email) or "",
         display_name=body.display_name,
         role=body.role,
     )
@@ -308,6 +315,18 @@ def patch_person(
         is_active=body.is_active,
     )
     return _person(svc, person)
+
+
+@api.delete("/admin/people/{id}")
+def delete_person(person_id: PersonId, auth: Ready, svc: ServicesDep, db: DbDep) -> dict[str, Any]:
+    require(auth.principal, Capability.ADMIN_PEOPLE)
+    person = service.delete_person(svc, db, actor=auth.principal, via="webui", person_id=person_id)
+    return {
+        "sentence": (
+            f"{person.display_name} ({service.username_of(person.email)}) was deleted and can no "
+            f"longer sign in. Their projects stay in Coding/{service.username_of(person.email)}/."
+        )
+    }
 
 
 @api.post("/admin/people/{id}/password-reset")

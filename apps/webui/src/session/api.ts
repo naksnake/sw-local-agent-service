@@ -7,6 +7,8 @@ import type { HttpClient } from "../api/http";
 export interface Person {
   id: string;
   email: string;
+  /** What the person types to sign in; also their `Coding/<name>/` folder. */
+  username: string;
   display_name: string;
   role: string;
   role_label: string;
@@ -29,7 +31,7 @@ export interface Installation {
 
 export interface SessionApi {
   installation(): Promise<Installation>;
-  signIn(email: string, password: string): Promise<Person>;
+  signIn(username: string, password: string): Promise<Person>;
   signOut(): Promise<void>;
   me(): Promise<Person>;
   changePassword(current: string, next: string): Promise<Person>;
@@ -42,8 +44,8 @@ export class HttpSessionApi implements SessionApi {
     return this.http.get<Installation>("/public/installation");
   }
 
-  signIn(email: string, password: string): Promise<Person> {
-    return this.http.post<Person>("/session", { email, password });
+  signIn(username: string, password: string): Promise<Person> {
+    return this.http.post<Person>("/session", { username, password });
   }
 
   signOut(): Promise<void> {

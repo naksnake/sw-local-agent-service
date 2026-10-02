@@ -46,7 +46,7 @@ describe("which APIs the bundle runs on", () => {
     expect(apis.codingApi).toBeDefined();
     expect(apis.validationApi).toBeDefined();
     expect(apis.factoryApi).toBeDefined();
-    expect(apis.signInHint).toContain("admin@slas.local");
+    expect(apis.signInHint).toContain("Sign in as admin with");
   });
 
   it("keeps the fake world and the signed-in person across a reload through storage", async () => {

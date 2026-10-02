@@ -82,11 +82,25 @@ class EditRequest(SlasModel):
     failures: list[CheckResult] = Field(default_factory=list)
     #: The person's whole plan.md: a task line alone ("plan", "coding") says too little.
     plan: str = ""
+    #: Every file path in the project, so the model knows what exists beyond the snapshot.
+    paths: list[str] = Field(default_factory=list)
+
+
+class Replacement(SlasModel):
+    """One targeted edit: `find` must occur exactly once in `path`, and becomes `replace`."""
+
+    path: str
+    find: str = Field(min_length=1)
+    replace: str = ""
 
 
 class EditSet(SlasModel):
-    """What the model proposes: path → new content, or None to delete."""
+    """What the model proposes, in the order it writes it: first its approach (a few short
+    steps, so it reasons before it writes), then targeted replacements in existing files,
+    then whole files (path → complete content, or None to delete), then one sentence."""
 
+    approach: list[str] = Field(default_factory=list, max_length=12)
+    replacements: list[Replacement] = Field(default_factory=list)
     files: dict[str, str | None] = Field(default_factory=dict)
     note: str = ""
 
@@ -113,28 +127,65 @@ class EditError(ValueError):
         self.message = message
 
 
+def _confined(root: Path, rel: str) -> Path:
+    """The path `rel` names inside the project; anything else stops the step."""
+    if not rel or rel.startswith(("/", "~")) or ".." in Path(rel).parts:
+        raise EditError(
+            ThreePartMessage(
+                f"The model tried to write outside the project: {rel}.",
+                "Edits are confined to the project directory.",
+                "The step stops here; review the model's proposal on the ticket.",
+            )
+        )
+    target = (root / rel).resolve()
+    if not target.is_relative_to(root) or ".git" in target.relative_to(root).parts:
+        raise EditError(
+            ThreePartMessage(
+                f"The model tried to write to {rel}.",
+                "The repository metadata and anything outside the project are off limits.",
+                "The step stops here; review the model's proposal on the ticket.",
+            )
+        )
+    return target
+
+
+def apply_replacements(project_dir: Path, edits: EditSet) -> tuple[list[str], list[str]]:
+    """Apply the targeted edits in order. Returns (changed paths, problems): a `find` that is
+    missing or ambiguous is skipped and named, so the model can correct it next iteration
+    instead of the whole proposal being lost."""
+    root = project_dir.resolve()
+    changed: list[str] = []
+    problems: list[str] = []
+    for item in edits.replacements:
+        target = _confined(root, item.path)
+        if not target.is_file():
+            problems.append(f"{item.path} does not exist; write it as a whole file instead.")
+            continue
+        text = target.read_text(encoding="utf-8", errors="replace")
+        count = text.count(item.find)
+        if count != 1:
+            where = "does not occur" if count == 0 else f"occurs {count} times"
+            first = item.find.strip().splitlines()[0][:80] if item.find.strip() else item.find
+            problems.append(
+                f"In {item.path} the text to replace {where} (it starts {first!r}); copy it "
+                "exactly from the file and include enough lines to make it unique."
+            )
+            continue
+        updated = text.replace(item.find, item.replace, 1)
+        if updated != text:
+            target.write_text(updated, encoding="utf-8")
+            if item.path not in changed:
+                changed.append(item.path)
+    return changed, problems
+
+
 def apply_edits(project_dir: Path, edits: EditSet) -> list[str]:
-    """Write the model's edits inside the project only; `.git` and escapes are refused."""
+    """Write the model's whole-file edits inside the project only; `.git` and escapes are
+    refused."""
     root = project_dir.resolve()
     changed: list[str] = []
     for rel, content in edits.files.items():
-        if not rel or rel.startswith(("/", "~")) or ".." in Path(rel).parts:
-            raise EditError(
-                ThreePartMessage(
-                    f"The model tried to write outside the project: {rel}.",
-                    "Edits are confined to the project directory.",
-                    "The step stops here; review the model's proposal on the ticket.",
-                )
-            )
-        target = (root / rel).resolve()
-        if not target.is_relative_to(root) or ".git" in target.relative_to(root).parts:
-            raise EditError(
-                ThreePartMessage(
-                    f"The model tried to write to {rel}.",
-                    "The repository metadata and anything outside the project are off limits.",
-                    "The step stops here; review the model's proposal on the ticket.",
-                )
-            )
+        target = _confined(root, rel)
         if content is None:
             if target.exists():
                 target.unlink()
@@ -216,18 +267,30 @@ def fix_script_modes(project_dir: Path) -> list[str]:
     return changed
 
 
-def snapshot(project_dir: Path) -> dict[str, str]:
-    files: dict[str, str] = {}
+def project_paths(project_dir: Path) -> list[str]:
+    """Every file of the project the model may care about, sorted; tool output left out."""
+    paths: list[str] = []
     for path in sorted(project_dir.rglob("*")):
+        rel = path.relative_to(project_dir)
+        if path.is_file() and not path.is_symlink() and not (_SKIP_DIRS & set(rel.parts)):
+            paths.append(str(rel))
+    return paths
+
+
+def snapshot(project_dir: Path, *, first: Sequence[str] = ()) -> dict[str, str]:
+    """Text files of the project, bounded. Paths in `first` (the files a task names, the
+    files the last iteration changed) are read before the rest, so they are never the ones
+    the bound leaves out."""
+    files: dict[str, str] = {}
+    paths = project_paths(project_dir)
+    wanted = [p for p in paths if p in first or Path(p).name in first]
+    for rel_text in wanted + [p for p in paths if p not in wanted]:
         if len(files) >= MAX_SNAPSHOT_FILES:
             break
-        rel = path.relative_to(project_dir)
-        if not path.is_file() or path.is_symlink() or _SKIP_DIRS & set(rel.parts):
-            continue
-        data = path.read_bytes()
+        data = (project_dir / rel_text).read_bytes()
         if len(data) > MAX_SNAPSHOT_BYTES or b"\x00" in data:
             continue
-        files[str(rel)] = data.decode("utf-8", errors="replace")
+        files[rel_text] = data.decode("utf-8", errors="replace")
     return files
 
 
@@ -287,6 +350,23 @@ class SandboxGitExec:
 
 #: How the executor reaches git for a session: (exec, cwd). Default: inside the sandbox.
 GitAccess = Callable[[Session], tuple[GitExec, str]]
+#: (ticket id, sentence): one live line in the task's activity feed while a step runs.
+Progress = Callable[[str, str], None]
+
+
+def _names(paths: Sequence[str], limit: int = 6) -> str:
+    shown = ", ".join(paths[:limit])
+    return shown + (f" and {len(paths) - limit} more" if len(paths) > limit else "")
+
+
+def _first_problem_line(output: str) -> str:
+    """The line of a check's output a person would read first: an error, else the last."""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    for line in lines:
+        lowered = line.lower()
+        if any(word in lowered for word in ("error", "failed", "assert", "traceback")):
+            return line[:160]
+    return lines[-1][:160] if lines else ""
 
 
 class CodingExecutor:
@@ -298,8 +378,11 @@ class CodingExecutor:
         cross_checker: CrossChecker | None = None,
         git_access: GitAccess | None = None,
         display_names: Mapping[str, str] | None = None,
+        progress: Progress | None = None,
     ) -> None:
         self.manager = manager
+        #: Where live lines go while a step runs (the ticket's journal in the service).
+        self.progress = progress
         self.coder = coder
         self.cross_checker = cross_checker
         self._git_access = git_access or (
@@ -354,6 +437,14 @@ class CodingExecutor:
         return Path(self.manager.project_dir(session.user, session.slug))
 
     # --- steps -------------------------------------------------------------------------
+
+    def _say(self, context: ExecutionContext, sentence: str) -> None:
+        if self.progress is None:
+            return
+        try:
+            self.progress(context.ticket_id, sentence)
+        except Exception:  # a live line never stops the work
+            return
 
     def _toolchain(self, step: Step, context: ExecutionContext) -> Observation:
         records = step.args.get("resolutions", [])
@@ -411,25 +502,55 @@ class CodingExecutor:
         log: list[str] = []
         stall = 0
         last_signature: str | None = None
+        recent: list[str] = []
 
         for iteration in range(1, max_iterations + 1):
             request = EditRequest(
                 task=task,
                 iteration=iteration,
                 languages=languages,
-                files=snapshot(project),
+                files=snapshot(project, first=[*task.files, *recent]),
                 failures=failures,
                 plan=plan_text,
+                paths=project_paths(project),
+            )
+            self._say(
+                context,
+                f"Iteration {iteration} of {max_iterations}: "
+                + (
+                    "reading the project and writing the code…"
+                    if iteration == 1
+                    else f"fixing {', '.join(r.kind for r in failures) or 'the task'}…"
+                ),
             )
             edits = self.coder.propose_edits(request)
+            if edits.approach:
+                self._say(context, "Approach: " + " · ".join(a.strip() for a in edits.approach))
             try:
-                changed = apply_edits(project, edits)
+                changed, problems = apply_replacements(project, edits)
+                changed += [rel for rel in apply_edits(project, edits) if rel not in changed]
             except EditError as exc:
                 return Observation(
                     exit_code=2, summary=exc.message.what_happened, stdout="\n".join(log)
                 )
             changed += [rel for rel in fix_script_modes(project) if rel not in changed]
+            recent = list(changed)
+            self._say(
+                context,
+                (f"Changed {_names(changed)}" if changed else "No file changed")
+                + (f": {edits.note.strip()}" if edits.note.strip() else ".")
+                + (" Running the checks…" if checks else ""),
+            )
             results = self._run_checks(session, checks)
+            if problems:
+                results.append(
+                    CheckResult(
+                        kind="edit",
+                        description="every targeted edit applied",
+                        exit_code=1,
+                        output="\n".join(problems),
+                    )
+                )
             absent = missing_files(project, task.files)
             if absent:
                 # T-coding-0018 passed every check without __main__.py and examples/.
@@ -456,6 +577,15 @@ class CodingExecutor:
             failures = [r for r in results if not r.ok]
             passed = ", ".join(f"{r.kind} ok" for r in results if r.ok) or "no checks"
             failed = ", ".join(f"{r.kind} failed" for r in failures)
+            if failures:
+                worst = failures[0]
+                line = _first_problem_line(worst.output)
+                self._say(
+                    context,
+                    f"Iteration {iteration}: {failed}"
+                    + (f" — {worst.kind}: {line}" if line else "")
+                    + (f" ({passed})." if passed != "no checks" else "."),
+                )
             log.append(
                 f"iteration {iteration}: {len(changed)} file(s) changed; {passed}"
                 + (f"; {failed}" if failed else "")

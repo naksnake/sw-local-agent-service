@@ -36,7 +36,9 @@ def _parser() -> argparse.ArgumentParser:
     user = commands.add_parser("user", help="people")
     user_commands = user.add_subparsers(dest="user_command", required=True)
     add = user_commands.add_parser("add", help="add a person")
-    add.add_argument("--email", required=True)
+    add.add_argument(
+        "--username", "--email", dest="email", required=True, help="the name they sign in with"
+    )
     add.add_argument("--display-name", required=True)
     add.add_argument("--role", required=True)
     add.add_argument(
@@ -49,7 +51,7 @@ def _parser() -> argparse.ArgumentParser:
         "reset-password",
         help="give a person a new one-time password and sign them out everywhere",
     )
-    reset.add_argument("--email", required=True)
+    reset.add_argument("--username", "--email", dest="email", required=True)
 
     commands.add_parser("serve", help="migrate, bootstrap, then serve on the bind address")
     return parser

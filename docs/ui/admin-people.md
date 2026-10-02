@@ -16,7 +16,9 @@ the table, in three parts, never as a toast.
 | Can do | one sentence from the role, e.g. *Runs coding tasks, validation runs and factory jobs, and approves destructive steps.* |
 | Last sign-in | human time: *3 minutes ago*, *yesterday*, *Never* |
 | Status | Can sign in · Switched off · Must choose a password |
-| Row menu | Change role · Reset password · Switch off (or Switch on) |
+| Person | display name, initials avatar, and the sign-in name under it (`ana`) |
+| Status | shown as a pill: green Can sign in, amber Must choose a password, grey Switched off |
+| Row menu | Change role · Reset password · Switch off (or Switch on) · Delete |
 
 **States**
 
@@ -33,7 +35,7 @@ the table, in three parts, never as a toast.
 |---|---|
 | Title | Add a person |
 | Field | Name — help: Shown on their commits and tickets. |
-| Field | Email — help: They sign in with it. It doesn't have to reach the internet. |
+| Field | Sign-in name — help: What they type to sign in, like ana or ana.lin. Lowercase letters, digits, dots and dashes. |
 | Field | Role — a choice list of role labels with the role's sentence under each |
 | Closing sentence | *Ana* will get a one-time password and choose her own at first sign-in. |
 | Primary button | Add *Ana* |
@@ -43,8 +45,8 @@ the table, in three parts, never as a toast.
 
 | Case | What happened | Likely cause | What to do |
 |---|---|---|---|
-| Duplicate email | Someone already signs in as *ana@company.local*. | The address belongs to an existing person, maybe switched off. | Use another address, or switch the existing account back on. |
-| Invalid email | That doesn't look like an email address. | A missing @ or domain. | Check it and try again. |
+| Duplicate name | Someone already signs in as *ana*. | The address belongs to an existing person, maybe switched off. | Use another address, or switch the existing account back on. |
+| Invalid name | That name can't be used to sign in. | A name is lowercase letters, digits, dots, dashes or underscores, starting with a letter or digit. | Try something like ana or ana.lin. |
 | Server not answering | *Ana* wasn't added. | The api service didn't answer. | Press Add again; if it repeats, run `slas logs api` on the host. |
 
 ## Change role (dialog)
@@ -62,7 +64,7 @@ Primary button: Change role.
 Title: Reset *Ana*'s password. Body: *Ana*'s current password stops working, she is signed
 out everywhere and gets a new one-time password. Primary button: Reset password. The same
 dialog then advances to the result panel from Add person. When nobody can sign in as an
-administrator, `slas-api user reset-password --email …` in the api container does the same
+administrator, `slas-api user reset-password --username …` in the api container does the same
 reset (docs/api-contract.md).
 
 ## Switch off / Switch on (dialog)
@@ -82,3 +84,16 @@ password. Primary button: Switch on.
 
 A one-time password appears once, in the result panel, and never again: not in the table,
 not in any list response, not in a log, not in the audit trail.
+
+## Delete (dialog)
+
+Title: Delete *Ana*? Body: *Ana* can't sign in again and is signed out everywhere now. Their
+projects stay in Coding/*ana*/ and the audit log keeps what they did. This can't be undone;
+to stop them for a while, switch the account off instead. Primary button (danger): Delete
+*Ana*. After it: the row goes and the page says *Ana was deleted.*
+
+| Case | What happened | Likely cause | What to do |
+|---|---|---|---|
+| Yourself | You can't delete your own account. | You're signed in with it. | Ask another administrator. |
+| Last administrator | You can't delete the last administrator. | Without an administrator nobody could manage people or settings. | Make someone else an administrator first. |
+| Server not answering | *Ana* wasn't deleted. | The api service didn't answer. | Press Delete again; if it repeats, run `slas logs api` on the host. |

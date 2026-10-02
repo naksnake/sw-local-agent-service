@@ -88,6 +88,9 @@ def feed_from_journal(ticket: Ticket, entries: list[JournalEntry]) -> list[str]:
             check = entry.payload.get("plan_cross_check")
             if check:
                 feed.append(str(check))
+            progress = entry.payload.get("progress")
+            if progress:
+                feed.append(str(progress))
     return feed[-MAX_FEED_LINES:]
 
 

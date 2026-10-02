@@ -258,6 +258,7 @@
     border: 1px solid var(--color-rule);
     border-radius: var(--radius-panel);
     padding: 16px 18px;
+    box-shadow: 0 1px 2px rgb(23 27 33 / 0.04);
   }
   .panel > h2 {
     margin-bottom: 10px;
@@ -284,6 +285,15 @@
     cursor: pointer;
     line-height: 1.2;
     white-space: nowrap;
+    text-decoration: none;
+    color: inherit;
+    transition:
+      background-color 0.12s ease,
+      border-color 0.12s ease,
+      box-shadow 0.12s ease;
+  }
+  .btn.primary:not(:disabled) {
+    box-shadow: 0 1px 2px rgb(43 76 126 / 0.25);
   }
   .btn:hover {
     background: var(--color-rule-2);
@@ -366,6 +376,9 @@
   }
   table.list tr:last-child td {
     border-bottom: 0;
+  }
+  table.list tbody tr:hover td {
+    background: #fafbfc;
   }
   table.list tr.click {
     cursor: pointer;
@@ -469,10 +482,25 @@
     display: grid;
     place-items: center;
     padding: 24px 16px;
+    background:
+      radial-gradient(1200px 500px at 50% -10%, var(--color-accent-soft), transparent 70%),
+      var(--color-bench);
   }
   .auth-card {
     width: 100%;
-    max-width: 440px;
+    max-width: 420px;
+    padding: 28px 28px 24px;
+    box-shadow:
+      0 1px 2px rgb(23 27 33 / 0.06),
+      0 12px 32px rgb(23 27 33 / 0.08);
+  }
+  .auth-card h1 {
+    font-size: 22px;
+  }
+  .auth-card .btn.primary {
+    justify-content: center;
+    min-width: 120px;
+    padding: 9px 16px;
   }
   .auth-card .lede {
     margin-top: 4px;
@@ -501,6 +529,11 @@
   }
   .input:focus-visible {
     border-color: var(--color-accent);
+    outline: none;
+    box-shadow: 0 0 0 3px var(--color-accent-soft);
+  }
+  .input::placeholder {
+    color: var(--color-ink-3);
   }
   .help {
     color: var(--color-ink-2);
@@ -554,6 +587,7 @@
     z-index: 20;
   }
   .dialog {
+    box-shadow: 0 16px 48px rgb(23 27 33 / 0.22);
     background: var(--color-panel);
     border: 1px solid var(--color-rule);
     border-radius: var(--radius-panel);
@@ -610,6 +644,38 @@
   .menu > button:hover {
     background: var(--color-rule-2);
   }
+  .menu > button.danger {
+    color: var(--color-fail);
+    border-top: 1px solid var(--color-rule-2);
+    border-radius: 0 0 var(--radius-ctl) var(--radius-ctl);
+  }
+  .menu > button.danger:hover {
+    background: var(--color-fail-soft);
+  }
+
+  /* A person in a list: initials, name, sign-in name */
+  .person {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .person > span:last-child {
+    display: flex;
+    flex-direction: column;
+  }
+  .avatar {
+    width: 30px;
+    height: 30px;
+    flex: none;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
   table.list .title {
     font-weight: 600;
   }
@@ -645,6 +711,228 @@
     border-bottom: 1px solid var(--color-rule-2);
   }
   .lines li:last-child {
+    border-bottom: 0;
+  }
+
+  /* Coding tasks */
+  .empty {
+    text-align: center;
+    padding: 28px 18px;
+    color: var(--color-ink-2);
+  }
+  .task h4 {
+    margin: 0 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-ink-3);
+  }
+  .task {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .task-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .task-head h3 {
+    font-size: 16px;
+  }
+  .task-head p {
+    margin: 2px 0 0;
+  }
+  .task-state {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    flex: none;
+  }
+  .task-state .bar {
+    width: 140px;
+  }
+  .task-body {
+    border-top: 1px solid var(--color-rule-2);
+    padding-top: 12px;
+  }
+  .task-hint {
+    margin: 0;
+    font-size: 12.5px;
+  }
+  .task-actions {
+    border-top: 1px solid var(--color-rule-2);
+    padding-top: 12px;
+  }
+  .checklist {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .check {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+  }
+  .check .mark {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    border-radius: 50%;
+    display: inline-grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 700;
+    background: var(--color-rule-2);
+    color: var(--color-ink-3);
+    transform: translateY(3px);
+  }
+  .check.done .mark {
+    background: var(--color-pass-soft);
+    color: var(--color-pass);
+  }
+  .check.running .mark {
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+  }
+  .check.running {
+    font-weight: 500;
+  }
+  .check.failed .mark {
+    background: var(--color-fail-soft);
+    color: var(--color-fail);
+  }
+  .check.skipped {
+    color: var(--color-ink-3);
+  }
+  .feed {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .feed ul {
+    width: 100%;
+    border-left: 2px solid var(--color-rule);
+    padding-left: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .feed li {
+    color: var(--color-ink-2);
+    overflow-wrap: anywhere;
+  }
+  .feed li:last-child {
+    color: var(--color-ink);
+  }
+  .feed li.bad {
+    color: var(--color-fail);
+  }
+  .prompt-box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 14px;
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-panel);
+    background: #f8f9fb;
+  }
+  .prompt-box > label {
+    font-weight: 500;
+  }
+  .prompt-box textarea {
+    resize: vertical;
+    min-height: 72px;
+  }
+  .spinner {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    display: inline-block;
+    animation: slas-spin 0.8s linear infinite;
+  }
+  @keyframes slas-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation: none;
+    }
+  }
+
+  /* Wizards: three steps, the current one marked */
+  .wizard-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .wizard-steps {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .wizard-steps li {
+    flex: 1;
+    min-width: 110px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: var(--radius-ctl);
+    background: var(--color-rule-2);
+    color: var(--color-ink-3);
+    font-size: 13px;
+  }
+  .wizard-steps li > span {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: inline-grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 700;
+    background: var(--color-panel);
+  }
+  .wizard-steps li.current {
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    font-weight: 600;
+  }
+  .wizard-steps li.current > span {
+    background: var(--color-accent);
+    color: var(--color-accent-ink);
+  }
+  .wizard-steps li.done {
+    color: var(--color-pass);
+  }
+  .wizard-steps li.done > span {
+    background: var(--color-pass-soft);
+  }
+
+  /* Git panel inside a task */
+  .git-panel {
+    background: #fbfcfd;
+    box-shadow: none;
+  }
+  .git-panel > header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .git-tabs {
+    margin-bottom: 0;
     border-bottom: 0;
   }
 
@@ -703,6 +991,12 @@
     }
     .facts {
       grid-template-columns: 1fr;
+    }
+    .task-head {
+      flex-direction: column;
+    }
+    .task-state {
+      align-items: flex-start;
     }
   }
 }

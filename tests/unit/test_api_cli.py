@@ -172,7 +172,7 @@ def test_user_add_errors_are_three_lines_and_exit_1(settings: Settings) -> None:
     )
     assert code == 1 and out == ""
     assert err.splitlines() == [
-        "Someone already signs in as admin@slas.local.",
+        "Someone already signs in as admin.",
         "Likely cause: The address belongs to an existing person, maybe switched off.",
         "What to do: Use another address, or switch the existing account back on.",
     ]

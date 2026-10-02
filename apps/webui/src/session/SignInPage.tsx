@@ -19,7 +19,7 @@ interface Props {
 const SLOW_AFTER_MS = 5000;
 
 export function SignInPage({ session, hint }: Props) {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [waiting, setWaiting] = useState(false);
   const [slow, setSlow] = useState(false);
@@ -50,7 +50,7 @@ export function SignInPage({ session, hint }: Props) {
     session.clearNotice();
     setWaiting(true);
     try {
-      await session.signIn(email.trim(), password);
+      await session.signIn(username.trim(), password);
       setPassword("");
     } catch (error: unknown) {
       const apiError = asApiError(error);
@@ -76,17 +76,20 @@ export function SignInPage({ session, hint }: Props) {
             {notice}
           </p>
         )}
-        <Field label={copy.email}>
+        <Field label={copy.username}>
           {(control) => (
             <input
               {...control}
               className="input"
-              type="email"
-              name="email"
+              type="text"
+              name="username"
               autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder={copy.usernamePlaceholder}
               required
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
             />
           )}
         </Field>

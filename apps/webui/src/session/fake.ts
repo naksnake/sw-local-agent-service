@@ -118,6 +118,7 @@ export class FakeWorld {
     const account: FakeAccount = {
       id: `person-${String(this.counter).padStart(4, "0")}`,
       email,
+      username: usernameOf(email),
       display_name: displayName,
       role,
       role_label: roleLabel(role),
@@ -133,6 +134,26 @@ export class FakeWorld {
 
   byEmail(email: string): FakeAccount | undefined {
     return this.accounts.find((a) => a.email.toLowerCase() === email.trim().toLowerCase());
+  }
+
+  /** The account a typed name (`ana`) or address means, as the api resolves it. */
+  forSignIn(value: string): FakeAccount | undefined {
+    const text = value.trim().toLowerCase();
+    const exact = this.byEmail(loginAddress(text));
+    if (exact !== undefined || text.includes("@") || text === "") {
+      return exact;
+    }
+    const matches = this.accounts.filter((a) => usernameOf(a.email) === text);
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+
+  byUsername(username: string): FakeAccount | undefined {
+    const text = usernameOf(username);
+    return this.accounts.find((a) => usernameOf(a.email) === text);
+  }
+
+  remove(id: string): void {
+    this.accounts = this.accounts.filter((a) => a.id !== id);
   }
 
   byId(id: string): FakeAccount | undefined {
@@ -163,7 +184,8 @@ export class FakeWorld {
     }
     const data = saved as Partial<{ accounts: FakeAccount[]; installationName: string; sessionLifetimeHours: number; counter: number }>;
     if (Array.isArray(data.accounts)) {
-      this.accounts = data.accounts;
+      // Saved before accounts carried a username: derive it.
+      this.accounts = data.accounts.map((a) => ({ ...a, username: a.username ?? usernameOf(a.email) }));
     }
     if (typeof data.installationName === "string") {
       this.installationName = data.installationName;
@@ -175,6 +197,18 @@ export class FakeWorld {
       this.counter = data.counter;
     }
   }
+}
+
+/** The platform's sign-in domain: a name `ana` is the account `ana@slas.local`. */
+export const LOGIN_DOMAIN = "slas.local";
+
+export function usernameOf(email: string): string {
+  return email.trim().toLowerCase().split("@", 1)[0] ?? "";
+}
+
+export function loginAddress(value: string): string {
+  const text = value.trim().toLowerCase();
+  return text.includes("@") ? text : `${text}@${LOGIN_DOMAIN}`;
 }
 
 function roleLabel(role: string): string {
@@ -212,7 +246,7 @@ export class FakeSessionApi implements SessionApi {
     };
   }
 
-  async signIn(email: string, password: string): Promise<Person> {
+  async signIn(username: string, password: string): Promise<Person> {
     if (this.mode === "hang") {
       return new Promise<Person>(() => undefined);
     }
@@ -225,7 +259,7 @@ export class FakeSessionApi implements SessionApi {
     if (this.failures >= 10) {
       fail(429, signInCopy.tooManyAttempts);
     }
-    const account = this.world.byEmail(email);
+    const account = this.world.forSignIn(username);
     if (account === undefined || account.password !== password) {
       this.failures += 1;
       fail(401, signInCopy.wrongPassword, "none");
