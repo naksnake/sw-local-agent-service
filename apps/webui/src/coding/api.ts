@@ -101,6 +101,40 @@ export function zipUrl(task: CodingTask): string | null {
   return exported ? `/api/v1/coding/tasks/${encodeURIComponent(task.ticketId)}/zip` : null;
 }
 
+/**
+ * A follow-up prompt on an existing project, Claude Code style: one task on the same project
+ * (same title, so the same Projects/<slug>/ and its files), with the prompt as the plan the
+ * model reads. Only the last line is a task bullet; list lines inside the prompt are indented
+ * so the plan reader keeps them as context instead of making each one a task.
+ */
+export function followUpPlan(projectTitle: string, prompt: string): string {
+  const text = prompt.trim();
+  const first = text.split("\n").find((line) => line.trim() !== "") ?? text;
+  const task = first.trim().replace(/^(?:[-*+]|\d+[.)])\s+/, "").slice(0, 200);
+  const context = text
+    .split("\n")
+    .map((line) => (/^\s*(?:[-*+]|\d+[.)])\s+/.test(line) ? `  ${line.trim()}` : line))
+    .join("\n");
+  return [
+    `# ${projectTitle}`,
+    "",
+    `A change to the existing project ${projectTitle}. Its files are in the workspace: keep what works, change only what this request needs, and keep the checks passing.`,
+    "",
+    context,
+    "",
+    `- ${task}`,
+    "",
+  ].join("\n");
+}
+
+/** The languages a task ran with, read from its first step ("Toolchain: Python 3.12.6."). */
+export function languagesOf(task: CodingTask): LanguageChoice[] {
+  const toolchain = task.steps.find((step) => step.title.startsWith("Toolchain:"))?.title ?? "";
+  return LANGUAGES.filter((info) =>
+    new RegExp(`(?:^|[\\s,:])${info.label.replace(/[+]/g, "\\+")} \\d`).test(toolchain),
+  ).map((info) => ({ language: info.id, version: "" }));
+}
+
 export interface CodingApi {
   readiness(): Promise<Readiness>;
   detectLanguages(plan: string): Promise<LanguageId[]>;

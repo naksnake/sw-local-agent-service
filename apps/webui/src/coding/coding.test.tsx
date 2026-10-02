@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { describe, expect, it } from "vitest";
 
 import { ApiError } from "../api/http";
-import { FakeCodingApi, reviewSentence, toolchainSentence } from "./api";
+import { type Breakdown, FakeCodingApi, followUpPlan, languagesOf, reviewSentence, toolchainSentence } from "./api";
 import { CodingPage } from "./CodingPage";
 
 const PLAN = `# Fan controller
@@ -160,6 +160,42 @@ describe("New coding task wizard", () => {
     expect(link.hasAttribute("download")).toBe(true);
     const waiting = screen.getByLabelText("T-coding-0009");
     expect(within(waiting).queryByRole("link", { name: "Download ZIP" })).toBeNull();
+  });
+
+  it("turns a prompt into one task on the same project, keeping the toolchain", async () => {
+    const plan = followUpPlan("Temperature log tool", "Add a --csv option\n- write the summary as CSV\n- add a test");
+    expect(plan.startsWith("# Temperature log tool\n")).toBe(true);
+    expect(plan.trimEnd().endsWith("\n- Add a --csv option")).toBe(true);
+    expect(plan).toContain("\n  - write the summary as CSV\n");
+    expect([...plan.matchAll(/^- /gm)]).toHaveLength(1);
+
+    const api = new FakeCodingApi();
+    api.tasks.push({
+      ticketId: "T-coding-0015",
+      title: "Temperature log tool",
+      state: "Done",
+      sentence: "T-coding-0015 is done.",
+      steps: [{ n: 1, title: "Toolchain: Python 3.12.6.", status: "done" }],
+      feed: [],
+    });
+    expect(languagesOf(api.tasks[0]!)).toEqual([{ language: "python", version: "" }]);
+    const started: { breakdown: Breakdown; plan: string; filename: string | undefined }[] = [];
+    const original = api.start.bind(api);
+    api.start = async (breakdown: Breakdown, plan: string, filename?: string) => {
+      started.push({ breakdown, plan, filename });
+      return original(breakdown, plan);
+    };
+    render(<CodingPage api={api} />);
+    const box = await screen.findByLabelText("Ask the agent for a change to this project");
+    fireEvent.change(box, { target: { value: "Add a --csv option that writes the summary as CSV" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send to the agent" }));
+    await waitFor(() => expect(started).toHaveLength(1));
+    const sent = started[0]!;
+    expect(sent.breakdown.title).toBe("Temperature log tool");
+    expect(sent.breakdown.languages).toEqual([{ language: "python", version: "" }]);
+    expect(sent.breakdown.tasks.map((t) => t.title)).toEqual(["Add a --csv option that writes the summary as CSV"]);
+    expect(sent.filename).toBe("prompt.md");
+    expect((await screen.findByRole("status")).textContent).toContain("started on Temperature log tool");
   });
 
   it("keeps pinned versions the bundle has and says so", async () => {

@@ -26,6 +26,18 @@ feed as sentences. Component: `apps/webui/src/coding/CodingPage.tsx`.
 | Activity, cross-check | *2 of 3* approve the change. *voter-3 has a concern: …* |
 | Activity, no voters | Not cross-checked: no voters are configured, so the change needs your own review before it is used. |
 | Footer | Open the Terminal tab to inspect the branch; push happens from the Git panel, which uses your saved remote. |
+| Download | Download ZIP *(once Export a ZIP is done)* |
+| Follow-up label *(finished tasks)* | Ask the agent for a change to this project |
+| Follow-up placeholder | For example: add a --csv option that writes the summary as CSV, with a test |
+| Follow-up button | Send to the agent · Starting… |
+| Follow-up hint | Ctrl+Enter sends. The agent changes *Fan controller* with its current files in view, runs the checks and commits on a new branch. |
+| Follow-up started | *T-coding-0002* started on *Fan controller*: *the prompt's first line* |
+| Follow-up refused | The change was not started: *the service's sentence* |
+
+A follow-up prompt is a new coding task on the same project (same title, so the same
+`Projects/<slug>/` and its files): the prompt is its plan, its first line its one task, the
+earlier task's toolchain is reused, and the checks, commit, cross-check and ZIP run as for
+any task.
 
 The Git panel (Status · Commit · History · Push/Pull · Bundle) and the Terminal tab arrive
 with the git-broker session; `git push` in the terminal fails with the footer sentence.

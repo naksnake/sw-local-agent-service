@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { isLive, POLL_INTERVAL_MS, usePolling } from "../api/polling";
 import type { GitApi } from "../git/api";
 import { GitPanel } from "../git/GitPanel";
-import { type CodingApi, type CodingTask, isFinished, type StepStatus, zipUrl } from "./api";
+import { type CodingApi, type CodingTask, followUpPlan, isFinished, languagesOf, type StepStatus, zipUrl } from "./api";
 import { NewCodingTaskWizard } from "./NewCodingTaskWizard";
 
 // The Coding page (CLAUDE.md §9): tasks with their plan checklist and activity feed, and
@@ -39,6 +39,9 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
   /** The last removal's sentence, or what went wrong; shown above the list. */
   const [notice, setNotice] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
+  /** Follow-up prompts being typed, per task; the one being sent. */
+  const [prompts, setPrompts] = useState<Record<string, string>>({});
+  const [sending, setSending] = useState<string | null>(null);
 
   const refresh = useCallback(async () => setTasks(await api.listTasks()), [api]);
 
@@ -50,6 +53,35 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
   usePolling(refresh, tasks?.some((task) => isLive(task.state)) === true ? POLL_INTERVAL_MS : null);
 
   const finished = (tasks ?? []).filter(isFinished);
+
+  // Claude Code style: a prompt is one more task on the same project, which the agent
+  // changes with its current files in view, then checks, commits and exports as usual.
+  const followUp = async (task: CodingTask) => {
+    const prompt = (prompts[task.ticketId] ?? "").trim();
+    if (prompt === "" || sending !== null) {
+      return;
+    }
+    setSending(task.ticketId);
+    try {
+      const plan = followUpPlan(task.title, prompt);
+      const proposed = await api.propose(plan, "prompt.md");
+      const languages = languagesOf(task);
+      const started = await api.start(
+        { ...proposed, title: task.title, languages: languages.length > 0 ? languages : proposed.languages },
+        plan,
+        "prompt.md",
+      );
+      setPrompts((current) => ({ ...current, [task.ticketId]: "" }));
+      setNotice(`${started.ticketId} started on ${task.title}: ${prompt.split("\n")[0] ?? prompt}`);
+      await refresh();
+    } catch (error: unknown) {
+      setNotice(
+        `The change was not started: ${error instanceof Error ? error.message : "the service did not answer."}`,
+      );
+    } finally {
+      setSending(null);
+    }
+  };
 
   const remove = async (targets: CodingTask[]) => {
     setRemoving(true);
@@ -174,6 +206,46 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
                   Open the Terminal tab to inspect the branch; push happens from the Git panel,
                   which uses your saved remote.
                 </p>
+                {isFinished(task) && (
+                  <form
+                    className="mt-3 space-y-2"
+                    aria-label={`Ask for a change to ${task.title}`}
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void followUp(task);
+                    }}
+                  >
+                    <label className="block text-sm font-medium" htmlFor={`prompt-${task.ticketId}`}>
+                      Ask the agent for a change to this project
+                    </label>
+                    <textarea
+                      id={`prompt-${task.ticketId}`}
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-sm dark:border-slate-700 dark:bg-slate-900"
+                      rows={3}
+                      placeholder="For example: add a --csv option that writes the summary as CSV, with a test"
+                      value={prompts[task.ticketId] ?? ""}
+                      onChange={(e) => setPrompts((current) => ({ ...current, [task.ticketId]: e.target.value }))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                          e.preventDefault();
+                          void followUp(task);
+                        }
+                      }}
+                    />
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="submit"
+                        className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-slate-100 dark:text-slate-900"
+                        disabled={sending !== null || (prompts[task.ticketId] ?? "").trim() === ""}
+                      >
+                        {sending === task.ticketId ? "Starting…" : "Send to the agent"}
+                      </button>
+                      <span className="text-xs text-slate-500">
+                        Ctrl+Enter sends. The agent changes {task.title} with its current files in view, runs the checks and commits on a new branch.
+                      </span>
+                    </div>
+                  </form>
+                )}
                 <div className="mt-3 flex flex-wrap gap-2">
                   {gitApi !== undefined && (
                     <button
