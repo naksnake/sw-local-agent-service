@@ -265,6 +265,46 @@ def test_people_sign_in_with_a_name_not_an_email(harness: Harness, admin: TestCl
     assert assert_problem(clash, 409)["what_happened"] == "Someone already signs in as ana.lin."
 
 
+def test_people_change_their_own_name_and_sign_out_elsewhere(
+    harness: Harness, admin: TestClient
+) -> None:
+    person, one_time = harness.add_person("ana@slas.local", "Ana", "engineer", client=admin)
+    ana = harness.client_for("ana@slas.local", one_time, "anas-own-long-password")
+    renamed = ana.patch("/api/v1/me", json={"display_name": "  Ana Lin "}, headers=WEBUI)
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["display_name"] == "Ana Lin" and renamed.json()["username"] == "ana"
+    empty = ana.patch("/api/v1/me", json={"display_name": "   "}, headers=WEBUI)
+    assert assert_problem(empty, 400)["what_happened"] == "The name is empty."
+    long = ana.patch("/api/v1/me", json={"display_name": "x" * 121}, headers=WEBUI)
+    assert assert_problem(long, 400)["what_happened"] == "The name is too long."
+    sneaky = ana.patch("/api/v1/me", json={"role": "administrator"}, headers=WEBUI)
+    assert sneaky.status_code == 400, "only the name can change here"
+
+    # An administrator renames someone else from Admin → People.
+    by_admin = admin.patch(
+        f"/api/v1/admin/people/{person['id']}", json={"display_name": "Ana L."}, headers=WEBUI
+    )
+    assert by_admin.status_code == 200 and by_admin.json()["display_name"] == "Ana L."
+
+    # A second device signs in; "sign out everywhere else" ends it and keeps this one.
+    laptop = harness.new_client()
+    assert harness.sign_in("ana", "anas-own-long-password", client=laptop).status_code == 200
+    ended = ana.post("/api/v1/me/sessions/end-others", headers=WEBUI)
+    assert ended.status_code == 200, ended.text
+    assert ended.json() == {
+        "sentence": "Signed out of 1 other session. This one stays signed in.",
+        "ended": 1,
+    }
+    assert laptop.get("/api/v1/me").status_code == 401
+    assert ana.get("/api/v1/me").status_code == 200
+    again = ana.post("/api/v1/me/sessions/end-others", headers=WEBUI).json()
+    assert again["sentence"] == "You were signed in only here; nothing else was signed out."
+    rows = [(row.action, row.detail) for row in harness.audit_rows()]
+    renames = [detail for action, detail in rows if action == "person.renamed"]
+    assert len(renames) == 2, "one row per rename; the unchanged name wrote none"
+    assert any(action == "person.signed_out_elsewhere" for action, _ in rows)
+
+
 def test_an_administrator_deletes_a_person_but_never_themselves_or_the_last_admin(
     harness: Harness, admin: TestClient
 ) -> None:

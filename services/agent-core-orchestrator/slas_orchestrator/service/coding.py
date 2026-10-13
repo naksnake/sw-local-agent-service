@@ -5,7 +5,9 @@
     readiness                         is a healthy instance serving the coder role?
     tasks                             Start task → ticket → the kernel runs in a thread
                                       (refused with a sentence while the coder is not ready);
-                                      DELETE removes a finished task and its files
+                                      DELETE removes a finished task and its files;
+                                      stop asks a running one to stop; changes is the
+                                      diff its commit step kept
 
 The wire spells the export choice `export_target`; the `Breakdown` model calls it `export`.
 The two adapters below translate, so the model stays as the agent tests know it.
@@ -23,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from slas_http.errors import ServiceError
 from slas_http.identity import Identity, identity_of
 from slas_orchestrator.coding.breakdown import Breakdown
+from slas_orchestrator.coding.executor import CHANGES_FILE
 from slas_orchestrator.coding.plan_doc import MAX_PLAN_BYTES, PlanError
 from slas_orchestrator.service.deps import (
     Deps,
@@ -34,7 +37,7 @@ from slas_orchestrator.service.deps import (
 )
 from slas_orchestrator.service.runs import RunStartError
 from slas_orchestrator.service.skills import enabled_for, load_library
-from slas_orchestrator.service.views import coding_task_view
+from slas_orchestrator.service.views import changes_sentence, coding_task_view, diff_files
 from slas_sandbox_manager.toolchains import ToolchainError
 from slas_schemas.common import validation_sentence
 from slas_schemas.errors import ThreePartMessage
@@ -320,3 +323,55 @@ def remove_task(request: Request, ticket_id: str = PathParam()) -> dict[str, Any
         else ""
     )
     return {"sentence": f"{ticket.id} {what} removed.{tail} The project's repository stays."}
+
+
+@router.post("/tasks/{ticket_id}/stop")
+def stop_task(request: Request, ticket_id: str = PathParam()) -> dict[str, Any]:
+    """Stop a running task after the model call in flight (Claude Code's Esc)."""
+    identity = identity_of(request)
+    deps = deps_of(request)
+    ticket = load_ticket(deps, identity, ticket_id)
+    state = deps.registry.state_of(ticket.id)
+    if state is None or not state.running or ticket.finished:
+        raise ServiceError(
+            409,
+            ThreePartMessage(
+                f"{ticket.id} is not running, so there is nothing to stop.",
+                f"Its state is {ticket.state.value}.",
+                "Ask the agent for a change instead, or remove the task.",
+            ),
+        )
+    deps.coding_executor.request_stop(ticket.id, identity.name)
+    deps.log.info("coding.task_stop_requested", ticket_id=ticket.id, user=identity.user)
+    return {
+        "sentence": (
+            f"{ticket.id} stops after the model call in flight; what it already wrote stays in "
+            "the project."
+        )
+    }
+
+
+@router.get("/tasks/{ticket_id}/changes")
+def task_changes(request: Request, ticket_id: str = PathParam()) -> dict[str, Any]:
+    """What the task changed, as the unified diff the commit step kept, with a line per file."""
+    identity = identity_of(request)
+    deps = deps_of(request)
+    ticket = load_ticket(deps, identity, ticket_id)
+    path = deps.data_root / "Coding" / ticket.user / "Artifacts" / ticket.id / CHANGES_FILE
+    if not path.is_file():
+        raise ServiceError(
+            404,
+            ThreePartMessage(
+                f"There are no changes to show for {ticket.id}.",
+                "The task has not reached its commit step, or it changed nothing.",
+                "Wait until Commit is done; the Changes button appears with it.",
+            ),
+        )
+    diff = path.read_text(encoding="utf-8", errors="replace")
+    files = diff_files(diff)
+    return {
+        "ticket_id": ticket.id,
+        "sentence": changes_sentence(files),
+        "files": files,
+        "diff": diff,
+    }

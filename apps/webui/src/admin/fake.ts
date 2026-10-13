@@ -100,6 +100,23 @@ export class FakePeopleApi implements PeopleApi {
     return personOf(account);
   }
 
+  async rename(id: string, displayName: string): Promise<Person> {
+    this.guard();
+    const account = this.world.byId(id);
+    if (account === undefined) {
+      fail(404, { whatHappened: "That person no longer exists.", likelyCause: "", whatToDo: "Reload the list." });
+    }
+    const name = displayName.trim();
+    if (name === "") {
+      fail(400, copy.rename.empty);
+    }
+    if (name.length > 120) {
+      fail(400, copy.rename.tooLong);
+    }
+    account.display_name = name;
+    return personOf(account);
+  }
+
   async remove(id: string): Promise<void> {
     this.guard();
     const account = this.world.byId(id);

@@ -23,6 +23,7 @@ interface Props {
 type DialogState =
   | { kind: "add" }
   | { kind: "role"; person: Person }
+  | { kind: "rename"; person: Person }
   | { kind: "reset"; person: Person }
   | { kind: "active"; person: Person; on: boolean }
   | { kind: "delete"; person: Person }
@@ -170,6 +171,16 @@ export function PeoplePage({ api, me }: Props) {
                             role="menuitem"
                             onClick={() => {
                               setMenuFor(null);
+                              setDialog({ kind: "rename", person });
+                            }}
+                          >
+                            {copy.menu.rename}
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setMenuFor(null);
                               setDialog({ kind: "reset", person });
                             }}
                           >
@@ -223,6 +234,17 @@ export function PeoplePage({ api, me }: Props) {
           person={dialog.person}
           onClose={close}
           onChanged={(updated) => {
+            replace(updated);
+            close();
+          }}
+        />
+      )}
+      {dialog?.kind === "rename" && (
+        <RenameDialog
+          api={api}
+          person={dialog.person}
+          onClose={close}
+          onRenamed={(updated) => {
             replace(updated);
             close();
           }}
@@ -394,6 +416,54 @@ function ChangeRoleDialog({
         <div className="row">
           <button type="submit" className="btn primary" disabled={waiting || role === person.role}>
             {waiting ? copy.changeRole.buttonWaiting : copy.changeRole.button}
+          </button>
+          <button type="button" className="btn ghost" onClick={onClose}>
+            {copy.cancel}
+          </button>
+        </div>
+        {problem !== null && <ThreePartError parts={problem} />}
+      </form>
+    </Dialog>
+  );
+}
+
+function RenameDialog({
+  api,
+  person,
+  onClose,
+  onRenamed,
+}: {
+  api: PeopleApi;
+  person: Person;
+  onClose: () => void;
+  onRenamed: (person: Person) => void;
+}) {
+  const [name, setName] = useState(person.display_name);
+  const [waiting, setWaiting] = useState(false);
+  const [problem, setProblem] = useState<ThreePart | null>(null);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setProblem(null);
+    setWaiting(true);
+    try {
+      onRenamed(await api.rename(person.id, name));
+    } catch (error: unknown) {
+      setProblem(asApiError(error).describe(copy.rename.notSaved(person.display_name)));
+    } finally {
+      setWaiting(false);
+    }
+  }
+
+  return (
+    <Dialog title={copy.rename.title(person.display_name)} onClose={onClose}>
+      <form className="stack" noValidate onSubmit={(event) => void submit(event)}>
+        <Field label={copy.rename.label} help={copy.rename.help(person.username)}>
+          {(control) => <input {...control} className="input" value={name} onChange={(event) => setName(event.target.value)} />}
+        </Field>
+        <div className="row">
+          <button type="submit" className="btn primary" disabled={waiting || name.trim() === person.display_name}>
+            {waiting ? copy.rename.buttonWaiting : copy.rename.button}
           </button>
           <button type="button" className="btn ghost" onClick={onClose}>
             {copy.cancel}

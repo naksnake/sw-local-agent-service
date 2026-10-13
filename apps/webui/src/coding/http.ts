@@ -16,6 +16,7 @@ import {
   type Readiness,
   type SkillSummary,
   type StepStatus,
+  type TaskChanges,
   type TaskStep,
   type ToolchainResolution,
 } from "./api";
@@ -149,6 +150,24 @@ export class HttpCodingApi implements CodingApi {
   async remove(ticketId: string): Promise<string> {
     const answer = await this.http.del<unknown>(`/coding/tasks/${seg(ticketId)}`);
     return str(asRecord(answer)["sentence"], `${ticketId} was removed.`);
+  }
+
+  async stop(ticketId: string): Promise<string> {
+    const answer = await this.http.post<unknown>(`/coding/tasks/${seg(ticketId)}/stop`);
+    return str(asRecord(answer)["sentence"], `${ticketId} is stopping.`);
+  }
+
+  async changes(ticketId: string): Promise<TaskChanges> {
+    const answer = asRecord(await this.http.get<unknown>(`/coding/tasks/${seg(ticketId)}/changes`));
+    return {
+      sentence: str(answer["sentence"], ""),
+      files: recordList(answer["files"]).map((file) => ({
+        path: str(file["path"], ""),
+        added: num(file["added"]),
+        removed: num(file["removed"]),
+      })),
+      diff: str(answer["diff"], ""),
+    };
   }
 
   /** One task, for a page that follows a ticket; not part of `CodingApi` yet. */

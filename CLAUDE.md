@@ -4,7 +4,7 @@
 > this file first and treats it as authoritative. Where this file conflicts with a
 > request, surface the conflict; never resolve it silently.
 >
-> **Version 3.8 · 2026-10-01** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
+> **Version 3.9 · 2026-10-13** · Companion documents: `docs/DEVELOPMENT_PLAN.md`
 > (phases, done criteria) and `docs/PROMPTS.md` (copy-paste session prompts).
 > 3.1 adds the Hybrid Git Control Engine (§5.7, INV-14). 3.2 records open decisions
 > 12–14 (model weights and voters) raised by the shipped model registries. 3.3 accepts the
@@ -25,7 +25,10 @@
 > 3.7 records ADR-0019: the repository has no hosted CI. The checks the removed workflow ran
 > run locally before every push (README, "Developing") and egress-DROP before a release;
 > INV-10, §5.7, §8.1 and §11 say so. 3.8 records ADR-0020: `tensor_parallel: {<role>: n}` in
-> the registry spreads a role's instance over n GPUs (§7).
+> the registry spreads a role's instance over n GPUs (§7). 3.9 records ADR-0021: the coder may
+> ask for argv commands in its own sandbox and reads their output next iteration; a running
+> coding task can be stopped; a task's diff is kept for the Changes view; skills picked for a
+> coding task become checks (§10.1). The Skills page and Settings → Your account arrive (§9).
 
 ---
 
@@ -632,7 +635,11 @@ Knowledge · Admin. Adding a page needs an ADR. Inside Coding, each project has 
 panel** (Status · Commit · History · Push/Pull · Bundle) and a **Terminal** tab that runs
 inside the sandbox. Users manage their remotes under Settings → Git remotes (paste-only
 fields, fingerprint shown after save, "Test connection"); admins manage the host allowlist
-under Admin → Git hosts.
+under Admin → Git hosts. Settings opens on **Your account** (name, sign-in name and role,
+password, sign out everywhere else) for everyone signed in; administrators rename, delete or
+switch off people under Admin → People. The **Skills** page lists the library with one
+switch per agent the author allows, an editor whose Check runs the importer without saving,
+the shipped examples, export and delete (the importer or `admin:settings`).
 
 **Every agent has a "New …" wizard, always three steps, always ending in a sentence that
 says what will happen and a verb button:**
@@ -658,9 +665,13 @@ ACT     Zone A sandbox (gVisor; virtual desktop via Zone S only if the plan need
         offline toolchain bundle, records the choice on the ticket and in the first feed line,
         honours a pinned version if the bundle has it, and otherwise says so in a sentence and
         falls back — it never guesses a version that isn't installed
-        loop ≤ max_iterations: retrieve → generate edits → apply → lint/type/build/test
-        skills enabled for coding expand here (e.g. lint-and-test)
-        no progress for 3 iterations → stop, ask the human
+        loop ≤ max_iterations: retrieve → generate edits (+ ≤ 4 argv commands, ADR-0021) →
+        apply → run the commands → lint/type/build/test; the commands' output and the
+        project's recent commits are in the next prompt
+        skills enabled for coding expand here: their `run` steps become checks (e.g.
+        python-lint-and-test); a skill with any other step is refused for coding
+        no progress for 3 iterations → stop, ask the human · Stop → the answer in flight is
+        dropped and the task waits for review
 CHECK   Consensus Router on the final diff (3 voters, majority, concerns surfaced)
 SOP     code walkthrough EN + 中文: what changed, files, how to verify
 EXPORT  ZIP → Artifacts (always available)

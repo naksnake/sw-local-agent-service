@@ -580,6 +580,18 @@ def test_a_task_runs_over_http_to_done_with_zip_votes_and_feed(tmp_path: Path) -
         assert archive.namelist() == ["fan_ctl.py"]
     assert ticket.sop is not None and Path(ticket.sop.zh).exists()
 
+    # The Changes view: the diff the commit step kept, with a line per file.
+    changes = harness.get(f"/v1/coding/tasks/{ticket_id}/changes").json()
+    assert changes["files"] == [{"path": "fan_ctl.py", "added": 4, "removed": 0}]
+    assert changes["sentence"] == "1 file changed: 4 lines added, 0 removed."
+    assert changes["diff"].startswith("diff --git a/fan_ctl.py b/fan_ctl.py")
+    assert harness.get(f"/v1/coding/tasks/{ticket_id}/changes", STRANGER).status_code == 404
+    stop = harness.post(f"/v1/coding/tasks/{ticket_id}/stop", {})
+    assert stop.status_code == 409
+    assert (
+        stop.json()["what_happened"] == f"{ticket_id} is not running, so there is nothing to stop."
+    )
+
     # The sandbox manager saw the contract's session body and argv-only execs (no stdin).
     (session_body,) = harness.sandbox_service.session_bodies
     assert session_body["user"] == "pat" and session_body["slug"] == "fan-controller"
@@ -638,6 +650,7 @@ def test_a_task_runs_over_http_to_done_with_zip_votes_and_feed(tmp_path: Path) -
     assert (tmp_path / "Coding" / "pat" / "Projects" / "fan-controller").is_dir(), "the repo stays"
     assert harness.get(f"/v1/coding/tasks/{ticket_id}").status_code == 404
     assert harness.delete(f"/v1/coding/tasks/{ticket_id}").status_code == 404
+    assert harness.get(f"/v1/coding/tasks/{ticket_id}/changes").status_code == 404
     assert [t["ticket_id"] for t in harness.get("/v1/coding/tasks", ADMIN).json()] == [
         "T-coding-0042"
     ]
@@ -781,6 +794,62 @@ def test_skills_import_enable_list_export_and_the_wizard_list(tmp_path: Path) ->
     assert lacking.json()["what_happened"].startswith("You can't import")
     (tmp_path / "Skills" / "library" / "junk.skill.yaml").write_text("not: a skill\n")
     assert [r["id"] for r in harness.get("/v1/skills").json()] == ["lint-and-test"]
+
+
+def test_skills_check_without_storing_open_examples_and_delete(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, gateway=None)
+    library = tmp_path / "Skills" / "library"
+
+    checked = harness.post("/v1/skills/validate", {"yaml": SKILL_YAML})
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["replaces"] is None
+    assert checked.json()["steps"] == ["run: slas-check lint", "run: slas-check test"]
+    assert not (library / "lint-and-test.skill.yaml").exists(), "a check stores nothing"
+    bad = harness.post("/v1/skills/validate", {"yaml": SKILL_YAML.replace("1.0.0", "one")})
+    assert bad.status_code == 400
+
+    examples = harness.get("/v1/skills/examples").json()
+    by_id = {e["id"]: e for e in examples}
+    assert set(by_id) == {"station-login-burnin", "sel-collect-clear", "python-lint-and-test"}
+    coding = by_id["python-lint-and-test"]
+    assert coding["agents"] == ["coding"] and coding["installed"] is False
+    assert coding["yaml"].startswith("# Python lint and tests — skill python-lint-and-test")
+    engineer = Identity("lee@slas.local", "Lee", frozenset({"files"}))
+    refused_import = harness.post("/v1/skills/import", {"yaml": coding["yaml"]})
+    assert refused_import.json()["what_happened"] == (
+        "You can't import Python lint and tests: it needs files."
+    ), "a skill never adds capabilities"
+    imported = harness.post("/v1/skills/import", {"yaml": coding["yaml"]}, identity=engineer)
+    assert imported.status_code == 200, imported.text
+    assert {e["id"]: e for e in harness.get("/v1/skills/examples").json()}["python-lint-and-test"][
+        "installed"
+    ]
+
+    assert harness.post("/v1/skills/import", {"yaml": SKILL_YAML}).status_code == 200
+    again = harness.post("/v1/skills/validate", {"yaml": SKILL_YAML}).json()
+    assert again["replaces"] == "1.0.0"
+    detail = harness.get("/v1/skills/lint-and-test").json()
+    assert detail["imported_by"] == PAT.user and detail["steps"][0] == "run: slas-check lint"
+    assert detail["yaml"].startswith("# Lint and test the project — skill lint-and-test v1.0.0")
+    assert harness.get("/v1/skills/nope").status_code == 404
+
+    refused = harness.delete("/v1/skills/lint-and-test", identity=STRANGER)
+    assert refused.status_code == 403
+    assert refused.json()["likely_cause"] == (
+        "It was imported by pat@slas.local; only they or an administrator may delete it."
+    )
+    gone = harness.delete("/v1/skills/lint-and-test")
+    assert gone.status_code == 200, gone.text
+    assert gone.json()["sentence"].startswith("Lint and test the project v1.0.0 was deleted")
+    assert not (library / "lint-and-test.skill.yaml").exists()
+    assert not (library / "lint-and-test.state.json").exists()
+    # A file copied in by hand under another name, with no record: an administrator only.
+    (library / "copied.skill.yaml").write_text(SKILL_YAML)
+    assert harness.delete("/v1/skills/lint-and-test").status_code == 403
+    admin = Identity("root@slas.local", "Root", frozenset({"admin:settings"}))
+    assert harness.delete("/v1/skills/lint-and-test", identity=admin).status_code == 200
+    assert not (library / "copied.skill.yaml").exists()
+    assert [r["id"] for r in harness.get("/v1/skills").json()] == ["python-lint-and-test"]
 
 
 # --- the contract and the CLI -----------------------------------------------------------------

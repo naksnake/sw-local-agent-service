@@ -17,6 +17,8 @@ export interface PeopleApi {
   changeRole(id: string, role: string): Promise<Person>;
   resetPassword(id: string): Promise<{ one_time_password: string }>;
   setActive(id: string, active: boolean): Promise<Person>;
+  /** The name shown on their commits and tickets; the sign-in name never changes. */
+  rename(id: string, displayName: string): Promise<Person>;
   /** Delete the account; the person can't sign in again. Their projects stay on disk. */
   remove(id: string): Promise<void>;
 }
@@ -42,6 +44,10 @@ export class HttpPeopleApi implements PeopleApi {
 
   setActive(id: string, active: boolean): Promise<Person> {
     return this.http.patch<Person>(`/admin/people/${encodeURIComponent(id)}`, { is_active: active });
+  }
+
+  rename(id: string, displayName: string): Promise<Person> {
+    return this.http.patch<Person>(`/admin/people/${encodeURIComponent(id)}`, { display_name: displayName });
   }
 
   remove(id: string): Promise<void> {

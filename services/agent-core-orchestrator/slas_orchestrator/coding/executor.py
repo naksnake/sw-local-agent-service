@@ -2,9 +2,13 @@
 
     toolchain     record the resolved toolchain (the first feed line)
     sandbox_open  open a sandbox on Projects/<slug>, init the repo, remember the base commit
-    iterate       retrieve → model proposes edits → apply → lint/type/build/test in the
-                  sandbox; stop after 3 iterations without progress and ask the human
-    commit        local commit on branch slas/<ticket> with Slas-Agent / Slas-Ticket trailers
+    skill         a skill the person picked, compiled by the kernel's gate: its `run` steps
+                  become checks every task's iterations must pass
+    iterate       retrieve → model proposes edits (and commands to run) → apply → run the
+                  commands → lint/type/build/test in the sandbox; stop after 3 iterations
+                  without progress and ask the human, or when the person presses Stop
+    commit        local commit on branch slas/<ticket> with Slas-Agent / Slas-Ticket trailers;
+                  the change set is kept as Artifacts/<ticket>/changes.diff for the page
     export_zip    Artifacts/<ticket>/<slug>.zip, sha256 on the ticket
     cross_check   the final diff to the Consensus Router (majority; concerns surfaced)
 
@@ -25,6 +29,7 @@ from pydantic import Field
 
 from slas_git.workspace import (
     CommandResult,
+    Commit,
     GitExec,
     GitWorkspace,
     Identity,
@@ -32,6 +37,7 @@ from slas_git.workspace import (
 )
 from slas_kernel.executor import ExecutionContext, UnknownPrimitiveError
 from slas_kernel.rca import CrossChecker
+from slas_kernel.skills import compiled_from_step
 from slas_orchestrator.coding.breakdown import TaskItem
 from slas_orchestrator.coding.export import zip_project
 from slas_sandbox_manager.manager import Session
@@ -43,6 +49,19 @@ from slas_schemas.plan import Step
 from slas_schemas.ticket import Observation
 
 STALL_LIMIT: Final = 3
+#: Commands the model may ask for per iteration, and their bounds (ADR-0021).
+MAX_COMMANDS: Final = 4
+COMMAND_TIMEOUT_S: Final = 120
+MAX_COMMAND_OUTPUT_CHARS: Final = 3_000
+#: The change set the Changes view shows, next to the task's ZIP.
+CHANGES_FILE: Final = "changes.diff"
+MAX_CHANGES_CHARS: Final = 2_000_000
+#: Shells refuse a `-c` line: commands are argv, never a shell line (CLAUDE.md §6.2).
+_SHELLS: Final = frozenset({"sh", "bash", "dash", "zsh", "ash", "ksh"})
+#: Git subcommands that only read; the agent itself commits (ADR-0021).
+_GIT_READ: Final = frozenset(
+    {"status", "log", "diff", "show", "grep", "ls-files", "blame", "rev-parse", "branch"}
+)
 MAX_SNAPSHOT_FILES: Final = 60
 MAX_SNAPSHOT_BYTES: Final = 64 * 1024
 EMPTY_TREE: Final = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
@@ -67,10 +86,25 @@ class CheckResult(SlasModel):
     description: str
     exit_code: int
     output: str = ""
+    #: The exit code that counts as passing (a skill's `expect_exit`).
+    expected: int = 0
 
     @property
     def ok(self) -> bool:
-        return self.exit_code == 0
+        return self.exit_code == self.expected
+
+
+class Command(SlasModel):
+    """A command the model wants run in the sandbox after its edits: argv, never a line."""
+
+    argv: list[str] = Field(min_length=1, max_length=64)
+    why: str = ""
+
+
+class CommandRun(SlasModel):
+    argv: list[str]
+    exit_code: int
+    output: str = ""
 
 
 class EditRequest(SlasModel):
@@ -84,6 +118,10 @@ class EditRequest(SlasModel):
     plan: str = ""
     #: Every file path in the project, so the model knows what exists beyond the snapshot.
     paths: list[str] = Field(default_factory=list)
+    #: The commands the model asked for last iteration, with what they printed.
+    command_runs: list[CommandRun] = Field(default_factory=list)
+    #: The project's recent commits, newest first: what earlier tasks and prompts changed.
+    history: list[str] = Field(default_factory=list)
 
 
 class Replacement(SlasModel):
@@ -102,6 +140,8 @@ class EditSet(SlasModel):
     approach: list[str] = Field(default_factory=list, max_length=12)
     replacements: list[Replacement] = Field(default_factory=list)
     files: dict[str, str | None] = Field(default_factory=dict)
+    #: Run after the edits, before the checks; the output comes back next iteration.
+    commands: list[Command] = Field(default_factory=list, max_length=MAX_COMMANDS)
     note: str = ""
 
 
@@ -294,6 +334,34 @@ def snapshot(project_dir: Path, *, first: Sequence[str] = ()) -> dict[str, str]:
     return files
 
 
+def refused_command(argv: Sequence[str]) -> str | None:
+    """Why a command the model asked for is not run, or None when it may run."""
+    name = Path(argv[0]).name if argv else ""
+    if name in _SHELLS and any(a == "-c" or a.startswith("-c") for a in argv[1:]):
+        return (
+            "a shell line is never run; write the steps into a script file in the project "
+            "and run that file instead"
+        )
+    if name in ("sudo", "su", "doas"):
+        return "nothing runs as another user in the sandbox"
+    if name == "git":
+        sub = ""
+        rest = list(argv[1:])
+        while rest:
+            word = rest.pop(0)
+            if word in ("-C", "-c", "--git-dir", "--work-tree"):
+                rest = rest[1:]  # the option's value
+            elif not word.startswith("-"):
+                sub = word
+                break
+        if sub not in _GIT_READ:
+            return (
+                f"git {sub or '(no subcommand)'} changes the repository; the agent commits "
+                "for you after the checks pass, so only read-only git commands run"
+            )
+    return None
+
+
 class SandboxAccess(Protocol):
     """What the executor needs from the sandbox manager (ADR-0015).
 
@@ -327,6 +395,31 @@ class SandboxAccess(Protocol):
         timeout_s: int = 600,
         stdin: str | None = None,
     ) -> ExecResult: ...
+
+
+#: How many of the project's commits the model sees, and how much of each.
+HISTORY_COMMITS: Final = 12
+MAX_HISTORY_CHARS: Final = 3_000
+
+
+def history_lines(commits: Sequence[Commit]) -> list[str]:
+    """One line per commit, newest first: its subject and the task lines in its body
+    (trailers left out), bounded so a long history never crowds out the files."""
+    lines: list[str] = []
+    used = 0
+    for commit in commits:
+        body = [
+            line.strip()
+            for line in commit.body.splitlines()
+            if line.strip() and ":" not in line.split(" ", 1)[0]
+        ]
+        text = f"{commit.sha[:8]} {commit.subject}" + (f" ({'; '.join(body)})" if body else "")
+        text = text[:400]
+        if used + len(text) > MAX_HISTORY_CHARS:
+            break
+        lines.append(text)
+        used += len(text)
+    return lines
 
 
 class SandboxGitExec:
@@ -392,6 +485,12 @@ class CodingExecutor:
         self._sessions: dict[str, Session] = {}
         self._base: dict[str, str] = {}
         self._branches: dict[str, str] = {}
+        #: Checks the ticket's skills added, run after the language's own in every iteration.
+        self._skill_checks: dict[str, list[dict[str, object]]] = {}
+        #: The project's recent commits, read when the sandbox opens.
+        self._history: dict[str, list[str]] = {}
+        #: Tickets someone asked to stop, with who asked.
+        self._stops: dict[str, str] = {}
 
     # --- dispatch ---------------------------------------------------------------------
 
@@ -399,6 +498,7 @@ class CodingExecutor:
         handlers = {
             "toolchain": self._toolchain,
             "sandbox_open": self._sandbox_open,
+            "skill": self._skill,
             "iterate": self._iterate,
             "commit": self._commit,
             "export_zip": self._export_zip,
@@ -409,6 +509,11 @@ class CodingExecutor:
             raise UnknownPrimitiveError(step)
         return handler(step, context)
 
+    def request_stop(self, ticket_id: str, by: str) -> None:
+        """Ask a running task to stop: it does after the model call in flight, without
+        applying that answer, and the task waits for review with its files as they are."""
+        self._stops[ticket_id] = by
+
     def session_for(self, ticket_id: str) -> Session | None:
         return self._sessions.get(ticket_id)
 
@@ -417,6 +522,9 @@ class CodingExecutor:
         if any, so the caller can close it."""
         self._base.pop(ticket_id, None)
         self._branches.pop(ticket_id, None)
+        self._skill_checks.pop(ticket_id, None)
+        self._history.pop(ticket_id, None)
+        self._stops.pop(ticket_id, None)
         return self._sessions.pop(ticket_id, None)
 
     def _workspace(self, session: Session, user: str) -> GitWorkspace:
@@ -467,10 +575,58 @@ class CodingExecutor:
         workspace = self._workspace(session, context.user)
         workspace.init()
         self._base[context.ticket_id] = workspace.head_sha() or EMPTY_TREE
+        self._history[context.ticket_id] = history_lines(workspace.log(HISTORY_COMMITS))
         return Observation(
             exit_code=0,
             summary=f"{session.runtime_sentence} {session.handle.spec.sentence()}",
             stdout=f"project={self._project(session)}\nbase={self._base[context.ticket_id]}\n",
+        )
+
+    def _skill(self, step: Step, context: ExecutionContext) -> Observation:
+        compiled = compiled_from_step(step)
+        skill_id = str(step.args.get("skill_id", ""))
+        if compiled is None:
+            return Observation(
+                exit_code=2,
+                summary=f"The skill {skill_id} was not compiled, so the Coding Agent can't use it.",
+            )
+        checks: list[dict[str, object]] = []
+        for inner in compiled.plan.steps:
+            command = inner.args.get("command")
+            if inner.primitive != "run" or not isinstance(command, list):
+                return Observation(
+                    exit_code=2,
+                    summary=(
+                        f"The skill {skill_id} uses `{inner.primitive}`, which the Coding "
+                        "Agent's sandbox can't perform; only `run` steps work for coding. "
+                        "Remove the skill from the task or use it with another agent."
+                    ),
+                )
+            cwd = str(inner.args.get("cwd") or "").strip("/")
+            if ".." in Path(cwd).parts:
+                return Observation(
+                    exit_code=2,
+                    summary=f"The skill {skill_id} runs in {cwd}, outside the project.",
+                )
+            argv = [str(a) for a in command]
+            checks.append(
+                {
+                    "kind": skill_id,
+                    "argv": argv,
+                    "description": f"{skill_id}: {' '.join(argv)}",
+                    "expect_exit": int(inner.args.get("expect_exit", 0) or 0),
+                    "timeout_s": int(inner.args.get("timeout_s", 600) or 600),
+                    "cwd": f"{WORKSPACE}/{cwd}" if cwd else WORKSPACE,
+                }
+            )
+        self._skill_checks.setdefault(context.ticket_id, []).extend(checks)
+        commands = "; ".join(str(c["description"]).split(": ", 1)[1] for c in checks)
+        return Observation(
+            exit_code=0,
+            summary=(
+                f"The skill {skill_id} adds {len(checks)} "
+                f"{'check' if len(checks) == 1 else 'checks'} to every task: {commands}."
+            ),
         )
 
     def _run_checks(self, session: Session, checks: list[dict[str, object]]) -> list[CheckResult]:
@@ -478,7 +634,12 @@ class CodingExecutor:
         for check in checks:
             raw_argv = check["argv"]
             argv = [str(a) for a in raw_argv] if isinstance(raw_argv, list) else []
-            result = self.manager.exec(session.id, argv)
+            result = self.manager.exec(
+                session.id,
+                argv,
+                cwd=str(check.get("cwd") or WORKSPACE),
+                timeout_s=int(str(check.get("timeout_s") or 600)),
+            )
             output = (result.stdout + result.stderr).strip()
             results.append(
                 CheckResult(
@@ -486,6 +647,7 @@ class CodingExecutor:
                     description=str(check["description"]),
                     exit_code=result.exit_code if not result.timed_out else 124,
                     output=output[-4000:],
+                    expected=int(str(check.get("expect_exit") or 0)),
                 )
             )
         return results
@@ -494,7 +656,10 @@ class CodingExecutor:
         session = self._require_session(context)
         project = self._project(session)
         task = TaskItem.model_validate(step.args["task"])
-        checks = list(step.args.get("checks", []))
+        checks = [
+            *step.args.get("checks", []),
+            *self._skill_checks.get(context.ticket_id, []),
+        ]
         max_iterations = int(step.args.get("max_iterations", 6))
         languages = [str(lang) for lang in step.args.get("languages", [])]
         plan_text = str(step.args.get("plan", ""))
@@ -503,8 +668,12 @@ class CodingExecutor:
         stall = 0
         last_signature: str | None = None
         recent: list[str] = []
+        ran: list[CommandRun] = []
+        history = self._history.get(context.ticket_id, [])
 
         for iteration in range(1, max_iterations + 1):
+            if context.ticket_id in self._stops:
+                return self._stopped(context, task, iteration - 1, log)
             request = EditRequest(
                 task=task,
                 iteration=iteration,
@@ -513,6 +682,8 @@ class CodingExecutor:
                 failures=failures,
                 plan=plan_text,
                 paths=project_paths(project),
+                command_runs=ran,
+                history=history,
             )
             self._say(
                 context,
@@ -524,6 +695,9 @@ class CodingExecutor:
                 ),
             )
             edits = self.coder.propose_edits(request)
+            if context.ticket_id in self._stops:
+                # The answer that was in flight is not applied (like Esc in Claude Code).
+                return self._stopped(context, task, iteration - 1, log)
             if edits.approach:
                 self._say(context, "Approach: " + " · ".join(a.strip() for a in edits.approach))
             try:
@@ -539,8 +713,9 @@ class CodingExecutor:
                 context,
                 (f"Changed {_names(changed)}" if changed else "No file changed")
                 + (f": {edits.note.strip()}" if edits.note.strip() else ".")
-                + (" Running the checks…" if checks else ""),
+                + (" Running the checks…" if checks and not edits.commands else ""),
             )
+            ran = self._run_commands(session, context, edits.commands)
             results = self._run_checks(session, checks)
             if problems:
                 results.append(
@@ -591,6 +766,13 @@ class CodingExecutor:
                 + (f"; {failed}" if failed else "")
             )
             if not failures:
+                # The model asked to see what its new code does: one more look, unless
+                # nothing changed or this was the last iteration.
+                if ran and changed and iteration < max_iterations:
+                    self._say(
+                        context, f"Iteration {iteration}: {passed}; reading the command output…"
+                    )
+                    continue
                 return Observation(
                     exit_code=0,
                     summary=(
@@ -627,6 +809,49 @@ class CodingExecutor:
             stderr="\n".join(f"[{r.kind}] {r.output}" for r in failures),
         )
 
+    def _stopped(
+        self, context: ExecutionContext, task: TaskItem, done: int, log: list[str]
+    ) -> Observation:
+        by = self._stops.pop(context.ticket_id, "someone")
+        when = (
+            f"after {done} {'iteration' if done == 1 else 'iterations'}"
+            if done
+            else "before its first iteration"
+        )
+        return Observation(
+            exit_code=4,
+            summary=(
+                f"{task.title}: stopped {when} because {by} pressed Stop. The files stay as "
+                "they are in the project; ask for a change to carry on."
+            ),
+            stdout="\n".join(log) + ("\n" if log else ""),
+        )
+
+    def _run_commands(
+        self, session: Session, context: ExecutionContext, commands: Sequence[Command]
+    ) -> list[CommandRun]:
+        """The commands the model asked for, run in the sandbox as argv (ADR-0021)."""
+        runs: list[CommandRun] = []
+        for command in commands[:MAX_COMMANDS]:
+            argv = [str(a) for a in command.argv]
+            shown = " ".join(argv)[:160]
+            why = refused_command(argv)
+            if why is not None:
+                runs.append(CommandRun(argv=argv, exit_code=126, output=f"Not run: {why}."))
+                self._say(context, f"Did not run `{shown}`: {why}.")
+                continue
+            self._say(context, f"Running `{shown}`…")
+            result = self.manager.exec(session.id, argv, timeout_s=COMMAND_TIMEOUT_S)
+            exit_code = 124 if result.timed_out else result.exit_code
+            output = (result.stdout + result.stderr).strip()
+            if len(output) > MAX_COMMAND_OUTPUT_CHARS:
+                half = MAX_COMMAND_OUTPUT_CHARS // 2
+                output = f"{output[:half]}\n[… output shortened …]\n{output[-half:]}"
+            if result.timed_out:
+                output += f"\n(stopped after {COMMAND_TIMEOUT_S} s)"
+            runs.append(CommandRun(argv=argv, exit_code=exit_code, output=output))
+        return runs
+
     def _commit(self, step: Step, context: ExecutionContext) -> Observation:
         session = self._require_session(context)
         workspace = self._workspace(session, context.user)
@@ -643,6 +868,7 @@ class CodingExecutor:
             body=str(step.args.get("body", "")),
             trailers=agent_trailers("coding", context.ticket_id),
         )
+        self._keep_changes(workspace, context)
         return Observation(
             exit_code=0,
             summary=(
@@ -650,6 +876,16 @@ class CodingExecutor:
             ),
             stdout=f"{sha}\n",
         )
+
+    def _keep_changes(self, workspace: GitWorkspace, context: ExecutionContext) -> None:
+        """Artifacts/<ticket>/changes.diff: what the task changed, for the Changes view."""
+        base = self._base.get(context.ticket_id, EMPTY_TREE)
+        diff = workspace.diff(base)
+        if not diff.strip():
+            return
+        folder = self.manager.artifacts_dir(context.user, context.ticket_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / CHANGES_FILE).write_text(diff[:MAX_CHANGES_CHARS], encoding="utf-8")
 
     def _export_zip(self, step: Step, context: ExecutionContext) -> Observation:
         session = self._require_session(context)

@@ -13,12 +13,15 @@ earlier, from the constants next to the page.
 | [`admin-settings.md`](admin-settings.md) | Admin → Settings | `src/admin/SettingsPage.tsx` | P1 |
 | [`models.md`](models.md) | Models (registry, cards, roles, voters; read-only) | `src/models/ModelsPage.tsx` | P1 (read) · P3 (swap) |
 | [`coding.md`](coding.md), [`new-coding-task.md`](new-coding-task.md) | Coding page, New coding task wizard | `src/coding/` | P6 |
+| [`skills.md`](skills.md) | Skills: the library, per-agent switches, the editor with Check, examples, delete | `src/skills/SkillsPage.tsx` | after round 2 |
+| [`account.md`](account.md) | Settings → Your account: name, sign-in name and role, password, sign out everywhere else | `src/session/AccountPage.tsx` | after round 2 |
 | [`git-remotes.md`](git-remotes.md), [`git-hosts.md`](git-hosts.md), [`git-panel.md`](git-panel.md) | Settings → Git remotes, Admin → Git hosts, the per-project Git panel and Terminal | `src/git/` | P6 |
 | [`validation.md`](validation.md), [`new-validation-run.md`](new-validation-run.md) | Validation page (LED cycle map, findings, console), New validation run wizard | `src/validation/` | P7 |
 | [`factory.md`](factory.md), [`new-factory-job.md`](new-factory-job.md) | Factory page (test-step map, screenshot strip, watch and take over, line-lead decision), New factory job wizard | `src/factory/` | P9, P10 |
 | [`admin-stations.md`](admin-stations.md) | Admin → Stations (records, one-time enrolment codes, tuning, retention, VNC) and the station CLI's sentences | `src/factory/StationsAdmin.tsx` | P10 |
 
-Routes (ADR-0009): `/sign-in`, `/choose-password`, `/` and the rail pages, `/admin/people`,
+Routes (ADR-0009): `/sign-in`, `/choose-password`, `/` and the rail pages, `/settings/account`,
+`/settings/git-remotes`, `/admin/people`,
 `/admin/settings`, `/admin/git-hosts`, `/admin/stations`, and a catch-all. Errors everywhere
 use the one `ThreePartError` component (`src/components/ThreePartError.tsx`); there is no toast,
 and a unit test keeps it that way.

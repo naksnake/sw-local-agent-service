@@ -16,6 +16,7 @@ import { HttpGitApi } from "./git/http";
 import { HttpHomeListsApi } from "./home/api";
 import { HttpModelsApi } from "./models/api";
 import { HttpSessionApi } from "./session/api";
+import { HttpSkillsApi } from "./skills/api";
 import { HttpValidationApi } from "./validation/http";
 
 export interface BuildEnv {
@@ -36,7 +37,7 @@ export function wantsFakes(env: BuildEnv): boolean {
 /**
  * Everything over HTTP (docs/api-contract.md, docs/api-contract-round-2.md): round 1's sign-in,
  * Home lists, People, Settings and Models, and round 2's Coding, Validation, Factory, Git
- * (Settings → Git remotes, Admin → Git hosts, the Git panel) and Admin → Stations. App.tsx puts
+ * (Settings → Git remotes, Admin → Git hosts, the Git panel), Admin → Stations and Skills. App.tsx puts
  * a page on the rail when its api is present and the person holds the capability.
  */
 export function realApis(): AppProps {
@@ -51,5 +52,6 @@ export function realApis(): AppProps {
     factoryApi: new HttpFactoryApi(http),
     stationsApi: new HttpStationsAdminApi(http),
     gitApi: new HttpGitApi(http),
+    skillsApi: new HttpSkillsApi(http),
   };
 }

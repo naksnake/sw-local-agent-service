@@ -42,6 +42,8 @@ setting `session_lifetime_hours` (default 8) at sign-in time.
 | `POST /api/v1/session` | `{"username": str, "password": str}` (`email` still accepted; a bare name means `<name>@slas.local`, or the one older account with that name) | `200 Person` + Set-Cookie. `401 reason=none` "That name and password don't match." (never says which). `429` after 10 failures in 15 minutes per name or per address (Redis), sentence from docs/ui/sign-in.md. `503` when Redis is unreachable (fails closed, names `slas logs redis`). A switched-off person gets the same 401 as a wrong password. |
 | `DELETE /api/v1/session` | — | `204`; the cookie is cleared. |
 | `GET /api/v1/me` | — | `200 Person`; `401 reason=expired` when the session existed but ran out, `401 reason=none` otherwise. |
+| `PATCH /api/v1/me` | `{"display_name": str}` | `200 Person`: your own name as commits and tickets show it (1–120 characters). The sign-in name never changes: it is your `Coding/<name>/` folder. |
+| `POST /api/v1/me/sessions/end-others` | — | `200 {"sentence", "ended"}`: every other session of yours ends; this one stays. |
 | `POST /api/v1/me/password` | `{"current_password": str, "new_password": str}` | `200 Person` with `must_change_password: false`; other sessions of the person are revoked, this one stays. `400` when the new password is shorter than 12 characters or equals the email; `401` when the current password is wrong. |
 
 `Person`:
@@ -63,7 +65,7 @@ While `must_change_password` is true, every route except `GET /api/v1/me`,
 |---|---|---|
 | `GET /api/v1/admin/people` | — | `200 [Person]`, ordered by display name. |
 | `POST /api/v1/admin/people` | `{"username": str, "display_name": str, "role": str}` (`email` still accepted; a username becomes `<username>@slas.local`; one account per username, as it names the `Coding/<username>/` folder) | `201 {"person": Person, "one_time_password": str}`; the person must change it at first sign-in. `409` when the email exists. `400` for an unknown role (names the roles). |
-| `PATCH /api/v1/admin/people/{id}` | `{"role"?: str, "is_active"?: bool}` | `200 Person`. Switching a person off revokes their sessions. An administrator cannot switch off or demote the last active administrator (`400`). |
+| `PATCH /api/v1/admin/people/{id}` | `{"role"?: str, "is_active"?: bool, "display_name"?: str}` | `200 Person`. Switching a person off revokes their sessions. An administrator cannot switch off or demote the last active administrator (`400`). |
 | `DELETE /api/v1/admin/people/{id}` | — | `200 {"sentence": str}`; the person's sessions end and the row goes; their projects stay under `Coding/<username>/` and the audit trail keeps their history. `400` for yourself or the last active administrator. |
 | `POST /api/v1/admin/people/{id}/password-reset` | — | `200 {"one_time_password": str}`; sessions revoked; `must_change_password` set. A reset of `admin@slas.local` also ends the bootstrap (below). |
 
@@ -159,6 +161,8 @@ routes answer the 503 *"The model-fetcher did not answer."* there.
 | `GET /api/v1/coding/tasks` | orchestrator `/v1/coding/tasks` | signed in |
 | `GET /api/v1/coding/tasks/{ticket_id}` | orchestrator `/v1/coding/tasks/{ticket_id}` | signed in |
 | `DELETE /api/v1/coding/tasks/{ticket_id}` | orchestrator `/v1/coding/tasks/{ticket_id}` (remove a finished task) | signed in |
+| `POST /api/v1/coding/tasks/{ticket_id}/stop` | orchestrator `/v1/coding/tasks/{ticket_id}/stop` (stop a running task) | signed in |
+| `GET /api/v1/coding/tasks/{ticket_id}/changes` | orchestrator `/v1/coding/tasks/{ticket_id}/changes` (the Changes view) | signed in |
 | `POST /api/v1/validation/suites/parse` | orchestrator `/v1/validation/suites/parse` | signed in |
 | `GET /api/v1/validation/targets` | orchestrator `/v1/validation/targets` | signed in |
 | `POST /api/v1/validation/preview` | orchestrator `/v1/validation/preview` | signed in |
@@ -176,10 +180,14 @@ routes answer the 503 *"The model-fetcher did not answer."* there.
 | `GET /api/v1/factory/jobs` | orchestrator `/v1/factory/jobs` | signed in |
 | `GET /api/v1/factory/jobs/{id}` | orchestrator `/v1/factory/jobs/{id}` | signed in |
 | `GET /api/v1/skills` | orchestrator `/v1/skills` | signed in |
+| `GET /api/v1/skills/examples` | orchestrator `/v1/skills/examples` | signed in |
+| `POST /api/v1/skills/validate` | orchestrator `/v1/skills/validate` | signed in |
 | `POST /api/v1/skills/import` | orchestrator `/v1/skills/import` | signed in |
 | `POST /api/v1/skills/{id}/enable` | orchestrator `/v1/skills/{id}/enable` | signed in |
 | `POST /api/v1/skills/{id}/disable` | orchestrator `/v1/skills/{id}/disable` | signed in |
 | `GET /api/v1/skills/{id}/export` | orchestrator `/v1/skills/{id}/export` | signed in |
+| `GET /api/v1/skills/{id}` | orchestrator `/v1/skills/{id}` | signed in |
+| `DELETE /api/v1/skills/{id}` | orchestrator `/v1/skills/{id}` | signed in |
 | `GET /api/v1/tickets` | orchestrator `/v1/tickets` | signed in |
 | `GET /api/v1/tickets/{id}` | orchestrator `/v1/tickets/{id}` | signed in |
 | `GET /api/v1/git/remotes` | git-broker `/v1/remotes` | signed in |

@@ -1,0 +1,14 @@
+# Shipped skill for SW Local Agent Service (CLAUDE.md §6.3).
+# Rendered from slas_skills.library; a unit test keeps this file and the code in step.
+# Skills are data: whitelisted verbs only, run with the importing user's capabilities.
+skill:
+  id: python-lint-and-test
+  name: "Python lint and tests"
+  version: 1.0.0
+  description: "Every coding task must pass ruff and pytest in the sandbox before it is done."
+  agents: [coding]
+  requires: [files]
+  steps:
+    - run: { command: [ruff, check, .], expect_exit: 0, timeout_s: 120 }
+    - run: { command: [python, -m, pytest, -q], expect_exit: 0, timeout_s: 600 }
+  on_failure: stop

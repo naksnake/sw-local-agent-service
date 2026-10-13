@@ -259,6 +259,25 @@ describe("Admin → People (docs/ui/admin-people.md)", () => {
     expect(api.world.byEmail("pat@slas.local")).toBeUndefined();
   });
 
+  it("edits a person's name and says the sign-in name stays", async () => {
+    const { api, admin } = world();
+    render(<PeoplePage api={api} me={personOf(admin)} />);
+    await screen.findByRole("table");
+    fireEvent.click(within(openMenu("Pat Lin")).getByRole("menuitem", { name: copy.menu.rename }));
+    const dialog = screen.getByRole("dialog", { name: copy.rename.title("Pat Lin") });
+    expect(within(dialog).getByText(copy.rename.help("pat"))).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: copy.rename.button })).toHaveProperty("disabled", true);
+    fireEvent.change(within(dialog).getByLabelText(copy.rename.label), { target: { value: " " } });
+    fireEvent.click(within(dialog).getByRole("button", { name: copy.rename.button }));
+    await within(dialog).findByRole("alert");
+    expect(alertParts()).toEqual([copy.rename.empty.whatHappened, copy.rename.empty.likelyCause, copy.rename.empty.whatToDo]);
+    fireEvent.change(within(dialog).getByLabelText(copy.rename.label), { target: { value: "Pat Lin-Chen" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: copy.rename.button }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("row", { name: "Pat Lin-Chen" })).toBeTruthy();
+    expect(api.world.byEmail("pat@slas.local")?.display_name).toBe("Pat Lin-Chen");
+  });
+
   it("the fake refuses to delete the last administrator, as the api does", async () => {
     const { api, admin } = world();
     await expect(api.remove(admin.id)).rejects.toMatchObject({ status: 400 });

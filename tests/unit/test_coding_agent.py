@@ -31,6 +31,7 @@ from slas_orchestrator.coding.coder import MAX_CHECK_OUTPUT_CHARS, build_message
 from slas_orchestrator.coding.executor import (
     CheckResult,
     CodingExecutor,
+    Command,
     EditError,
     EditRequest,
     EditSet,
@@ -40,6 +41,7 @@ from slas_orchestrator.coding.executor import (
     apply_replacements,
     fix_script_modes,
     missing_files,
+    refused_command,
     snapshot,
 )
 from slas_orchestrator.coding.export import zip_project
@@ -382,6 +384,7 @@ class Harness:
         languages: list[LanguageChoice] | None = None,
         cross_check: bool = True,
         tasks: list[TaskItem] | None = None,
+        skills: list[str] | None = None,
     ) -> str:
         job = self.agent.ingest(Upload(filename="plan.md", uploaded_by="pat", content=PLAN))
         breakdown = self.agent.propose(job)
@@ -398,6 +401,7 @@ class Harness:
             languages=languages or [LanguageChoice(language="python")],
             cross_check=cross_check,
             max_iterations=6,
+            skills=skills or [],
         )
         self.agent.approve(job.id, approved)
         return self.kernel.run(Upload(filename="plan.md", uploaded_by="pat", content=PLAN)).id
@@ -656,3 +660,214 @@ def test_the_feed_says_what_each_iteration_does_while_it_runs(tmp_path: Path) ->
     assert {ticket_id for ticket_id, _ in lines} == {ticket.id}
     assert ticket.steps[2].status == "done"
     assert coder.requests[1].paths == ["fan_ctl.py"]
+
+
+@needs_git
+def test_a_coding_skill_adds_its_run_steps_to_every_tasks_checks(tmp_path: Path) -> None:
+    """A skill picked in the wizard is compiled by the kernel's gate; the Coding Agent runs
+    its `run` steps after the language's checks, and a task is done only when they pass."""
+    from slas_kernel.skills import SkillGate
+    from slas_skills.schema import parse_skill
+    from slas_skills.state import SkillStateStore
+
+    skill = parse_skill(
+        {
+            "skill": {
+                "id": "docstrings",
+                "name": "Every module has a docstring",
+                "version": "1.0.0",
+                "agents": ["coding"],
+                "steps": [{"run": {"command": ["has-docstring", "fan_ctl.py"], "expect_exit": 0}}],
+            }
+        }
+    )
+    coder = FakeCoder(
+        EditSet(files={"fan_ctl.py": "def parse(t):\n    return t\n"}),
+        EditSet(files={"fan_ctl.py": '"""Fan control."""\n\ndef parse(t):\n    return t\n'}),
+    )
+    harness = Harness(
+        tmp_path, coder=coder, checker=FakeCrossChecker(votes("approve"), agreed=True)
+    )
+    state = SkillStateStore(tmp_path / "Skills" / "library")
+    state.record_import(skill, by="pat", now=harness.clock.now())
+    state.enable(skill, "coding", by="pat", now=harness.clock.now())
+    harness.kernel.skill_gate = SkillGate(
+        library={skill.id: skill}, state=state, clock=harness.clock
+    )
+    plain = harness._check
+
+    def check(argv: Sequence[str], cwd: str) -> ExecResult | None:
+        if list(argv[:1]) == ["has-docstring"]:
+            session = next(iter(harness.manager._sessions.values()))
+            text = (Path(session.project_dir) / argv[1]).read_text()
+            return ExecResult(exit_code=0 if text.startswith('"""') else 1, stdout="no docstring")
+        return plain(argv, cwd)
+
+    harness.runtime.handle_with(check)
+    ticket = harness.kernel.store.load(harness.start(skills=["docstrings"]))
+    titles = [s.title for s in ticket.plan.steps] if ticket.plan else []
+    assert titles[2] == "Use the skill docstrings: its steps become checks for every task"
+    assert ticket.steps[2].verdict is not None
+    assert ticket.steps[2].verdict.sentence == (
+        "The skill docstrings adds 1 check to every task: has-docstring fan_ctl.py."
+    )
+    task = ticket.steps[3]
+    assert task.status == "done" and task.verdict is not None
+    assert "done after 2 iterations" in task.verdict.sentence
+    assert "docstrings ok" in task.verdict.sentence
+    told = coder.requests[1].failures
+    assert [f.kind for f in told] == ["docstrings"] and told[0].output == "no docstring"
+
+
+def test_a_skill_with_a_screen_step_is_refused_for_coding(tmp_path: Path) -> None:
+    from slas_skills.compiler import compile_skill
+    from slas_skills.schema import parse_skill
+
+    skill = parse_skill(
+        {
+            "skill": {
+                "id": "clicky",
+                "name": "Clicks",
+                "version": "1.0.0",
+                "agents": ["coding"],
+                "requires": ["screen"],
+                "steps": [{"click": {"text": "OK"}}],
+            }
+        }
+    )
+    compiled = compile_skill(skill, {}, job_id="job-1", now=datetime(2026, 9, 14, tzinfo=UTC))
+    harness = Harness(tmp_path, coder=FakeCoder(), checker=None)
+    step = Step(
+        id="skill-clicky",
+        n=3,
+        primitive="skill",
+        title="Use the skill clicky",
+        args={"skill_id": "clicky", "compiled": compiled.model_dump(mode="json")},
+    )
+    context = ExecutionContext(
+        ticket_id="T-coding-0001", job_id="job-1", agent="coding", user="pat"
+    )
+    observed = harness.executor.execute(step, context)
+    assert observed.exit_code == 2
+    assert observed.summary.startswith("The skill clicky uses `click`, which the Coding Agent")
+    missing = harness.executor.execute(
+        step.model_copy(update={"args": {"skill_id": "clicky"}}), context
+    )
+    assert missing.summary == "The skill clicky was not compiled, so the Coding Agent can't use it."
+
+
+def test_commands_the_model_may_ask_for_are_argv_and_never_change_the_repository() -> None:
+    assert refused_command(["python", "tool.py", "--help"]) is None
+    assert refused_command(["git", "log", "--oneline"]) is None
+    assert refused_command(["git", "-C", ".", "diff"]) is None
+    assert "shell line" in (refused_command(["bash", "-c", "ls; rm -rf /"]) or "")
+    assert "another user" in (refused_command(["sudo", "ls"]) or "")
+    assert (refused_command(["git", "commit", "-m", "x"]) or "").startswith(
+        "git commit changes the repository"
+    )
+    assert refused_command(["bash", "script.sh"]) is None, "a script file is fine"
+
+
+@needs_git
+def test_the_model_runs_commands_sees_their_output_and_takes_one_more_look(
+    tmp_path: Path,
+) -> None:
+    """Like Claude Code's Bash tool: the model asks to run its program, the output comes back
+    on the next iteration, and a passing task with fresh output gets one more look."""
+    coder = FakeCoder(
+        EditSet(
+            files={"fan_ctl.py": "def parse(t):\n    return t\n"},
+            commands=[
+                Command(argv=["python", "fan_ctl.py"], why="try it"),
+                Command(argv=["git", "push"], why="publish"),
+            ],
+        ),
+        EditSet(note="the output looks right"),
+    )
+    harness = Harness(
+        tmp_path, coder=coder, checker=FakeCrossChecker(votes("approve"), agreed=True)
+    )
+    plain = harness._check
+    harness.runtime.handle_with(
+        lambda argv, cwd: (
+            ExecResult(exit_code=0, stdout="parsed 3 fans")
+            if list(argv[:2]) == ["python", "fan_ctl.py"]
+            else plain(argv, cwd)
+        )
+    )
+    lines: list[str] = []
+    harness.executor.progress = lambda _ticket, line: lines.append(line)
+    ticket = harness.kernel.store.load(harness.start())
+    task = ticket.steps[2]
+    assert task.status == "done" and task.verdict is not None
+    assert "done after 2 iterations" in task.verdict.sentence
+    runs = coder.requests[1].command_runs
+    assert [r.argv for r in runs] == [["python", "fan_ctl.py"], ["git", "push"]]
+    assert runs[0].exit_code == 0 and runs[0].output == "parsed 3 fans"
+    assert runs[1].exit_code == 126 and runs[1].output.startswith("Not run: git push changes")
+    prompt = build_messages(coder.requests[1])[1].content
+    assert "$ python fan_ctl.py  (exit 0)\nparsed 3 fans" in prompt
+    assert "Running `python fan_ctl.py`…" in lines
+    assert any(line.startswith("Did not run `git push`") for line in lines)
+    assert "Iteration 1: lint ok, type ok, test ok; reading the command output…" in lines
+    assert not any(e[1][:2] == ("git", "push") for e in harness.runtime.execs), (
+        "a refused command never reaches the sandbox"
+    )
+
+
+@needs_git
+def test_a_follow_up_sees_the_projects_history_and_the_changes_are_kept(tmp_path: Path) -> None:
+    first = FakeCoder(EditSet(files={"fan_ctl.py": "def parse(t):\n    return t\n"}))
+    harness = Harness(
+        tmp_path, coder=first, checker=FakeCrossChecker(votes("approve"), agreed=True)
+    )
+    ticket_id = harness.start()
+    changes = tmp_path / "Coding" / "pat" / "Artifacts" / ticket_id / "changes.diff"
+    assert changes.read_text().startswith("diff --git a/fan_ctl.py b/fan_ctl.py")
+    assert first.requests[0].history == [], "a new project has no history"
+
+    second = FakeCoder(EditSet(files={"fan_ctl.py": "def parse(t):\n    return t.strip()\n"}))
+    harness.executor.coder = second
+    for session in list(harness.manager._sessions.values()):
+        harness.manager.close(session.id)
+    harness.start()
+    (line,) = second.requests[0].history
+    assert line.endswith("Fan controller (- Parse config.yaml into a dataclass in fan_ctl.py)"), (
+        line
+    )
+    prompt = build_messages(second.requests[0])[1].content
+    assert "Recent commits on this project, newest first:\n" in prompt
+
+
+@needs_git
+def test_stop_ends_the_task_after_the_model_call_without_applying_its_answer(
+    tmp_path: Path,
+) -> None:
+    harness: Harness
+
+    class StoppingCoder(FakeCoder):
+        def propose_edits(self, request: EditRequest) -> EditSet:
+            answer = super().propose_edits(request)
+            if request.iteration == 2:
+                harness.executor.request_stop(next(iter(harness.executor._sessions)), "Pat Lin")
+            return answer
+
+    coder = StoppingCoder(
+        EditSet(files={"fan_ctl.py": "class Config: ...\n"}),
+        EditSet(files={"fan_ctl.py": "def parse(t):\n    return t\n"}),
+    )
+    harness = Harness(
+        tmp_path, coder=coder, checker=FakeCrossChecker(votes("approve"), agreed=True)
+    )
+    ticket = harness.kernel.store.load(harness.start())
+    task = ticket.steps[2]
+    assert task.status == "failed" and task.verdict is not None
+    assert task.verdict.sentence == (
+        "Parse config.yaml into a dataclass in fan_ctl.py: stopped after 1 iteration because "
+        "Pat Lin pressed Stop. The files stay as they are in the project; ask for a change to "
+        "carry on."
+    )
+    project = tmp_path / "Coding" / "pat" / "Projects" / "fan-controller"
+    assert (project / "fan_ctl.py").read_text() == "class Config: ...\n", "not applied"
+    assert ticket.state is TicketState.NEEDS_REVIEW
+    assert ticket.steps[3].status == "pending", "nothing was committed"

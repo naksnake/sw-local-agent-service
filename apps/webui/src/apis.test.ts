@@ -6,6 +6,7 @@ import { HttpCodingApi } from "./coding/http";
 import { HttpFactoryApi, HttpStationsAdminApi } from "./factory/http";
 import { HttpGitApi } from "./git/http";
 import { HttpSessionApi } from "./session/api";
+import { HttpSkillsApi } from "./skills/api";
 import type { FakeSessionApi } from "./session/fake";
 import { HttpValidationApi } from "./validation/http";
 
@@ -26,6 +27,7 @@ describe("which APIs the bundle runs on", () => {
     expect(apis.factoryApi).toBeInstanceOf(HttpFactoryApi);
     expect(apis.stationsApi).toBeInstanceOf(HttpStationsAdminApi);
     expect(apis.gitApi).toBeInstanceOf(HttpGitApi);
+    expect(apis.skillsApi).toBeInstanceOf(HttpSkillsApi);
     expect(Object.keys(apis).sort()).toEqual([
       "codingApi",
       "factoryApi",
@@ -35,6 +37,7 @@ describe("which APIs the bundle runs on", () => {
       "peopleApi",
       "sessionApi",
       "settingsApi",
+      "skillsApi",
       "stationsApi",
       "validationApi",
     ]);

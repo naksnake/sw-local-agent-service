@@ -78,6 +78,18 @@ ROUTES: Final[tuple[ProxyRoute, ...]] = (
     ProxyRoute("GET", "/coding/tasks", "orchestrator", "/v1/coding/tasks"),
     ProxyRoute("GET", "/coding/tasks/{ticket_id}", "orchestrator", "/v1/coding/tasks/{ticket_id}"),
     ProxyRoute(
+        "POST",
+        "/coding/tasks/{ticket_id}/stop",
+        "orchestrator",
+        "/v1/coding/tasks/{ticket_id}/stop",
+    ),
+    ProxyRoute(
+        "GET",
+        "/coding/tasks/{ticket_id}/changes",
+        "orchestrator",
+        "/v1/coding/tasks/{ticket_id}/changes",
+    ),
+    ProxyRoute(
         "DELETE", "/coding/tasks/{ticket_id}", "orchestrator", "/v1/coding/tasks/{ticket_id}"
     ),
     # --- Validation (orchestrator §5) -----------------------------------------------------
@@ -118,10 +130,14 @@ ROUTES: Final[tuple[ProxyRoute, ...]] = (
     ProxyRoute("GET", "/factory/jobs/{id}", "orchestrator", "/v1/factory/jobs/{id}"),
     # --- Skills and tickets (orchestrator §5) ---------------------------------------------
     ProxyRoute("GET", "/skills", "orchestrator", "/v1/skills"),
+    ProxyRoute("GET", "/skills/examples", "orchestrator", "/v1/skills/examples"),
+    ProxyRoute("POST", "/skills/validate", "orchestrator", "/v1/skills/validate"),
     ProxyRoute("POST", "/skills/import", "orchestrator", "/v1/skills/import"),
     ProxyRoute("POST", "/skills/{id}/enable", "orchestrator", "/v1/skills/{id}/enable"),
     ProxyRoute("POST", "/skills/{id}/disable", "orchestrator", "/v1/skills/{id}/disable"),
     ProxyRoute("GET", "/skills/{id}/export", "orchestrator", "/v1/skills/{id}/export"),
+    ProxyRoute("GET", "/skills/{id}", "orchestrator", "/v1/skills/{id}"),
+    ProxyRoute("DELETE", "/skills/{id}", "orchestrator", "/v1/skills/{id}"),
     ProxyRoute("GET", "/tickets", "orchestrator", "/v1/tickets"),
     ProxyRoute("GET", "/tickets/{id}", "orchestrator", "/v1/tickets/{id}"),
     # --- Git remotes and hosts (git-broker §7) --------------------------------------------

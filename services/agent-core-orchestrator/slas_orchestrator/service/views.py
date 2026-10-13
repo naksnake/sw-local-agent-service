@@ -124,3 +124,28 @@ def ticket_row(ticket: Ticket, run_state: RunState | None = None) -> dict[str, A
         "sentence": task_sentence(ticket, run_state),
         "created_at": ticket.created_at.isoformat(),
     }
+
+
+def diff_files(diff: str) -> list[dict[str, Any]]:
+    """Per file of a unified diff: its path and how many lines it adds and removes."""
+    files: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            path = line.split(" b/", 1)[1] if " b/" in line else line[len("diff --git ") :]
+            current = {"path": path, "added": 0, "removed": 0}
+            files.append(current)
+        elif current is None or line.startswith(("+++", "---")):
+            continue
+        elif line.startswith("+"):
+            current["added"] += 1
+        elif line.startswith("-"):
+            current["removed"] += 1
+    return files
+
+
+def changes_sentence(files: list[dict[str, Any]]) -> str:
+    added = sum(int(f["added"]) for f in files)
+    removed = sum(int(f["removed"]) for f in files)
+    noun = "file" if len(files) == 1 else "files"
+    return f"{len(files)} {noun} changed: {added} lines added, {removed} removed."

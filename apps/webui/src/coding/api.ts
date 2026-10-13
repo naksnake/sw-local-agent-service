@@ -147,6 +147,27 @@ export interface CodingApi {
   listTasks(): Promise<CodingTask[]>;
   /** Remove a finished task and its files; resolves to the sentence the service answers. */
   remove(ticketId: string): Promise<string>;
+  /** Stop a running task after the model call in flight (Claude Code's Esc). */
+  stop(ticketId: string): Promise<string>;
+  /** What the task changed: the diff its commit step kept. */
+  changes(ticketId: string): Promise<TaskChanges>;
+}
+
+export interface ChangedFile {
+  path: string;
+  added: number;
+  removed: number;
+}
+
+export interface TaskChanges {
+  sentence: string;
+  files: ChangedFile[];
+  diff: string;
+}
+
+/** Whether the task has committed, so its Changes can be shown. */
+export function hasCommitted(task: CodingTask): boolean {
+  return task.steps.some((step) => step.title.startsWith("Commit") && step.status === "done");
 }
 
 /** A task that has stopped: Done, Failed or Needs review. Only these can be removed. */
@@ -422,5 +443,53 @@ export class FakeCodingApi implements CodingApi {
     }
     this.tasks.splice(index, 1);
     return `${ticketId} and its files were removed.`;
+  }
+
+  async stop(ticketId: string): Promise<string> {
+    const task = this.tasks.find((t) => t.ticketId === ticketId);
+    if (task === undefined || isFinished(task)) {
+      throw new Error(`${ticketId} is not running, so there is nothing to stop.`);
+    }
+    const running = task.steps.find((step) => step.status === "running");
+    if (running !== undefined) {
+      running.status = "failed";
+    }
+    task.state = "Needs review";
+    task.sentence = `${ticketId} needs your review: you stopped it.`;
+    task.feed.push(`${running?.title ?? "The task"}: stopped because you pressed Stop. The files stay as they are in the project; ask for a change to carry on.`);
+    return `${ticketId} stops after the model call in flight; what it already wrote stays in the project.`;
+  }
+
+  async changes(ticketId: string): Promise<TaskChanges> {
+    const task = this.tasks.find((t) => t.ticketId === ticketId);
+    if (task === undefined || !hasCommitted(task)) {
+      throw new Error(`There are no changes to show for ${ticketId}.`);
+    }
+    const diff = [
+      "diff --git a/templog.py b/templog.py",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/templog.py",
+      "@@ -0,0 +1,4 @@",
+      '+"""Summarise a CSV of temperatures."""',
+      "+import csv",
+      "+",
+      "+def summary(rows): ...",
+      "diff --git a/README.md b/README.md",
+      "--- a/README.md",
+      "+++ b/README.md",
+      "@@ -1,2 +1,2 @@",
+      " # Temperature log tool",
+      "-Nothing yet.",
+      "+Run `python templog.py temps.csv`.",
+    ].join("\n");
+    return {
+      sentence: "2 files changed: 5 lines added, 1 removed.",
+      files: [
+        { path: "templog.py", added: 4, removed: 0 },
+        { path: "README.md", added: 1, removed: 1 },
+      ],
+      diff,
+    };
   }
 }

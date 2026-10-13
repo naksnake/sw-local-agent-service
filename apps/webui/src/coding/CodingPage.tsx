@@ -3,7 +3,17 @@ import { useCallback, useEffect, useState } from "react";
 import { isLive, POLL_INTERVAL_MS, usePolling } from "../api/polling";
 import type { GitApi } from "../git/api";
 import { GitPanel } from "../git/GitPanel";
-import { type CodingApi, type CodingTask, followUpPlan, isFinished, languagesOf, type StepStatus, zipUrl } from "./api";
+import {
+  type CodingApi,
+  type CodingTask,
+  followUpPlan,
+  hasCommitted,
+  isFinished,
+  languagesOf,
+  type StepStatus,
+  type TaskChanges,
+  zipUrl,
+} from "./api";
 import { NewCodingTaskWizard } from "./NewCodingTaskWizard";
 
 // The Coding page (CLAUDE.md §9): tasks with their plan checklist and activity feed, and
@@ -74,6 +84,8 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
   /** Follow-up prompts being typed, per task; the one being sent. */
   const [prompts, setPrompts] = useState<Record<string, string>>({});
   const [sending, setSending] = useState<string | null>(null);
+  const [changesFor, setChangesFor] = useState<string | null>(null);
+  const [stopping, setStopping] = useState<string | null>(null);
 
   const refresh = useCallback(async () => setTasks(await api.listTasks()), [api]);
 
@@ -112,6 +124,18 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
       );
     } finally {
       setSending(null);
+    }
+  };
+
+  const stop = async (task: CodingTask) => {
+    setStopping(task.ticketId);
+    try {
+      setNotice(await api.stop(task.ticketId));
+      await refresh();
+    } catch (error: unknown) {
+      setNotice(`${task.ticketId} was not stopped: ${error instanceof Error ? error.message : "the service did not answer."}`);
+    } finally {
+      setStopping(null);
     }
   };
 
@@ -286,6 +310,28 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
                   </form>
                 )}
                 <div className="row wrap task-actions">
+                  {isLive(task.state) && (
+                    <button
+                      type="button"
+                      className="btn small danger"
+                      disabled={stopping === task.ticketId}
+                      aria-label={`Stop ${task.ticketId}`}
+                      title="Stops after the model call in flight; the files stay as they are and you can ask for a change."
+                      onClick={() => void stop(task)}
+                    >
+                      {stopping === task.ticketId ? "Stopping…" : "Stop"}
+                    </button>
+                  )}
+                  {hasCommitted(task) && (
+                    <button
+                      type="button"
+                      className="btn small"
+                      aria-expanded={changesFor === task.ticketId}
+                      onClick={() => setChangesFor((current) => (current === task.ticketId ? null : task.ticketId))}
+                    >
+                      {changesFor === task.ticketId ? "Hide changes" : "Changes"}
+                    </button>
+                  )}
                   {gitApi !== undefined && (
                     <button
                       type="button"
@@ -318,6 +364,7 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
                     </button>
                   )}
                 </div>
+                {changesFor === task.ticketId && <ChangesView api={api} ticketId={task.ticketId} />}
                 {gitApi !== undefined && gitOpenFor === task.ticketId && (
                   <div className="task-git">
                     <GitPanel api={gitApi} slug={slugOf(task.title)} />
@@ -329,6 +376,70 @@ export function CodingPage({ api, gitApi, startWizardOpen = false }: Props) {
         )}
       </section>
     </div>
+  );
+}
+
+/** Lines of a diff shown before "Show the whole diff". */
+const DIFF_LINES = 400;
+
+function diffTone(line: string): string {
+  if (line.startsWith("diff --git")) return "file";
+  if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("index ") || line.startsWith("new file")) return "meta";
+  if (line.startsWith("@@")) return "hunk";
+  if (line.startsWith("+")) return "add";
+  if (line.startsWith("-")) return "del";
+  return "";
+}
+
+/** What the task changed, as Claude Code shows an edit: per file, added lines green, removed red. */
+function ChangesView({ api, ticketId }: { api: CodingApi; ticketId: string }) {
+  const [changes, setChanges] = useState<TaskChanges | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [all, setAll] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .changes(ticketId)
+      .then((value) => live && setChanges(value))
+      .catch((error: unknown) => live && setProblem(error instanceof Error ? error.message : "The changes did not load."));
+    return () => {
+      live = false;
+    };
+  }, [api, ticketId]);
+
+  if (problem !== null) {
+    return <p className="muted">{problem}</p>;
+  }
+  if (changes === null) {
+    return <p className="muted">Loading the changes…</p>;
+  }
+  const lines = changes.diff.split("\n");
+  const shown = all ? lines : lines.slice(0, DIFF_LINES);
+  return (
+    <section className="changes" aria-label={`${ticketId} changes`}>
+      <p className="sentence">{changes.sentence}</p>
+      <ul className="plain changed-files">
+        {changes.files.map((file) => (
+          <li key={file.path}>
+            <span className="mono">{file.path}</span> <span className="add">+{file.added}</span>{" "}
+            <span className="del">−{file.removed}</span>
+          </li>
+        ))}
+      </ul>
+      <div className="diff" role="region" aria-label={`${ticketId} diff`}>
+        {shown.map((line, index) => (
+          <div key={index} className={diffTone(line)}>
+            {line === "" ? " " : line}
+          </div>
+        ))}
+      </div>
+      {lines.length > shown.length && (
+        <button type="button" className="btn small ghost" onClick={() => setAll(true)}>
+          Show the whole diff ({lines.length} lines)
+        </button>
+      )}
+    </section>
   );
 }
 

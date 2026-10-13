@@ -298,7 +298,7 @@ def test_unknown_routes_and_methods_answer_in_three_parts(harness: Harness) -> N
     assert_problem(harness.client.get("/docs"), 404)
     assert_problem(harness.client.get("/openapi.json"), 404)
     assert_problem(harness.client.get("/redoc"), 404)
-    assert_problem(harness.client.patch("/api/v1/me", headers=WEBUI), 405)
+    assert_problem(harness.client.put("/api/v1/me", headers=WEBUI), 405)
 
 
 def test_an_unexpected_exception_becomes_a_generic_500(

@@ -162,6 +162,53 @@ describe("New coding task wizard", () => {
     expect(within(waiting).queryByRole("link", { name: "Download ZIP" })).toBeNull();
   });
 
+  it("stops a running task with one button, like Esc in Claude Code", async () => {
+    const api = new FakeCodingApi();
+    api.tasks.push({
+      ticketId: "T-coding-0011",
+      title: "Temperature log tool",
+      state: "Running",
+      sentence: "T-coding-0011 is running: step 3 of 6.",
+      steps: [{ n: 3, title: "Task 1: Write templog.py", status: "running" }],
+      feed: ["Iteration 2 of 6: fixing test…"],
+    });
+    render(<CodingPage api={api} />);
+    const card = await screen.findByLabelText("T-coding-0011");
+    fireEvent.click(within(card).getByRole("button", { name: "Stop T-coding-0011" }));
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "T-coding-0011 stops after the model call in flight; what it already wrote stays in the project.",
+    );
+    await waitFor(() => expect(within(card).queryByRole("button", { name: "Stop T-coding-0011" })).toBeNull());
+    expect(within(card).getByText("Needs your review")).toBeTruthy();
+    expect(within(card).getByLabelText("Ask the agent for a change to this project")).toBeTruthy();
+  });
+
+  it("shows what a committed task changed, file by file, added lines and removed lines apart", async () => {
+    const api = new FakeCodingApi();
+    const task = (ticketId: string, status: "done" | "pending") => ({
+      ticketId,
+      title: "Temperature log tool",
+      state: status === "done" ? "Done" : "Running",
+      sentence: `${ticketId}.`,
+      steps: [{ n: 5, title: "Commit the changes on the agent's branch", status }],
+      feed: [],
+    });
+    api.tasks.push(task("T-coding-0012", "done"), task("T-coding-0013", "pending"));
+    render(<CodingPage api={api} />);
+    const done = await screen.findByLabelText("T-coding-0012");
+    expect(within(screen.getByLabelText("T-coding-0013")).queryByRole("button", { name: "Changes" })).toBeNull();
+    fireEvent.click(within(done).getByRole("button", { name: "Changes" }));
+    const changes = await within(done).findByLabelText("T-coding-0012 changes");
+    expect(within(changes).getByText("2 files changed: 5 lines added, 1 removed.")).toBeTruthy();
+    const diff = within(changes).getByRole("region", { name: "T-coding-0012 diff" });
+    const added = within(diff).getByText("+import csv");
+    expect(added.className).toBe("add");
+    expect(within(diff).getByText("-Nothing yet.").className).toBe("del");
+    expect(within(diff).getByText("diff --git a/README.md b/README.md").className).toBe("file");
+    fireEvent.click(within(done).getByRole("button", { name: "Hide changes" }));
+    expect(within(done).queryByLabelText("T-coding-0012 changes")).toBeNull();
+  });
+
   it("turns a prompt into one task on the same project, keeping the toolchain", async () => {
     const plan = followUpPlan("Temperature log tool", "Add a --csv option\n- write the summary as CSV\n- add a test");
     expect(plan.startsWith("# Temperature log tool\n")).toBe(true);

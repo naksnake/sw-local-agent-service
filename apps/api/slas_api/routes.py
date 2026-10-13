@@ -199,6 +199,12 @@ class SignInBody(BaseModel):
         return (self.username if self.username is not None else self.email) or ""
 
 
+class PatchMeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str
+
+
 class PasswordChangeBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -240,6 +246,33 @@ def me(auth: SignedIn, svc: ServicesDep) -> dict[str, Any]:
     return _person(svc, auth.person)
 
 
+@api.patch("/me")
+def patch_me(body: PatchMeBody, auth: Ready, svc: ServicesDep, db: DbDep) -> dict[str, Any]:
+    """Your own name, as commits and tickets show it; the sign-in name never changes here."""
+    person = service.update_person(
+        svc,
+        db,
+        actor=auth.principal,
+        via="webui",
+        person_id=auth.person.id,
+        display_name=body.display_name,
+    )
+    return _person(svc, person)
+
+
+@api.post("/me/sessions/end-others")
+def end_other_sessions(auth: Ready, svc: ServicesDep, db: DbDep) -> dict[str, Any]:
+    ended = service.sign_out_elsewhere(
+        svc, db, person=auth.person, via="webui", keep_session=auth.session.id
+    )
+    if ended == 0:
+        sentence = "You were signed in only here; nothing else was signed out."
+    else:
+        noun = "session" if ended == 1 else "sessions"
+        sentence = f"Signed out of {ended} other {noun}. This one stays signed in."
+    return {"sentence": sentence, "ended": ended}
+
+
 @api.post("/me/password")
 def change_password(
     body: PasswordChangeBody, auth: SignedIn, svc: ServicesDep, db: DbDep
@@ -274,6 +307,7 @@ class PatchPersonBody(BaseModel):
 
     role: str | None = None
     is_active: bool | None = None
+    display_name: str | None = None
 
 
 @api.get("/admin/people")
@@ -313,6 +347,7 @@ def patch_person(
         person_id=person_id,
         role=body.role,
         is_active=body.is_active,
+        display_name=body.display_name,
     )
     return _person(svc, person)
 

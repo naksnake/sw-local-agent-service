@@ -29,6 +29,10 @@ the agent writes live lines (below) so the feed moves within a step, not only be
 | Activity, approach (live) | Approach: *Parse the CSV with the csv module* · *Report min, max and average* |
 | Activity, edits (live) | Changed *templog.py, tests/test_templog.py*: *added the --csv option* Running the checks… |
 | Activity, check failed (live) | Iteration *1*: *test failed* — test: *FAILED tests/test_templog.py::test_avg - AssertionError* (*lint ok*). |
+| Activity, command (live) | Running `python templog.py --help`… · Did not run `git push`: git push changes the repository; the agent commits for you after the checks pass, so only read-only git commands run. |
+| Activity, one more look (live) | Iteration *2*: lint ok, test ok; reading the command output… |
+| Activity, skill | The skill *python-lint-and-test* adds *2* checks to every task: *ruff check .; python -m pytest -q*. |
+| Activity, stopped | *Task 1*: stopped after *2* iterations because *Pat Lin* pressed Stop. The files stay as they are in the project; ask for a change to carry on. |
 | Activity, task | *Task 1*: done after *2* iterations; lint ok, type ok, test ok. |
 | Activity, stalled | *Task 1*: stopped after *4* iterations because the last 3 made no progress (*test failed*). A person needs to look at it. |
 | Activity, commit | Committed *1a2b3c4d5e* on branch *slas/T-coding-0001* with Slas-Agent and Slas-Ticket trailers. |
@@ -50,3 +54,14 @@ any task.
 
 The Git panel (Status · Commit · History · Push/Pull · Bundle) and the Terminal tab arrive
 with the git-broker session; `git push` in the terminal fails with the footer sentence.
+
+## Stop and Changes
+
+| Element | Text |
+|---|---|
+| Stop (live tasks) | Stop — title: Stops after the model call in flight; the files stay as they are and you can ask for a change. While waiting: Stopping… |
+| Stopped | *T-coding-0011* stops after the model call in flight; what it already wrote stays in the project. |
+| Changes (once Commit is done) | Changes / Hide changes |
+| Changes view | *2 files changed: 5 lines added, 1 removed.*, one line per file (*templog.py +4 −0*), then the diff: file headers bold, added lines on green, removed on red, hunks in the accent colour; the first 400 lines, then "Show the whole diff (*n* lines)". |
+| No changes | There are no changes to show for *T-coding-0001*. |
+

@@ -1,7 +1,8 @@
 # Settings → Git remotes — copy (CLAUDE.md §5.7, §9)
 
 Paste-only credential fields, never echoed back; after save only the fingerprint is shown;
-Test connection runs `ls-remote` inside git-broker. Component:
+Test connection runs `ls-remote` inside git-broker. Route `/settings/git-remotes`, the tab
+next to Your account (docs/ui/account.md). Component:
 `apps/webui/src/git/GitRemotesSettings.tsx`.
 
 | Element | Text |

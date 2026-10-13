@@ -19,9 +19,12 @@ import { type AgentPage, HomePage, healthSentence, type Snapshot } from "./home/
 import type { ModelsApi } from "./models/api";
 import { ModelsPage } from "./models/ModelsPage";
 import type { Person, SessionApi } from "./session/api";
+import { AccountPage } from "./session/AccountPage";
 import { ChoosePasswordPage } from "./session/ChoosePasswordPage";
 import { SignInPage } from "./session/SignInPage";
 import { type Session, SessionProvider, useSession } from "./session/store";
+import type { SkillsApi } from "./skills/api";
+import { SkillsPage } from "./skills/SkillsPage";
 import type { ValidationApi } from "./validation/api";
 import { ValidationPage } from "./validation/ValidationPage";
 
@@ -43,6 +46,7 @@ export interface AppProps {
   factoryApi?: FactoryApi;
   stationsApi?: StationsAdminApi;
   gitApi?: GitApi;
+  skillsApi?: SkillsApi;
   /** Who is signed in when there is no SessionApi (tests); shown in the top bar. */
   user?: string;
   /** A dev-only line under the sign-in form naming the fake accounts. */
@@ -61,6 +65,12 @@ export function App(props: AppProps) {
 }
 
 type AdminTab = "people" | "settings" | "git-hosts" | "stations";
+type SettingsTab = "account" | "git-remotes";
+
+const SETTINGS_TAB_LABEL: Record<SettingsTab, string> = {
+  account: "Your account",
+  "git-remotes": "Git remotes",
+};
 
 const RAIL: [path: string, label: string][] = [
   ["/", copy.rail.home],
@@ -82,7 +92,8 @@ const TAB_LABEL: Record<AdminTab, string> = {
 };
 
 function Routed(props: AppProps) {
-  const { homeListsApi, peopleApi, settingsApi, modelsApi, codingApi, validationApi, factoryApi, stationsApi, gitApi } = props;
+  const { homeListsApi, peopleApi, settingsApi, modelsApi, codingApi, validationApi, factoryApi, stationsApi, gitApi, skillsApi } =
+    props;
   const session = useSession();
   const navigate = useNavigate();
   const location = useLocation();
@@ -114,6 +125,10 @@ function Routed(props: AppProps) {
   if (gitApi !== undefined && can("git:hosts_manage")) tabs.push("git-hosts");
   if (stationsApi !== undefined && agentOn("factory") && can("factory:stations_manage")) tabs.push("stations");
 
+  const settingsTabs: SettingsTab[] = [];
+  if (session !== null && person !== null) settingsTabs.push("account");
+  if (gitApi !== undefined && can("git:remote_manage")) settingsTabs.push("git-remotes");
+
   const available: Record<string, boolean> = {
     "/": true,
     "/coding": codingApi !== undefined && agentOn("coding"),
@@ -122,7 +137,7 @@ function Routed(props: AppProps) {
     "/runs": true,
     "/models": true,
     "/skills": true,
-    "/settings": gitApi !== undefined && can("git:remote_manage"),
+    "/settings": settingsTabs.length > 0,
     "/admin": tabs.length > 0,
   };
 
@@ -219,12 +234,26 @@ function Routed(props: AppProps) {
           path="models"
           element={modelsApi !== undefined ? <ModelsPage api={modelsApi} canManage={can("model:manage")} /> : <Later page="models" />}
         />
-        <Route path="skills" element={<Later page="skills" />} />
+        <Route path="skills" element={skillsApi !== undefined ? <SkillsPage api={skillsApi} /> : <Later page="skills" />} />
         <Route
           path="settings"
-          element={gitApi !== undefined ? guarded("git:remote_manage", <GitRemotesSettings api={gitApi} />) : <UnknownAddress />}
-        />
-        <Route path="admin" element={<AdminSection tabs={tabs} />}>
+          element={<Sections label="Settings sections" base="/settings" tabs={settingsTabs.map((t) => [t, SETTINGS_TAB_LABEL[t]])} />}
+        >
+          <Route
+            index
+            element={settingsTabs[0] !== undefined ? <Navigate to={settingsTabs[0]} replace /> : <UnknownAddress />}
+          />
+          <Route
+            path="account"
+            element={session !== null && person !== null ? <AccountPage session={session} person={person} /> : <UnknownAddress />}
+          />
+          <Route
+            path="git-remotes"
+            element={gitApi !== undefined ? guarded("git:remote_manage", <GitRemotesSettings api={gitApi} />) : <UnknownAddress />}
+          />
+          <Route path="*" element={<UnknownAddress />} />
+        </Route>
+        <Route path="admin" element={<Sections label="Admin sections" base="/admin" tabs={tabs.map((t) => [t, TAB_LABEL[t]])} />}>
           <Route index element={tabs[0] !== undefined ? <Navigate to={tabs[0]} replace /> : <NotAllowed />} />
           <Route
             path="people"
@@ -341,22 +370,23 @@ function Shell({ rail, snap, person, userName, session }: ShellProps) {
   );
 }
 
-function AdminSection({ tabs }: { tabs: AdminTab[] }) {
+/** A page with tabs (Admin, Settings): one tab per section the person may open. */
+function Sections({ label, base, tabs }: { label: string; base: string; tabs: [id: string, label: string][] }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   return (
     <div className="stack">
       {tabs.length > 1 && (
-        <nav aria-label="Admin sections" className="tabs">
-          {tabs.map((tab) => (
+        <nav aria-label={label} className="tabs">
+          {tabs.map(([tab, text]) => (
             <button
               key={tab}
               type="button"
               className="tab"
-              aria-current={pathname === `/admin/${tab}` ? "page" : undefined}
-              onClick={() => navigate(`/admin/${tab}`)}
+              aria-current={pathname === `${base}/${tab}` ? "page" : undefined}
+              onClick={() => navigate(`${base}/${tab}`)}
             >
-              {TAB_LABEL[tab]}
+              {text}
             </button>
           ))}
         </nav>

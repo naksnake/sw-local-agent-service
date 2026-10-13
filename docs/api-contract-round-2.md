@@ -258,6 +258,8 @@ ticket with the executor's state.
 | `POST /v1/coding/tasks` | `{"breakdown": Breakdown, "plan": str, "filename": str}` → `CodingTask` (below); starts the kernel run. 503 in three parts while the coder role has no healthy instance or the gateway does not answer: a task started then would fail at its first edit minutes later. |
 | `GET /v1/coding/tasks` | `[CodingTask]`, newest first, the person's own unless `admin:people`. |
 | `GET /v1/coding/tasks/{ticket_id}` | `CodingTask`. |
+| `POST /v1/coding/tasks/{ticket_id}/stop` | Ask a running task to stop → `{"sentence"}`. The answer of the model call in flight is not applied; the task step ends as failed ("stopped because … pressed Stop") and the ticket waits for review with the files as they are. 409 when it is not running. |
+| `GET /v1/coding/tasks/{ticket_id}/changes` | `{"ticket_id", "sentence", "files": [{"path", "added", "removed"}], "diff"}` from `Artifacts/<ticket>/changes.diff`, which the commit step writes (the diff from the task's base commit). 404 before the commit or when nothing changed. |
 | `DELETE /v1/coding/tasks/{ticket_id}` | Remove a finished task (Done, Failed or Needs review): the ticket and its journal, its SOP, its artifacts and any sandbox session still open for it → `{"sentence"}`. 409 while the task is running; 404 for a task the person may not see. The project directory under `Coding/<user>/Projects/<slug>` stays: it is the person's repository. |
 
 `CodingTask`: `{"ticket_id", "title", "state", "sentence", "steps": [{"n", "title", "status":
@@ -311,9 +313,13 @@ The executor is remote: `slas_orchestrator.remote.HttpExecutor(client)` implemen
 | Route | Answer |
 |---|---|
 | `GET /v1/skills` | `[{"id", "name", "version", "risk", "agents", "requires", "enabled": {agent: bool}, "sentence"}]` from `Skills/library`. |
+| `GET /v1/skills/examples` | `[{"id", "name", "description", "agents", "requires", "risk", "installed", "yaml"}]` — the shipped skills (`slas_skills.library`), to start from. |
+| `POST /v1/skills/validate` | `{"yaml": str}` → `ImportReport` as JSON plus `"replaces"` (the version it would replace, or null) and `"steps"` (one line per step); nothing is stored. |
 | `POST /v1/skills/import` | `{"yaml": str}` → `ImportReport` as JSON (`slas_skills.importer`). |
 | `POST /v1/skills/{id}/enable` · `/disable` | `{"agent"}` → the skill row. |
 | `GET /v1/skills/{id}/export` | `{"yaml": str, "content_hash": str}` (state never travels). |
+| `GET /v1/skills/{id}` | the row plus `"description"`, `"steps"`, `"inputs"`, `"imported_by"`, `"imported_at"`, `"yaml"` (the export). |
+| `DELETE /v1/skills/{id}` | `{"sentence"}`; removes the file and its record. Only the person who imported it or a holder of `admin:settings` (403 otherwise). |
 
 ### Tickets (`/v1/tickets`)
 
@@ -438,5 +444,5 @@ the real lists. Home lists read them.
 ## 10. What stays out of round 2
 
 Screen worker sessions for the Coding Agent's virtual desktop; Kata; Vault; OIDC; the
-knowledge base ingest; a WebUI Skills page beyond the wizard's list (adding a page needs an
-ADR). Each is a later round on the same surfaces.
+knowledge base ingest. Each is a later round on the same surfaces. (The Skills page, one of
+the ten pages CLAUDE.md §9 names, arrived after round 2 on the routes above.)

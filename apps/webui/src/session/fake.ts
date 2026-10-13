@@ -315,6 +315,47 @@ export class FakeSessionApi implements SessionApi {
     return personOf(this.current);
   }
 
+  /** How many other sessions the signed-in person has (other browsers); tests set it. */
+  otherSessions = 0;
+
+  async updateMe(displayName: string): Promise<Person> {
+    if (this.mode === "unreachable") {
+      unreachable();
+    }
+    if (this.current === null) {
+      fail(401, { whatHappened: "You're not signed in.", likelyCause: "", whatToDo: "Sign in to continue." }, "none");
+    }
+    const name = displayName.trim();
+    if (name === "") {
+      fail(400, {
+        whatHappened: "The name is empty.",
+        likelyCause: "Everything was deleted from the field.",
+        whatToDo: "Type the person's name as it should appear on their commits and tickets.",
+      });
+    }
+    if (name.length > 120) {
+      fail(400, {
+        whatHappened: "The name is too long.",
+        likelyCause: "A name is at most 120 characters.",
+        whatToDo: "Shorten it; it appears on commits and tickets.",
+      });
+    }
+    this.current.display_name = name;
+    return personOf(this.current);
+  }
+
+  async endOtherSessions(): Promise<string> {
+    if (this.mode === "unreachable") {
+      unreachable();
+    }
+    const ended = this.otherSessions;
+    this.otherSessions = 0;
+    if (ended === 0) {
+      return "You were signed in only here; nothing else was signed out.";
+    }
+    return `Signed out of ${ended} other ${ended === 1 ? "session" : "sessions"}. This one stays signed in.`;
+  }
+
   /** The session ran out server-side: the next request answers 401 with reason `expired`. */
   expireSession(): void {
     this.current = null;

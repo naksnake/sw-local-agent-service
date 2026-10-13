@@ -27,6 +27,9 @@ export interface Session {
   needsCurrentPassword: boolean;
   clearNotice(): void;
   hasCapability(capability: string): boolean;
+  /** Your own name; the top bar and every page see the new one at once. */
+  renameMe(displayName: string): Promise<Person>;
+  endOtherSessions(): Promise<string>;
 }
 
 const SessionContext = createContext<Session | null>(null);
@@ -133,6 +136,17 @@ export function SessionProvider({ api, children }: Props) {
     [api],
   );
 
+  const renameMe = useCallback(
+    async (displayName: string) => {
+      const person = await api.updateMe(displayName);
+      setState({ status: "signed-in", person });
+      return person;
+    },
+    [api],
+  );
+
+  const endOtherSessions = useCallback(() => api.endOtherSessions(), [api]);
+
   const clearNotice = useCallback(() => {
     setState((current) => (current.status === "anonymous" && current.notice !== null ? { status: "anonymous", notice: null } : current));
   }, []);
@@ -147,8 +161,10 @@ export function SessionProvider({ api, children }: Props) {
       needsCurrentPassword,
       clearNotice,
       hasCapability: (capability) => state.status === "signed-in" && state.person.capabilities.includes(capability),
+      renameMe,
+      endOtherSessions,
     }),
-    [state, installation, signIn, signOut, changePassword, needsCurrentPassword, clearNotice],
+    [state, installation, signIn, signOut, changePassword, needsCurrentPassword, clearNotice, renameMe, endOtherSessions],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

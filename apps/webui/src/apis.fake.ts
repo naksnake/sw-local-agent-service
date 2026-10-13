@@ -12,6 +12,7 @@ import { FakeGitApi } from "./git/api";
 import { FakeHomeListsApi } from "./home/fake";
 import { FakeModelsApi } from "./models/fake";
 import { FakeSessionApi, FakeWorld } from "./session/fake";
+import { FakeSkillsApi } from "./skills/fake";
 import { FakeValidationApi } from "./validation/api";
 
 export const FAKE_SIGN_IN_HINT =
@@ -74,6 +75,10 @@ export function fakeApis(storage: Storage | null = sessionStorageOrNull()): AppP
     factoryApi: new FakeFactoryApi(),
     stationsApi: new FakeStationsAdminApi(),
     gitApi: new FakeGitApi(),
+    skillsApi: new FakeSkillsApi(
+      () => sessionApi.current?.email ?? "pat@slas.local",
+      () => sessionApi.current?.role === "administrator",
+    ),
     signInHint: FAKE_SIGN_IN_HINT,
   };
 }

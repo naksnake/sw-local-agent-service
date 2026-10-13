@@ -1,4 +1,5 @@
-"""The skills that ship with the platform: the two examples from CLAUDE.md §6.3.
+"""The skills that ship with the platform: the two examples from CLAUDE.md §6.3, and one
+for the Coding Agent, whose `run` steps become checks every coding task must pass.
 
 `skills/library/<id>.skill.yaml` is rendered from these mappings; a test keeps them in step.
 """
@@ -64,9 +65,40 @@ SEL_COLLECT_CLEAR: Final[dict[str, Any]] = {
     }
 }
 
+PYTHON_LINT_AND_TEST: Final[dict[str, Any]] = {
+    "skill": {
+        "id": "python-lint-and-test",
+        "name": "Python lint and tests",
+        "version": "1.0.0",
+        "description": (
+            "Every coding task must pass ruff and pytest in the sandbox before it is done."
+        ),
+        "agents": ["coding"],
+        "requires": ["files"],
+        "steps": [
+            {
+                "run": {
+                    "command": ["ruff", "check", "."],
+                    "expect_exit": 0,
+                    "timeout_s": 120,
+                }
+            },
+            {
+                "run": {
+                    "command": ["python", "-m", "pytest", "-q"],
+                    "expect_exit": 0,
+                    "timeout_s": 600,
+                }
+            },
+        ],
+        "on_failure": "stop",
+    }
+}
+
 LIBRARY: Final[dict[str, dict[str, Any]]] = {
     "station-login-burnin": STATION_LOGIN_BURNIN,
     "sel-collect-clear": SEL_COLLECT_CLEAR,
+    "python-lint-and-test": PYTHON_LINT_AND_TEST,
 }
 
 LIBRARY_HEADER: Final = (

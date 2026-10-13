@@ -250,6 +250,7 @@ export const people = {
   menu: {
     label: (name: string) => `Actions for ${name}`,
     changeRole: "Change role",
+    rename: "Edit name",
     resetPassword: "Reset password",
     switchOff: "Switch off",
     switchOn: "Switch on",
@@ -298,6 +299,30 @@ export const people = {
       whatHappened: `${name}'s role wasn't changed.`,
       likelyCause: "The api service didn't answer.",
       whatToDo: `Press Change role again; ${LOGS_API}`,
+    }),
+  },
+  rename: {
+    title: (name: string) => `Edit ${name}'s name`,
+    label: "Name",
+    help: (username: string) =>
+      `Shown on their commits and tickets. They still sign in as ${username}: that name is their folder and stays the same.`,
+    button: "Save name",
+    buttonWaiting: "Saving…",
+    // The api sends these; the in-memory fake sends the same words.
+    empty: {
+      whatHappened: "The name is empty.",
+      likelyCause: "Everything was deleted from the field.",
+      whatToDo: "Type the person's name as it should appear on their commits and tickets.",
+    } satisfies ThreePart,
+    tooLong: {
+      whatHappened: "The name is too long.",
+      likelyCause: "A name is at most 120 characters.",
+      whatToDo: "Shorten it; it appears on commits and tickets.",
+    } satisfies ThreePart,
+    notSaved: (name: string): ThreePart => ({
+      whatHappened: `${name}'s name wasn't saved.`,
+      likelyCause: "The api service didn't answer.",
+      whatToDo: `Press Save name again; ${LOGS_API}`,
     }),
   },
   resetPassword: {

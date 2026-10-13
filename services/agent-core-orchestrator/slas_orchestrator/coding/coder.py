@@ -45,6 +45,11 @@ SYSTEM_INSTRUCTION: Final = (
     "`replace`. Prefer these for small changes to large files.\n"
     "- `files`: a project-relative path mapped to the complete content of a new or "
     "rewritten file, or to null to delete it. Never send a partial file here.\n"
+    "- `commands`: up to 4 commands to run in the sandbox after your edits, as argv lists "
+    '(`["python", "tool.py", "--help"]`, `["grep", "-rn", "parse", "."]`) with '
+    "`why`. Use them to read a file that is not shown, to try the program you wrote, or to "
+    "run one failing test; you see their output next iteration. The sandbox has no network. "
+    "No shell lines (`bash -c`), no sudo, and only read-only git: the agent commits for you.\n"
     "- `note`: one sentence on what you changed.\n"
     "Rules: implement what the plan asks for in real, working code: no placeholders, no "
     "TODO stubs, no invented APIs. Read the existing files before changing them and keep "
@@ -87,6 +92,15 @@ def _bounded_output(output: str) -> str:
         return output
     tail = MAX_CHECK_OUTPUT_CHARS - CHECK_OUTPUT_HEAD_CHARS
     return f"{output[:CHECK_OUTPUT_HEAD_CHARS]}\n[… output shortened …]\n{output[-tail:]}"
+
+
+def _commands_section(request: EditRequest) -> str:
+    if not request.command_runs:
+        return ""
+    blocks = ["Commands you asked for last time:"]
+    for run in request.command_runs:
+        blocks.append(f"$ {' '.join(run.argv)}  (exit {run.exit_code})\n{run.output}")
+    return "\n".join(blocks) + "\n\n"
 
 
 def _tree_section(paths: list[str]) -> str:
@@ -150,7 +164,22 @@ def build_messages(request: EditRequest) -> list[Message]:
     plan = request.plan.strip()[:MAX_PLAN_PROMPT_CHARS]
     plan_text = f"The plan:\n{plan}\n\n" if plan else ""
     tree = _tree_section(request.paths)
-    fixed = "\n".join(header) + "\n\n" + plan_text + check_text + "\n\n" + tree + "Project files:\n"
+    history = (
+        "Recent commits on this project, newest first:\n" + "\n".join(request.history) + "\n\n"
+        if request.history
+        else ""
+    )
+    fixed = (
+        "\n".join(header)
+        + "\n\n"
+        + plan_text
+        + history
+        + check_text
+        + "\n\n"
+        + _commands_section(request)
+        + tree
+        + "Project files:\n"
+    )
     budget = max(MAX_PROMPT_CHARS - len(fixed), 2_000)
     body = fixed + _snapshot_section(request.files, budget)
     return [

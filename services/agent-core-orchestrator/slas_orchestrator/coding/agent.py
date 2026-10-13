@@ -6,7 +6,9 @@ the kernel and in the kernel-side `CodingExecutor`.
 
     INGEST  plan.md → PlanDocument → Job (target: a sandbox reference)
     PLAN    approved Breakdown + toolchain resolution → steps for the deterministic executor
-            step 1 records the toolchain choice on the ticket ("first feed line")
+            step 1 records the toolchain choice on the ticket ("first feed line"); each skill
+            the person picked is a `skill` step the kernel's gate compiles, whose `run` steps
+            the executor adds to the checks of every task
 """
 
 from __future__ import annotations
@@ -27,7 +29,15 @@ from slas_schemas.ticket import Observation, StepVerdict
 
 #: The plan text every coding step carries for the model (its prompt caps it again).
 MAX_PLAN_CONTEXT_CHARS = 24_000
-PRIMITIVES = ("toolchain", "sandbox_open", "iterate", "commit", "export_zip", "cross_check")
+PRIMITIVES = (
+    "toolchain",
+    "sandbox_open",
+    "skill",
+    "iterate",
+    "commit",
+    "export_zip",
+    "cross_check",
+)
 
 
 class BreakdownNotApprovedError(RuntimeError):
@@ -144,6 +154,16 @@ class CodingAgent:
                 },
             ),
         ]
+        for skill_id in dict.fromkeys(breakdown.skills):
+            steps.append(
+                Step(
+                    id=f"skill-{skill_id}"[:64],
+                    n=len(steps) + 1,
+                    primitive="skill",
+                    title=f"Use the skill {skill_id}: its steps become checks for every task"[:200],
+                    args={"skill_id": skill_id, "inputs": {}},
+                )
+            )
         # One check per kind, in the order a person expects them: `slas-check` in the
         # image runs the right tool for the sandbox's language, so kinds never repeat.
         order = ("lint", "type", "build", "test", "validate")

@@ -100,6 +100,11 @@ INVALID_EMAIL: Final = ThreePartMessage(
     "A missing @ or domain.",
     "Check it and try again.",
 )
+NAME_TOO_LONG: Final = ThreePartMessage(
+    "The name is too long.",
+    "A name is at most 120 characters.",
+    "Shorten it; it appears on commits and tickets.",
+)
 EMPTY_NAME: Final = ThreePartMessage(
     "The name is empty.",
     "Everything was deleted from the field.",
@@ -452,12 +457,18 @@ def update_person(
     person_id: str,
     role: str | None = None,
     is_active: bool | None = None,
+    display_name: str | None = None,
 ) -> Person:
     roles = svc.roles.current()
     person = get_person(db, person_id)
     now = svc.clock()
     if role is not None and roles.get(role) is None:
         raise ApiError(400, unknown_role(role, roles))
+    name = display_name.strip() if display_name is not None else None
+    if name is not None and not name:
+        raise ApiError(400, EMPTY_NAME)
+    if name is not None and len(name) > 120:
+        raise ApiError(400, NAME_TOO_LONG)
     losing_admin = person.is_active and _holds_admin(person, roles)
     if is_active is False:
         if person.email == actor.subject and not actor.is_system:
@@ -484,6 +495,17 @@ def update_person(
             via=via,
             now=now,
         )
+    if name is not None and name != person.display_name:
+        audit(
+            db,
+            actor=actor,
+            action="person.renamed",
+            subject=person.email,
+            detail={"from": person.display_name, "to": name},
+            via=via,
+            now=now,
+        )
+        person.display_name = name
     if is_active is not None and is_active != person.is_active:
         person.is_active = is_active
         revoked = 0 if is_active else revoke_sessions(db, person.id)
@@ -498,6 +520,25 @@ def update_person(
         )
     db.flush()
     return person
+
+
+def sign_out_elsewhere(
+    svc: Services, db: Session, *, person: Person, via: Via, keep_session: str
+) -> int:
+    """End every session of the person except the one asking; returns how many ended."""
+    ended = revoke_sessions(db, person.id, keep=keep_session)
+    principal = principal_for(person, svc.roles.current())
+    audit(
+        db,
+        actor=principal,
+        action="person.signed_out_elsewhere",
+        subject=person.email,
+        detail={"sessions_revoked": ended},
+        via=via,
+        now=svc.clock(),
+    )
+    db.flush()
+    return ended
 
 
 def _end_bootstrap(

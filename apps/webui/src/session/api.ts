@@ -35,6 +35,10 @@ export interface SessionApi {
   signOut(): Promise<void>;
   me(): Promise<Person>;
   changePassword(current: string, next: string): Promise<Person>;
+  /** Your own name as commits and tickets show it; the sign-in name never changes. */
+  updateMe(displayName: string): Promise<Person>;
+  /** End every other session of yours; answers the sentence to show. */
+  endOtherSessions(): Promise<string>;
 }
 
 export class HttpSessionApi implements SessionApi {
@@ -58,5 +62,13 @@ export class HttpSessionApi implements SessionApi {
 
   changePassword(current: string, next: string): Promise<Person> {
     return this.http.post<Person>("/me/password", { current_password: current, new_password: next });
+  }
+
+  updateMe(displayName: string): Promise<Person> {
+    return this.http.patch<Person>("/me", { display_name: displayName });
+  }
+
+  async endOtherSessions(): Promise<string> {
+    return (await this.http.post<{ sentence: string }>("/me/sessions/end-others")).sentence;
   }
 }

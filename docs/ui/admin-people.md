@@ -18,7 +18,7 @@ the table, in three parts, never as a toast.
 | Status | Can sign in · Switched off · Must choose a password |
 | Person | display name, initials avatar, and the sign-in name under it (`ana`) |
 | Status | shown as a pill: green Can sign in, amber Must choose a password, grey Switched off |
-| Row menu | Change role · Reset password · Switch off (or Switch on) · Delete |
+| Row menu | Change role · Edit name · Reset password · Switch off (or Switch on) · Delete |
 
 **States**
 
@@ -58,6 +58,13 @@ Primary button: Change role.
 | Case | What happened | Likely cause | What to do |
 |---|---|---|---|
 | Last administrator | You can't change the last administrator's role. | Without an administrator nobody could manage people or settings. | Make someone else an administrator first. |
+
+## Edit name (dialog)
+
+Title: Edit *Ana*'s name. Field: Name — help: Shown on their commits and tickets. They still
+sign in as *ana*: that name is their folder and stays the same. Primary button: Save name
+(off until the name changes). Errors: *The name is empty.* · *The name is too long.* (at most
+120 characters) · *Ana's name wasn't saved.* when the api does not answer.
 
 ## Reset password (dialog)
 
